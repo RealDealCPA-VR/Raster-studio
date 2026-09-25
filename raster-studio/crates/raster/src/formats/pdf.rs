@@ -354,6 +354,11 @@ pub(super) fn decode(bytes: &[u8], limits: ImportLimits) -> Result<DecodedSurfac
     })
 }
 
+/// W16-I: a page's paths and text read as layers (File > Open of a
+/// one-page PDF / AI).
+#[path = "pdf_layers_w16.rs"]
+pub mod layers;
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;

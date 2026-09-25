@@ -10,6 +10,10 @@
 
 use compositor::MemoryTileSource;
 use editor_core::timeline::document_at;
+
+// W16-M: video layers (File > Open of an MP4, the timeline's Add Media).
+#[path = "video_layers.rs"]
+pub mod video_layers;
 use editor_core::Document;
 use raster::animation::{AnimationFrame, MAX_ANIMATION_BYTES, MAX_ANIMATION_FRAMES};
 
@@ -23,6 +27,9 @@ impl crate::editor::Editor {
     /// No history step and no dirty flag: the playhead is not an edit. Not
     /// journaled either, for the same reason. Answers whether anything moved.
     pub fn seek_timeline(&mut self, t_ms: u32) -> bool {
+        // W16-M: a reopened document's video layers read their frames again
+        // (once per source file a session).
+        video_layers::reload_once(self);
         let Some(open) = self.active_mut() else {
             return false;
         };

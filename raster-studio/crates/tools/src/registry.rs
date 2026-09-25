@@ -87,6 +87,170 @@ pub enum OptionKind {
     },
 }
 
+/// W16-C: the unit an [`OptionKind::Float`] is shown and typed in on the
+/// options bar. The tool keeps its own internal value; the bar multiplies by
+/// [`FloatDisplay::scale`] to show it and divides to store what was typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloatUnit {
+    /// A bare number (Photopea's Tolerance 0-255, a count, a ratio).
+    Plain,
+    /// A percentage (Opacity 100%).
+    Percent,
+    /// Document pixels (Size 24 px).
+    Pixels,
+    /// Degrees (Angle 0°).
+    Degrees,
+}
+
+/// W16-C: how the options bar shows one float option.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FloatDisplay {
+    pub unit: FloatUnit,
+    /// Shown value = stored value x `scale`.
+    pub scale: f32,
+    /// Decimals the field shows and accepts.
+    pub decimals: usize,
+}
+
+impl FloatDisplay {
+    const fn new(unit: FloatUnit, scale: f32, decimals: usize) -> Self {
+        Self {
+            unit,
+            scale,
+            decimals,
+        }
+    }
+
+    /// The stored value as the bar shows it.
+    pub fn shown(self, stored: f32) -> f32 {
+        stored * self.scale
+    }
+
+    /// A value typed or dragged on the bar, as the tool stores it.
+    pub fn stored(self, shown: f32) -> f32 {
+        shown / self.scale
+    }
+}
+
+/// W16-C: stored 0-1 fractions the bar shows as 0-100% (Photopea's
+/// Opacity, Flow, Hardness, Exposure, Strength, Smoothing, Roundness, the
+/// Mixer Brush's Wet / Load / Mix, Red Eye's Darken Amount, the Sponge's Flow
+/// (`amount`), the Star's Indent and the Spiral's Inner Radius).
+const PERCENT_FRACTION_KEYS: &[&str] = &[
+    "opacity",
+    "flow",
+    "hardness",
+    "exposure",
+    "strength",
+    "smoothing",
+    "roundness",
+    "wet",
+    "load",
+    "mix",
+    "darken",
+    "amount",
+    "inner_ratio",
+    "inner_radius",
+];
+
+/// W16-C: options already stored in document pixels.
+const PIXEL_KEYS: &[&str] = &[
+    "size",
+    "size_px",
+    "feather",
+    "style_width",
+    "style_height",
+    "stroke_width",
+    "width",
+    "height",
+    "radius",
+    "leading",
+    "baseline_shift",
+    "left_indent",
+    "right_indent",
+    "first_line_indent",
+    "space_before",
+    "space_after",
+    "curve_fit",
+    crate::transform::keys::X,
+    crate::transform::keys::Y,
+];
+
+/// W16-C: options already stored as a percentage (Free Transform's W / H,
+/// Warp Bend, Content-Aware Amount, the text's H / V scale, the arrow head).
+const PERCENT_KEYS: &[&str] = &[
+    crate::transform::keys::W,
+    crate::transform::keys::H,
+    crate::transform::keys::BEND,
+    crate::transform::keys::CA_AMOUNT,
+    "horizontal_scale",
+    "vertical_scale",
+    "arrow_width",
+    "arrow_length",
+    "arrow_concavity",
+];
+
+/// W16-C: options already stored in degrees (Free Transform's angle and
+/// skews).
+const DEGREE_KEYS: &[&str] = &[
+    crate::transform::keys::ANGLE,
+    crate::transform::keys::SKEW_H,
+    crate::transform::keys::SKEW_V,
+];
+
+/// W16-C: the display of one float option, from its key, label and range.
+/// The key alone is not enough: `radius` is a corner radius in pixels on the
+/// Rounded Rectangle but the Blur's Strength, and `amount` is the Sponge's
+/// 0-1 Flow but the Sharpen's 0-4 Strength.
+pub fn float_display(key: &str, label: &str, min: f32, max: f32) -> FloatDisplay {
+    let fraction = min >= 0.0 && max <= 1.0;
+    if key == "tolerance" && fraction {
+        // Photopea's Tolerance is 0-255 (a channel level).
+        return FloatDisplay::new(FloatUnit::Plain, 255.0, 0);
+    }
+    if key == "angle" && max < 7.0 {
+        // The brush tip's angle is stored in radians.
+        return FloatDisplay::new(FloatUnit::Degrees, 180.0 / std::f32::consts::PI, 0);
+    }
+    if key == "spacing" {
+        // Stored as a fraction of the tip (0.25 = 25%), up to 1000%.
+        return FloatDisplay::new(FloatUnit::Percent, 100.0, 0);
+    }
+    if fraction && PERCENT_FRACTION_KEYS.contains(&key) {
+        return FloatDisplay::new(FloatUnit::Percent, 100.0, 0);
+    }
+    if key == "radius" && label == "Strength" {
+        return FloatDisplay::new(FloatUnit::Plain, 1.0, 1);
+    }
+    if PIXEL_KEYS.contains(&key) {
+        return FloatDisplay::new(FloatUnit::Pixels, 1.0, 1);
+    }
+    if PERCENT_KEYS.contains(&key) {
+        return FloatDisplay::new(FloatUnit::Percent, 1.0, 1);
+    }
+    if DEGREE_KEYS.contains(&key) {
+        return FloatDisplay::new(FloatUnit::Degrees, 1.0, 1);
+    }
+    FloatDisplay::new(FloatUnit::Plain, 1.0, 2)
+}
+
+#[cfg(test)]
+#[path = "registry_w16c_tests.rs"]
+mod w16c_tests;
+
+impl OptionSpec {
+    /// W16-C: how the options bar shows this option, or `None` when it is
+    /// not a [`OptionKind::Float`].
+    pub fn float_display(&self) -> Option<FloatDisplay> {
+        match self.kind {
+            OptionKind::Float { min, max, .. } => {
+                Some(float_display(self.key, self.label, min, max))
+            }
+            _ => None,
+        }
+    }
+}
+
 const fn f(key: &'static str, label: &'static str, min: f32, max: f32, default: f32) -> OptionSpec {
     OptionSpec {
         key,
@@ -273,6 +437,23 @@ const WAND_OPTS: &[OptionSpec] = &[
 ];
 
 const FILL_OPTS: &[OptionSpec] = &[
+    f("tolerance", "Tolerance", 0.0, 1.0, 32.0 / 255.0),
+    b("contiguous", "Contiguous", true),
+    b("antialias", "Anti-alias", true),
+    f("opacity", "Opacity", 0.0, 1.0, 1.0),
+    b("sample_merged", "Sample All Layers", false),
+];
+
+/// W16-C: the Paint Bucket's controls: Photopea's Fill drop-down
+/// (Foreground / Pattern) ahead of the flood controls it shares with the
+/// Magic Eraser ([`FILL_OPTS`]), which has no Fill source.
+const BUCKET_OPTS: &[OptionSpec] = &[
+    c(
+        crate::bucket::FILL_SOURCE_KEY,
+        "Fill",
+        crate::bucket::FillSource::CHOICES,
+        0,
+    ),
     f("tolerance", "Tolerance", 0.0, 1.0, 32.0 / 255.0),
     b("contiguous", "Contiguous", true),
     b("antialias", "Anti-alias", true),
@@ -1024,6 +1205,10 @@ const TOOLS: &[ToolInfo] = &[
             // W4-G: a stroke that starts on the foreground paints the
             // background (`crate::pencil::PencilTool`).
             b(crate::pencil::AUTO_ERASE_KEY, "Auto Erase", false),
+            // W16-K: Photopea's two stylus toggles on the Pencil bar
+            // (pressure controls size / opacity), off as a pencil starts.
+            b("size_pressure", "Size from Pressure", false),
+            b("opacity_pressure", "Opacity from Pressure", false),
             SYMMETRY_OPT,
             SYMMETRY_SEGMENTS_OPT,
         ],
@@ -1206,7 +1391,7 @@ const TOOLS: &[ToolInfo] = &[
         "bucket",
         Cursor::Bucket,
         Some('g'),
-        FILL_OPTS,
+        BUCKET_OPTS,
     ),
     t(
         ToolId::PatternFill,
@@ -1217,6 +1402,20 @@ const TOOLS: &[ToolInfo] = &[
         Cursor::Bucket,
         Some('g'),
         &[f("opacity", "Opacity", 0.0, 1.0, 1.0)],
+    ),
+    // W16-G: Photopea's Vector Gradient, at the end of the gradient slot
+    // (Photopea draws it with the Gradient tool's icon; the registry wants
+    // one key per tool, so it is that swatch crossed by its handle line). It
+    // edits the active shape's gradient fill by its handles; no letter.
+    t(
+        ToolId::VectorGradient,
+        "Vector Gradient",
+        ToolGroup::Paint,
+        Some("gradient"),
+        "vector-gradient",
+        Cursor::Crosshair,
+        None,
+        &[],
     ),
     t(
         ToolId::Blur,
@@ -1513,15 +1712,32 @@ const TOOLS: &[ToolInfo] = &[
         Some('u'),
         SHAPE_OPTS,
     ),
+    // W16-G: Photopea's Parametric Shape tool - Polygon, Star, Arrow, Grid,
+    // Spiral (`crate::shape::PARAMETRIC_SHAPE_CHOICES`), each its own keys.
     t(
         ToolId::Polygon,
-        "Polygon",
+        "Parametric Shape",
         ToolGroup::Draw,
         Some("shape"),
         "shape-polygon",
         Cursor::Crosshair,
         Some('u'),
-        shape_opts!(i("sides", "Sides", 3, 100, 6)),
+        shape_opts!(
+            c("pshape", "Shape", crate::shape::PARAMETRIC_SHAPE_CHOICES, 0),
+            i("sides", "Sides", 3, 100, 6),
+            f("inner_ratio", "Inner Radius", 0.01, 1.0, 0.4),
+            f("corner_radius", "Corner Radius", 0.0, 50.0, 0.0),
+            f("weight", "Width", 0.0, 100.0, 5.0),
+            b("head_start", "Start", false),
+            b("head_end", "End", true),
+            f("head_width", "Head Width", 0.0, 1000.0, 50.0),
+            f("head_length", "Head Length", 0.0, 1000.0, 100.0),
+            f("concavity", "Concavity", -50.0, 50.0, 0.0),
+            i("rows", "Rows", 1, 20, 3),
+            i("cols", "Columns", 1, 20, 4),
+            f("border", "Border", 1.0, 20.0, 8.0),
+            i("length", "Length", 4, 40, 4),
+        ),
     ),
     t(
         ToolId::Star,
@@ -1894,10 +2110,8 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
             ShapeMode::VectorLayer,
         )),
         ToolId::Ellipse => Box::new(ShapeTool::new(ShapeKind::Ellipse, ShapeMode::VectorLayer)),
-        ToolId::Polygon => Box::new(ShapeTool::new(
-            ShapeKind::Polygon { sides: 6 },
-            ShapeMode::VectorLayer,
-        )),
+        // W16-G: the Parametric Shape tool.
+        ToolId::Polygon => Box::new(ShapeTool::parametric_tool()),
         ToolId::Star => Box::new(ShapeTool::new(
             ShapeKind::Star {
                 points: 5,
@@ -1954,6 +2168,10 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
         ToolId::SliceSelect => Box::new(crate::slice_select::SliceSelectTool::default()),
         // W10-B.
         ToolId::Note => Box::new(crate::note::NoteTool::default()),
+        // W16-G.
+        ToolId::VectorGradient => {
+            Box::new(crate::shape::vector_gradient::VectorGradientTool::default())
+        }
         ToolId::Spiral => Box::new(ShapeTool::new(
             ShapeKind::Spiral {
                 turns: 3.0,

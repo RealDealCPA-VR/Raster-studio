@@ -965,6 +965,13 @@ pub mod keys {
     /// runs [`super::TransformTool::apply_pending_numeric`] — so a typed
     /// field or a picked Warp preset reshapes the quad on screen at once.
     pub const APPLY_NUMERIC: &str = "apply_numeric";
+    /// W16-F: not an option: an arrow key's nudge of a LIVE session. The
+    /// shell sends `Float(dx)` under [`NUDGE_X`] and `Float(dy)` under
+    /// [`NUDGE_Y`] (document pixels: 1, or 10 with Shift) and the whole quad
+    /// moves that far, as a drag inside it would ([`super::Handle::Inside`]).
+    /// Nothing is committed: the move lands with the session's Enter.
+    pub const NUDGE_X: &str = "nudge_x";
+    pub const NUDGE_Y: &str = "nudge_y";
     /// Every key whose value is geometry, applied together on a
     /// [`NUMERIC_SEQ`] change.
     pub const GEOMETRY: &[&str] = &[
@@ -1341,6 +1348,40 @@ pub struct TransformTool {
     /// session has already applied (or began at).
     numeric_seq: i32,
     numeric_seen: i32,
+    /// W16-F: the mode a Ctrl-held handle drag borrowed in this session
+    /// ([`ctrl_mode`]) when that mode leaves the box a free quad (Distort,
+    /// Perspective). The commit resamples through it, since the quad is no
+    /// longer the parallelogram the option's own mode would commit as an
+    /// affine. Cleared by every new session, commit and cancel.
+    ctrl_promoted: Option<TransformMode>,
+}
+
+/// W16-F: Free Transform's Ctrl gestures (Photopea learn/free-transform:
+/// "When the Ctrl key is down, press and drag the side to skew the
+/// content"; the corner gestures are Photoshop's, which Photopea follows):
+///
+/// * Ctrl + a side handle skews (the side slides along itself);
+/// * Ctrl + a corner handle distorts (that corner moves freely);
+/// * Ctrl + Alt + Shift + a corner handle is perspective (the corner and its
+///   edge-mate splay apart).
+///
+/// Only the Scale and Rotate modes borrow: the explicit Skew / Distort /
+/// Perspective / Warp / Content-Aware modes keep their own gestures.
+/// `None` when the drag is the mode's own.
+pub fn ctrl_mode(
+    mode: TransformMode,
+    handle: Handle,
+    modifiers: crate::tool::Modifiers,
+) -> Option<TransformMode> {
+    if !modifiers.ctrl || !matches!(mode, TransformMode::Scale | TransformMode::Rotate) {
+        return None;
+    }
+    match handle {
+        Handle::Edge(_) => Some(TransformMode::Skew),
+        Handle::Corner(_) if modifiers.alt && modifiers.shift => Some(TransformMode::Perspective),
+        Handle::Corner(_) => Some(TransformMode::Distort),
+        _ => None,
+    }
 }
 
 impl Default for TransformTool {
@@ -1363,6 +1404,7 @@ impl Default for TransformTool {
             ca_amount: 100.0,
             numeric_seq: 0,
             numeric_seen: 0,
+            ctrl_promoted: None,
         }
     }
 }
@@ -1385,7 +1427,28 @@ impl TransformTool {
         // W9-L: a new session starts from its own box, never from the
         // numbers typed into the last one.
         self.numeric_seen = self.numeric_seq;
+        self.ctrl_promoted = None;
         Ok(())
+    }
+
+    /// W16-F: an arrow key's nudge of the live session: the whole quad (and
+    /// its pivot and warp mesh) moves by `delta` document pixels. `false`
+    /// when no session is live or `delta` is not finite.
+    pub fn nudge(&mut self, delta: Vec2) -> bool {
+        let mode = self.mode;
+        match self.state.as_mut() {
+            Some(state) if delta.is_finite() && delta != Vec2::ZERO => {
+                state.drag(mode, Handle::Inside, Vec2::ZERO, delta);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// W16-F: the mode the session commits and publishes as: the one a
+    /// Ctrl gesture promoted it to ([`ctrl_mode`]), else the option's.
+    pub fn session_mode(&self) -> TransformMode {
+        self.ctrl_promoted.unwrap_or(self.mode)
     }
 
     /// W9-L: apply the options bar's numeric fields to the live session,
@@ -1539,7 +1602,23 @@ impl TransformTool {
     }
 
     /// Commit the session: resample once, emit one command, end the session.
+    ///
+    /// W16-F: a session a Ctrl gesture distorted commits through the mode it
+    /// borrowed ([`Self::session_mode`]); the option's own mode is restored
+    /// afterwards, so the next session starts where the options bar says.
     pub fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
+        let option_mode = self.mode;
+        if let Some(promoted) = self.ctrl_promoted.take() {
+            if self.state.is_some() {
+                /*W16F_MUT*/ let _ = promoted;
+            }
+        }
+        let result = self.commit_session(ctx);
+        self.mode = option_mode;
+        result
+    }
+
+    fn commit_session(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
         let Some(state) = self.state.clone() else {
             return Ok(());
         };
@@ -2228,6 +2307,13 @@ impl Tool for TransformTool {
                 self.apply_pending_numeric();
             }
             (keys::APPLY_NUMERIC, ToolSetting::Bool(false)) => {}
+            // W16-F: an arrow key's nudge of the live session.
+            (keys::NUDGE_X, ToolSetting::Float(v)) => {
+                self.nudge(Vec2::new(float(v)?, 0.0));
+            }
+            (keys::NUDGE_Y, ToolSetting::Float(v)) => {
+                self.nudge(Vec2::new(0.0, float(v)?));
+            }
             (
                 "mode"
                 | "target"
@@ -2245,7 +2331,9 @@ impl Tool for TransformTool {
                 | keys::BEND
                 | keys::CA_AMOUNT
                 | keys::NUMERIC_SEQ
-                | keys::APPLY_NUMERIC,
+                | keys::APPLY_NUMERIC
+                | keys::NUDGE_X
+                | keys::NUDGE_Y,
                 _,
             ) => return mismatch(),
             _ => {
@@ -2287,6 +2375,20 @@ impl Tool for TransformTool {
             // scales around the center.
             let shift = event.modifiers.shift;
             let alt = event.modifiers.alt;
+            // W16-F: Ctrl borrows Skew (side) / Distort / Perspective
+            // (corner) for this drag; a free-quad result is committed
+            // through the borrowed mode.
+            if let Some(borrowed) = ctrl_mode(self.mode, handle, event.modifiers) {
+                state.drag_with(borrowed, handle, self.last, event.pos, false, false);
+                if matches!(
+                    borrowed,
+                    TransformMode::Distort | TransformMode::Perspective
+                ) {
+                    self.ctrl_promoted = Some(borrowed);
+                }
+                self.last = event.pos;
+                return Ok(());
+            }
             let preserve = matches!(handle, Handle::Corner(_)) && !shift;
             state.drag_with(self.mode, handle, self.last, event.pos, preserve, alt);
             self.last = event.pos;
@@ -2312,6 +2414,7 @@ impl Tool for TransformTool {
         self.parent = None;
         self.targets = Vec::new();
         self.floating = false;
+        self.ctrl_promoted = None;
     }
 
     fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
@@ -2334,7 +2437,8 @@ impl Tool for TransformTool {
         let state = self.state.as_ref()?;
         Some(SessionGeometry::Transform {
             state: state.clone(),
-            mode: self.mode,
+            // W16-F: a Ctrl-distorted session previews as what it commits.
+            mode: self.session_mode(),
             active: self.grabbed,
             // W5-C: a floating selection moves only its pixels; naming the
             // layer would lens the WHOLE layer as the preview.
@@ -3473,5 +3577,115 @@ mod w9l_tests {
             TransformMode::from_index(TransformMode::CONTENT_AWARE_INDEX),
             TransformMode::ContentAware
         );
+    }
+}
+
+/// W16-F: Free Transform's Ctrl gestures, driven through the tool's own
+/// pointer route (press, move, release with the modifiers held).
+#[cfg(test)]
+mod w16f_ctrl_tests {
+    use super::*;
+    use crate::tiles::MemoryTiles;
+    use crate::tool::Modifiers;
+
+    const CTRL: Modifiers = Modifiers {
+        shift: false,
+        alt: false,
+        ctrl: true,
+    };
+
+    /// A Scale-mode session over 10..50 x 10..50, dragged from `from` to
+    /// `to` with `m` held. Answers the tool after the release.
+    fn drag(from: Vec2, to: Vec2, m: Modifiers) -> TransformTool {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64));
+        let mut tool = TransformTool::default();
+        tool.begin(PixelRect::new(10, 10, 40, 40)).unwrap();
+        tool.on_pointer_down(&mut ctx, PointerEvent::at(from.x, from.y).with_modifiers(m))
+            .unwrap();
+        tool.on_pointer_move(&mut ctx, PointerEvent::at(to.x, to.y).with_modifiers(m))
+            .unwrap();
+        tool.on_pointer_up(&mut ctx, PointerEvent::at(to.x, to.y).with_modifiers(m))
+            .unwrap();
+        tool
+    }
+
+    fn corners(tool: &TransformTool) -> [Vec2; 4] {
+        tool.state.as_ref().expect("a live session").corners
+    }
+
+    #[test]
+    fn ctrl_dragging_a_side_skews_it_along_itself() {
+        // The top side's handle, dragged 10 px to the right with Ctrl.
+        let skewed = corners(&drag(Vec2::new(30.0, 10.0), Vec2::new(40.0, 10.0), CTRL));
+        assert_eq!(skewed[0], Vec2::new(20.0, 10.0));
+        assert_eq!(skewed[1], Vec2::new(60.0, 10.0));
+        assert_eq!(skewed[2], Vec2::new(50.0, 50.0), "the bottom stays");
+        assert_eq!(skewed[3], Vec2::new(10.0, 50.0), "the bottom stays");
+        // Without Ctrl the same drag is Scale's: along the side it moves
+        // nothing.
+        let plain = corners(&drag(
+            Vec2::new(30.0, 10.0),
+            Vec2::new(40.0, 10.0),
+            Modifiers::NONE,
+        ));
+        assert_eq!(plain[0], Vec2::new(10.0, 10.0));
+        assert_eq!(plain[1], Vec2::new(50.0, 10.0));
+    }
+
+    #[test]
+    fn ctrl_dragging_a_corner_distorts_only_that_corner() {
+        let tool = drag(Vec2::new(10.0, 10.0), Vec2::new(0.0, 4.0), CTRL);
+        let c = corners(&tool);
+        assert_eq!(
+            c[0],
+            Vec2::new(0.0, 4.0),
+            "the corner went where it was dragged"
+        );
+        assert_eq!(c[1], Vec2::new(50.0, 10.0));
+        assert_eq!(c[2], Vec2::new(50.0, 50.0));
+        assert_eq!(c[3], Vec2::new(10.0, 50.0));
+        assert_eq!(tool.session_mode(), TransformMode::Distort);
+        assert_eq!(tool.mode, TransformMode::Scale, "the option is untouched");
+        assert!(matches!(
+            tool.live_geometry(),
+            Some(SessionGeometry::Transform {
+                mode: TransformMode::Distort,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn ctrl_alt_shift_dragging_a_corner_is_perspective() {
+        let m = Modifiers {
+            shift: true,
+            alt: true,
+            ctrl: true,
+        };
+        let tool = drag(Vec2::new(10.0, 10.0), Vec2::new(0.0, 10.0), m);
+        let c = corners(&tool);
+        // The corner and its edge-mate splay apart symmetrically.
+        assert_eq!(c[0], Vec2::new(0.0, 10.0));
+        assert_eq!(c[1], Vec2::new(60.0, 10.0));
+        assert_eq!(c[2], Vec2::new(50.0, 50.0));
+        assert_eq!(c[3], Vec2::new(10.0, 50.0));
+        assert_eq!(tool.session_mode(), TransformMode::Perspective);
+    }
+
+    #[test]
+    fn a_nudge_moves_the_whole_live_box() {
+        let mut tool = TransformTool::default();
+        tool.begin(PixelRect::new(10, 10, 40, 40)).unwrap();
+        tool.set_setting(keys::NUDGE_X, ToolSetting::Float(10.0))
+            .unwrap();
+        tool.set_setting(keys::NUDGE_Y, ToolSetting::Float(-1.0))
+            .unwrap();
+        let c = corners(&tool);
+        assert_eq!(c[0], Vec2::new(20.0, 9.0));
+        assert_eq!(c[2], Vec2::new(60.0, 49.0));
+        // No session, nothing to move.
+        let mut idle = TransformTool::default();
+        assert!(!idle.nudge(Vec2::new(1.0, 0.0)));
     }
 }

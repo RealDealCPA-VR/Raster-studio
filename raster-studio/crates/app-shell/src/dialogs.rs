@@ -49,6 +49,11 @@ pub const IMAGE_EXTENSIONS: &[&str] = &[
     // are recognised and refused by name (`raster::codec::formats::raw`).
     // W15-A: AVIF, decoded in the decode worker process.
     "dng", "avif",
+    // W16-L: JPEG 2000, VTF, FITS, DICOM, DXF (drawn); Clip Studio, zipped
+    // Pixelmator Pro, CorelDRAW and InDesign through their embedded
+    // previews. Affinity Photo and PaintTool SAI are recognised and
+    // refused by name, so they are not offered.
+    "jp2", "j2k", "jpf", "vtf", "fits", "fit", "fts", "dcm", "dxf", "clip", "pxd", "cdr", "indd",
 ];
 /// W15-A: HEIC / HEIF, which File > Open reads in the decode worker process
 /// ([`decode_worker`]). Kept apart from [`IMAGE_EXTENSIONS`] because
@@ -61,8 +66,8 @@ pub const HEIF_EXTENSIONS: &[&str] = &["heic", "heif"];
 pub const PSB_EXTENSION: &str = "psb";
 /// W9-N: Photoshop / Photopea resource files File > Open feeds into their
 /// libraries (patterns, gradients, custom shapes, swatches, a profile) — see
-/// `asset_store::resources`. `.atn` is listed so choosing one says why it
-/// does not import.
+/// `asset_store::resources`. `.atn` (W13-E, W16-H) adds its action set to
+/// the Actions panel, where its steps play.
 pub const RESOURCE_EXTENSIONS: &[&str] = asset_store::resources::ResourceKind::EXTENSIONS;
 /// Extension of a Raster Studio project package (a directory).
 pub const PROJECT_EXTENSION: &str = "rstudio";
@@ -94,6 +99,8 @@ pub fn open_file_filters() -> Vec<(&'static str, Vec<&'static str>)> {
     everything.push(ASL_EXTENSION);
     // W13-D: a 3D LUT becomes a Color Lookup layer (`editor_open_any`).
     everything.push(CUBE_EXTENSION);
+    // W16-L: a curves preset or a .3dl / .look LUT becomes an adjustment layer.
+    everything.extend_from_slice(W16_ADJUSTMENT_EXTENSIONS);
     // W13-K: a script opens in the File > Script window.
     everything.extend_from_slice(crate::script::SCRIPT_EXTENSIONS);
     let mut images = IMAGE_EXTENSIONS.to_vec();
@@ -109,10 +116,20 @@ pub fn open_file_filters() -> Vec<(&'static str, Vec<&'static str>)> {
         ("Photoshop resources", RESOURCE_EXTENSIONS.to_vec()),
         ("Photoshop styles", vec![ASL_EXTENSION]),
         ("Color lookup tables", vec![CUBE_EXTENSION]),
+        // W16-L.
+        (
+            "Curves presets and 3D LUTs",
+            W16_ADJUSTMENT_EXTENSIONS.to_vec(),
+        ),
         ("Scripts", crate::script::SCRIPT_EXTENSIONS.to_vec()),
         ("All files", vec!["*"]),
     ]
 }
+
+/// W16-L: a Photoshop Curves preset (`.acv`) and the `.3dl` / `.look` 3D
+/// LUTs, which File > Open turns into a Curves / Color Lookup adjustment
+/// layer (`resource_import::w16`).
+pub const W16_ADJUSTMENT_EXTENSIONS: &[&str] = &["acv", "3dl", "look"];
 
 /// W13-D: extension of a 3D LUT, which File > Open turns into a Color Lookup
 /// adjustment layer ([`crate::editor::Editor::import_cube_lut`]).
@@ -130,7 +147,7 @@ pub fn is_style_library_path(path: &Path) -> bool {
 }
 
 /// W9-K: the font files File > Open loads for the session.
-pub const FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc"];
+pub const FONT_EXTENSIONS: &[&str] = &["ttf", "otf", "ttc", "otc", "woff", "woff2"];
 
 /// W9-K: whether `path` names a font file (by extension, any case).
 pub fn is_font_path(path: &Path) -> bool {

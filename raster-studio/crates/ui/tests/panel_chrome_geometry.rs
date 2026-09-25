@@ -853,23 +853,38 @@ fn the_channels_footer_is_routed_or_greyed_never_silent() {
     let shapes = h.settle();
     let t = h.tokens();
     let disabled = design::color32(t.palette.text(design::TextRole::Disabled));
-    // No selection, no saved selection, no alpha store: all four are drawn,
-    // and drawn *disabled* — a grey button with a reason, not a live no-op.
-    for name in ["load", "save", "new", "delete"] {
+    // W16-E: with the composite selected and no selection, Load (the
+    // composite's luminosity) and New (an empty alpha channel) are routed;
+    // Save has no selection to save and Delete cannot delete a colour
+    // channel, so those two are drawn *disabled* — a grey button with a
+    // reason, not a live no-op.
+    for (name, live) in [
+        ("load", true),
+        ("save", false),
+        ("new", true),
+        ("delete", false),
+    ] {
         let rect = h.rect(dock_ids::channel_action(name));
         let inks = colours_inside(&shapes, rect);
-        assert!(
-            inks.contains(&disabled),
-            "the {name} action is not painted disabled although nothing can act: {inks:?}"
-        );
         let response = h
             .ctx
             .read_response(dock_ids::channel_action(name))
             .expect("drawn");
-        assert!(
-            !response.sense.click,
-            "the {name} action senses clicks while it can do nothing"
-        );
+        if live {
+            assert!(
+                response.sense.click,
+                "the {name} action is routed but senses no click"
+            );
+        } else {
+            assert!(
+                inks.contains(&disabled),
+                "the {name} action is not painted disabled although nothing can act: {inks:?}"
+            );
+            assert!(
+                !response.sense.click,
+                "the {name} action senses clicks while it can do nothing"
+            );
+        }
     }
     // The footer sits under the rows, inside the panel.
     let eye = h.rect(ids::channel_eye(1));
@@ -877,14 +892,14 @@ fn the_channels_footer_is_routed_or_greyed_never_silent() {
     assert!(load.top() >= eye.bottom(), "{load:?} vs {eye:?}");
 }
 
-/// Round 3: the Load action used to fire the Select menu's `LoadSelection`
-/// whenever a mask row was selected and a selection had been saved — a button
-/// labelled "Load channel as selection" that restored the last *saved*
-/// selection instead. No intent loads a mask as the selection in this build,
-/// so the button must be greyed with that reason even in the exact state that
-/// used to make it live: a mask channel selected, saved selections present.
+/// Round 3 pinned that the Load action must never fire the Select menu's
+/// `LoadSelection` (the last *saved* selection) under the "Load channel as
+/// selection" label. W16-E: Load now loads the channel itself — for a mask
+/// channel, Layer ▸ Layer Mask's own Select Mask Pixels on that layer — and
+/// still never `LoadSelection`, even in the state that used to make the
+/// wrong route live: a mask channel selected, saved selections present.
 #[test]
-fn the_channels_load_action_stays_greyed_when_a_saved_selection_would_have_made_it_live() {
+fn the_channels_load_action_loads_the_mask_channel_not_the_saved_selection() {
     use layer_model::{LayerMask, MaskId};
     use ui::panels::channels::ChannelKind;
 
@@ -897,33 +912,44 @@ fn the_channels_load_action_stays_greyed_when_a_saved_selection_would_have_made_
     h.workspace.channels.selected = ChannelKind::Mask { layer, mask };
     h.workspace.saved_selections = 2;
     // Control: in this state the menu's own Load Selection IS enabled, so a
-    // routed button would have come out live.
+    // button routed there would have come out live on the wrong command.
     let context = h.workspace.menu_context(&h.doc, &h.history);
     assert!(matches!(
         ui::menu::MenuAction::LoadSelection.resolve(&context),
         ui::menu::Resolution::Enabled(_)
     ));
 
-    let shapes = h.settle();
-    let t = h.tokens();
-    let disabled = design::color32(t.palette.text(design::TextRole::Disabled));
-    let rect = h.rect(dock_ids::channel_action("load"));
-    let inks = colours_inside(&shapes, rect);
+    h.settle();
+    let at = h.rect(dock_ids::channel_action("load")).center();
+    let press = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, h.screen)),
+        events: vec![egui::Event::PointerMoved(at), press(true), press(false)],
+        ..Default::default()
+    };
+    let _ = h.ctx.run(input, |ctx| {
+        h.workspace.ui(ctx, &h.doc, &h.history);
+    });
+    let intents = h.workspace.drain_intents();
     assert!(
-        inks.contains(&disabled),
-        "Load is painted live although nothing loads a mask as a selection: {inks:?}"
+        intents.contains(&ui::Intent::Action(
+            ui::menu::MenuAction::SelectLayerPixels {
+                layer: Some(layer),
+                mask: true,
+                op: ui::dialogs::LoadOperation::New,
+            }
+        )),
+        "Load did not load the mask channel: {intents:?}"
     );
-    let response = h
-        .ctx
-        .read_response(dock_ids::channel_action("load"))
-        .expect("drawn");
     assert!(
-        !response.sense.click,
-        "Load senses clicks: it would fire LoadSelection, not load the channel"
+        !intents.contains(&ui::Intent::Action(ui::menu::MenuAction::LoadSelection)),
+        "Load fired LoadSelection: {intents:?}"
     );
-    // The reason is the mask-route one, not the no-saved-selection one.
-    let reason = ui::strings::tr("ui.docks.channels.no.mask.route");
-    assert!(!reason.is_empty(), "the reason key is not registered");
 }
 
 // ---------------------------------------------------------------------------

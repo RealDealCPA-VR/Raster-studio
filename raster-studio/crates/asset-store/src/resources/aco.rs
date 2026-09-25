@@ -115,3 +115,84 @@ fn read_v2(cur: &mut Cursor<'_>) -> Result<Vec<(Raw, String)>, ResourceError> {
     }
     Ok(out)
 }
+
+/// W16-E: the Swatches panel's Export as .ACO. Writes a version 1 section
+/// (every colour as RGB, space 0) followed by the version 2 section that
+/// repeats the colours with their names — the layout Photoshop and Photopea
+/// write, and the one [`parse`] prefers. The format has no alpha channel, so
+/// a swatch's alpha is not written. At most [`MAX_ENTRIES`] swatches are
+/// written (the count [`parse`] accepts), and a name is cut at
+/// [`MAX_NAME_UNITS`] UTF-16 units, terminator included.
+pub fn write(swatches: &[(String, [f32; 4])]) -> Vec<u8> {
+    fn colour(out: &mut Vec<u8>, rgba: &[f32; 4]) {
+        let unit = |v: f32| {
+            let v = if v.is_finite() {
+                v.clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (v * 65535.0).round() as u16
+        };
+        out.extend_from_slice(&0u16.to_be_bytes());
+        for c in &rgba[..3] {
+            out.extend_from_slice(&unit(*c).to_be_bytes());
+        }
+        out.extend_from_slice(&0u16.to_be_bytes());
+    }
+    let written = &swatches[..swatches.len().min(MAX_ENTRIES)];
+    let count = written.len() as u16;
+    let mut out = Vec::with_capacity(4 + written.len() * 24);
+    out.extend_from_slice(&1u16.to_be_bytes());
+    out.extend_from_slice(&count.to_be_bytes());
+    for (_, rgba) in written {
+        colour(&mut out, rgba);
+    }
+    out.extend_from_slice(&2u16.to_be_bytes());
+    out.extend_from_slice(&count.to_be_bytes());
+    for (name, rgba) in written {
+        colour(&mut out, rgba);
+        let units: Vec<u16> = name
+            .encode_utf16()
+            .take(MAX_NAME_UNITS - 1)
+            .chain(std::iter::once(0))
+            .collect();
+        out.extend_from_slice(&(units.len() as u32).to_be_bytes());
+        for u in units {
+            out.extend_from_slice(&u.to_be_bytes());
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod w16e_write_tests {
+    use super::*;
+
+    /// W16-E: what Export as .ACO writes, the importer reads back — every
+    /// colour at 8-bit precision, in order, under its own name.
+    #[test]
+    fn an_exported_aco_reads_back_with_its_colours_and_names() {
+        let swatches = vec![
+            ("Brick".to_string(), [0.8, 0.25, 0.1, 1.0]),
+            ("Sky blue".to_string(), [0.2, 0.6, 1.0, 1.0]),
+            ("Black".to_string(), [0.0, 0.0, 0.0, 1.0]),
+        ];
+        let bytes = write(&swatches);
+        let loaded = parse(&bytes).expect("the written file parses");
+        assert!(loaded.refused.is_empty(), "{:?}", loaded.refused);
+        assert_eq!(loaded.items.len(), swatches.len());
+        for (item, (name, rgba)) in loaded.items.iter().zip(&swatches) {
+            assert_eq!(&item.name, name);
+            let byte = |v: f32| (v * 255.0).round() as i32;
+            for (c, (got, want)) in item.rgba.iter().zip(rgba).take(3).enumerate() {
+                assert_eq!(byte(*got), byte(*want), "{name} channel {c}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_empty_palette_is_a_valid_empty_file() {
+        let loaded = parse(&write(&[])).expect("parses");
+        assert!(loaded.items.is_empty());
+    }
+}

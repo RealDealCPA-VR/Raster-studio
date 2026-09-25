@@ -116,6 +116,21 @@ impl BrushesState {
         Some(index)
     }
 
+    /// W16-E: the Brushes panel menu's Name Change: rename preset `index`.
+    /// A blank name (after trimming) or an index past the list changes
+    /// nothing; a real rename is a user edit, persisted like the others.
+    pub fn rename(&mut self, index: usize, name: &str) -> bool {
+        let name = name.trim();
+        match self.presets.get_mut(index) {
+            Some(p) if !name.is_empty() && p.name != name => {
+                p.name = name.to_string();
+                self.edits += 1;
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn remove(&mut self, index: usize) -> Option<BrushPreset> {
         if index >= self.presets.len() {
             return None;

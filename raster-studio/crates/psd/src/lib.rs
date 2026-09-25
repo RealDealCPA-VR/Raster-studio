@@ -40,10 +40,13 @@
 //!   `SoCo` fill, the `vstk` stroke and a `vogk` origination for rectangles)
 //!   and placed smart objects ([`placed`]: the `SoLd`/`PlLd` layer block and
 //!   the document's `lnk2`/`lnk3`/`lnkD` embedded files), read and written.
-//! * Greyscale and RGB at 8, 16 and 32 bits. CMYK, Lab, Indexed, Duotone,
-//!   Multichannel and Bitmap are **refused by name** rather than approximated,
-//!   because reading their samples as RGB produces pixels that are silently
-//!   wrong.
+//! * Greyscale and RGB at 8, 16 and 32 bits. W16-B: CMYK, Lab (8/16),
+//!   Indexed (palette + transparent index), Duotone (greyscale base + ink
+//!   record), Multichannel and 1-bit Bitmap are read, never as RGB:
+//!   [`colour_modes`] decodes their samples with the caller's colour model,
+//!   and writes CMYK, Lab, Indexed and Greyscale back. Bitmap, Multichannel
+//!   and Duotone are not written from RGB (a Bitmap header is refused by the
+//!   writer).
 //!
 //! # Known gaps
 //!
@@ -145,6 +148,8 @@ pub mod adjustments;
 pub mod blend;
 pub mod bytes;
 pub mod codec;
+/// W16-B: Bitmap, Indexed, CMYK, Lab, Multichannel and Duotone, in and out.
+pub mod colour_modes;
 pub mod descriptor;
 pub mod effects;
 pub mod engine_data;
@@ -154,6 +159,8 @@ pub mod fill;
 pub mod flatten;
 pub mod header;
 pub mod limits;
+// W16-G: live-shape originations (`vogk`) beyond the sharp rectangle.
+pub mod live_origin;
 pub mod model;
 pub mod packbits;
 pub mod pattern;

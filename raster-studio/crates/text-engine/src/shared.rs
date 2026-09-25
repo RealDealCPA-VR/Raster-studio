@@ -20,7 +20,8 @@ static SESSION_FONTS: Mutex<Vec<Arc<Vec<u8>>>> = Mutex::new(Vec::new());
 /// Returns how many faces the file holds; a file with none (not a font) is
 /// not remembered and answers `0`.
 pub fn register_session_font(bytes: Vec<u8>) -> usize {
-    let bytes = Arc::new(bytes);
+    // W16-L: a WOFF / WOFF2 is remembered as the sfnt it carries.
+    let bytes = Arc::new(crate::webfont::sfnt_from_webfont(bytes));
     let faces = Database::new()
         .load_font_source(Source::Binary(Arc::clone(&bytes) as _))
         .len();

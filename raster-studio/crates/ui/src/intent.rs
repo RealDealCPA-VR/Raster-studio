@@ -264,6 +264,9 @@ pub enum ViewFlag {
     /// View > Pattern Preview: the canvas repeated around itself, for
     /// seamless-pattern work. A view setting; the document is untouched.
     PatternPreview,
+    // W16-K: appended (bit positions follow `ALL`).
+    /// View > Show > Paths: the path being edited, its anchors and handles.
+    Paths,
 }
 
 impl ViewFlag {
@@ -290,6 +293,8 @@ impl ViewFlag {
         ViewFlag::SnapToBounds,
         ViewFlag::SnapToSlices,
         ViewFlag::PatternPreview,
+        // W16-K.
+        ViewFlag::Paths,
     ];
 
     /// W10-J: the View > Snap To submenu's targets, in Photoshop's order.
@@ -312,6 +317,8 @@ impl ViewFlag {
                 | ViewFlag::SelectionEdges
                 | ViewFlag::LayerEdges
                 | ViewFlag::Slices
+                // W16-K.
+                | ViewFlag::Paths
         )
     }
 
@@ -321,6 +328,8 @@ impl ViewFlag {
         matches!(
             self,
             ViewFlag::Slices
+                // W16-K: under View > Show.
+                | ViewFlag::Paths
                 | ViewFlag::SnapToGuides
                 | ViewFlag::SnapToGrid
                 | ViewFlag::SnapToLayers
@@ -355,6 +364,7 @@ impl ViewFlag {
             // W13-F: the menu row reads `ui.w13f.menu.pattern_preview`
             // (`MenuAction::label`); a const fn cannot call `tr`.
             ViewFlag::PatternPreview => "Pattern Preview",
+            ViewFlag::Paths => "Paths",
         }
     }
 }
@@ -390,6 +400,8 @@ impl ViewFlags {
             ViewFlag::SnapToLayers,
             ViewFlag::SnapToBounds,
             ViewFlag::SnapToSlices,
+            // W16-K: paths show, as in Photopea.
+            ViewFlag::Paths,
         ] {
             f.set(flag, true);
         }

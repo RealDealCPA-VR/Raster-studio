@@ -1,0 +1,1609 @@
+# Raster Studio interface strings, it. One row per line: the English source, a TAB,
+# the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
+# Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
+@name	Italiano
+ fps	 fps
+ frames	 fotogrammi
+ ms	 ms
+ px	 px
+0 bytes	0 byte
+16 Bits/Channel	16 bit/canale
+16 bit	16 bit
+32 Bits/Channel	32 bit/canale
+3D	3D
+50% Grey	Grigio 50%
+50% Threshold	Soglia 50%
+8 Bits/Channel	8 bit/canale
+8 bit	8 bit
+90° Clockwise	90° orario
+90° Counter Clockwise	90° antiorario
+A CSV row has the wrong number of fields, at line	Una riga CSV ha un numero errato di campi, alla riga
+A blank canvas at any size	Una tela vuota di qualsiasi dimensione
+A colour channel cannot be deleted	Un canale di colore non può essere eliminato
+A layered raster editor	Un editor di immagini raster a livelli
+A palette holds 2 to 256 colours	Una palette contiene da 2 a 256 colori
+A saved selection already has that name	Una selezione salvata ha già quel nome
+A saved selection: click to open Select > Load Selection, then choose it by name there	Una selezione salvata: fai clic per aprire Selezione > Carica selezione, poi sceglila lì per nome
+A slice needs a name	Una sezione ha bisogno di un nome
+AV1 (smaller, newer players)	AV1 (più piccolo, lettori più recenti)
+About Raster Studio	Informazioni su Raster Studio
+Absolute Colorimetric	Colorimetrico assoluto
+Action sets	Set di azioni
+Actions	Azioni
+Adaptive (median cut)	Adattiva (taglio mediano)
+Add "copy" to copied layers	Aggiungi "copia" ai livelli copiati
+Add Artboard Above	Aggiungi tavola da disegno sopra
+Add Artboard Below	Aggiungi tavola da disegno sotto
+Add Artboard Left	Aggiungi tavola da disegno a sinistra
+Add Artboard Right	Aggiungi tavola da disegno a destra
+Add Filter Mask	Aggiungi maschera filtro
+Add Media	Aggiungi media
+Add Noise…	Aggiungi disturbo…
+Add a layer mask	Aggiungi una maschera di livello
+Add a smart filter mask	Aggiungi una maschera per filtro avanzato
+Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read	Aggiungi un file video (MP4: H.264 o AV1) come livello video alla testina di riproduzione; l'audio non viene letto
+Add an adjustment layer	Aggiungi un livello di regolazione
+Add another instance of this effect	Aggiungi un'altra istanza di questo effetto
+Add current colour	Aggiungi il colore corrente
+Add export	Aggiungi esportazione
+Add frame	Aggiungi fotogramma
+Add or remove room around the image. Pixels are not resampled.	Aggiunge o toglie spazio attorno all'immagine. I pixel non vengono ricampionati.
+Add shortcut	Aggiungi scelta rapida
+Add to Selection	Aggiungi alla selezione
+Adds one guide at a document coordinate, in pixels.	Aggiunge una guida a una coordinata del documento, in pixel.
+Adjustments	Regolazioni
+Advanced	Avanzate
+Again	Di nuovo
+Again with Copy	Di nuovo con copia
+Aliased (pencil)	Senza anti-alias (matita)
+Align	Allinea
+Align the bottom edge to the canvas	Allinea il bordo inferiore alla tela
+Align the left edge to the canvas	Allinea il bordo sinistro alla tela
+Align the right edge to the canvas	Allinea il bordo destro alla tela
+Align the top edge to the canvas	Allinea il bordo superiore alla tela
+Align with layer	Allinea al livello
+All	Tutto
+All Caps	Tutto maiuscole
+All Caps shapes every lowercase letter as its capital; Small Caps shapes it as a capital at 70 % size. The stored text keeps the case you typed.	Tutto maiuscole dà a ogni minuscola la forma della sua maiuscola; Maiuscoletto la rende maiuscola al 70 % della dimensione. Il testo salvato mantiene le maiuscole e minuscole digitate.
+All Layers	Tutti i livelli
+Alpha	Alfa
+Already used by	Già usato da
+Alt Tag	Tag Alt
+Amount	Quantità
+An export needs at least one output	Un'esportazione richiede almeno un output
+An image or project from this computer	Un'immagine o un progetto da questo computer
+Angle	Angolo
+Angle (degrees)	Angolo (gradi)
+Angle jitter	Variazione angolo
+Animation	Animazione
+Another slice already has this name	Un'altra sezione ha già questo nome
+Appearance	Aspetto
+Applied	Applicata
+Apply	Applica
+Apply Guides	Applica guide
+Apply Image	Applica immagine
+Apply Image…	Applica immagine…
+Apply Mask	Applica maschera
+Apply Style	Applica stile
+Apply Style 1	Applica stile 1
+Apply Style Preset…	Applica stile predefinito…
+Apply the next comp	Applica la composizione successiva
+Apply the previous comp	Applica la composizione precedente
+Apply this mask	Applica questa maschera
+Approximate. The composited result is what the canvas shows.	Approssimativo. Il risultato composito è ciò che mostra la tela.
+Arbitrary…	Arbitraria…
+Arc	Arco
+Arc Lower	Arco inferiore
+Arc Upper	Arco superiore
+Arch	Arcata
+Arrange	Disponi
+Artboard	Tavola da disegno
+Artboard from Layers	Tavola da disegno da livelli
+Artboards in one document	Tavole da disegno in un documento
+Artboards to Files…	Tavole da disegno in file…
+Assign Profile	Assegna profilo
+Assigned {name}: the pixel numbers are unchanged, so the colours look different	{name} assegnato: i valori dei pixel non cambiano, quindi i colori appaiono diversi
+Author	Autore
+Auto Color	Colore automatico
+Auto Contrast	Contrasto automatico
+Auto Tone	Tono automatico
+Auto leading	Interlinea automatica
+Auto-Align Layers…	Allineamento automatico livelli…
+Auto-Blend Layers…	Fusione automatica livelli…
+Automate	Automatizza
+Autosaves of never-saved documents go here; empty uses the default	Qui vanno i salvataggi automatici dei documenti mai salvati; vuoto usa la posizione predefinita
+Average	Media
+BMP…	BMP…
+Back to the colour this opened on	Torna al colore di apertura
+Background — double-click for the picker	Sfondo: doppio clic per il selettore
+Based On	Basato su
+Baseline shift	Spostamento linea di base
+Baseline to baseline. Auto leading follows the type size.	Da linea di base a linea di base. L'interlinea automatica segue la dimensione del testo.
+Batch	Batch
+Batch…	Batch…
+Bend	Curva
+Bevel	Smusso
+Bevel & Emboss	Smusso ed effetto rilievo
+Bevel & Emboss…	Smusso ed effetto rilievo…
+Bind a text replacement variable to a text layer, or a visibility variable to any layer.	Associa una variabile di sostituzione testo a un livello di testo, o una variabile di visibilità a qualsiasi livello.
+Bitmap	Bitmap
+Bitmap…	Bitmap…
+Black	Nero
+Black & White	Bianco e nero
+Black & White…	Bianco e nero…
+Black to Transparent	Da nero a trasparente
+Black to White	Da nero a bianco
+Black to white through the inks	Da nero a bianco attraverso gli inchiostri
+Blacks	Neri
+Blend If	Fondi se
+Blend Mode: Color	Metodo di fusione: Colore
+Blend Mode: Color Burn	Metodo di fusione: Brucia colore
+Blend Mode: Color Dodge	Metodo di fusione: Colore scherma
+Blend Mode: Darken	Metodo di fusione: Scurisci
+Blend Mode: Difference	Metodo di fusione: Differenza
+Blend Mode: Dissolve	Metodo di fusione: Dissolvi
+Blend Mode: Exclusion	Metodo di fusione: Esclusione
+Blend Mode: Hard Light	Metodo di fusione: Luce intensa
+Blend Mode: Hard Mix	Metodo di fusione: Miscela solida
+Blend Mode: Hue	Metodo di fusione: Tonalità
+Blend Mode: Lighten	Metodo di fusione: Schiarisci
+Blend Mode: Linear Burn	Metodo di fusione: Brucia lineare
+Blend Mode: Linear Dodge (Add)	Metodo di fusione: Scherma lineare (aggiungi)
+Blend Mode: Linear Light	Metodo di fusione: Luce lineare
+Blend Mode: Luminosity	Metodo di fusione: Luminosità
+Blend Mode: Multiply	Metodo di fusione: Moltiplica
+Blend Mode: Normal	Metodo di fusione: Normale
+Blend Mode: Overlay	Metodo di fusione: Sovrapponi
+Blend Mode: Pin Light	Metodo di fusione: Luce puntiforme
+Blend Mode: Saturation	Metodo di fusione: Saturazione
+Blend Mode: Screen	Metodo di fusione: Scolora
+Blend Mode: Soft Light	Metodo di fusione: Luce soffusa
+Blend Mode: Vivid Light	Metodo di fusione: Luce vivida
+Blending	Fusione
+Blending Options	Opzioni di fusione
+Blending Options…	Opzioni di fusione…
+Blending options	Opzioni di fusione
+Blends a source document, layer or channel into the active layer as one step.	Fonde un documento, un livello o un canale di origine nel livello attivo in un solo passaggio.
+Blends one channel of each of two sources into a new channel, a selection or a new document.	Fonde un canale di ciascuna di due origini in un nuovo canale, una selezione o un nuovo documento.
+Blue	Blu
+Blues	Blu
+Blur	Sfocatura
+Blur Gallery	Galleria sfocatura
+Blur More	Sfoca di più
+Bold	Grassetto
+Border Selection	Selezione bordo
+Border…	Bordo…
+Both axes	Entrambi gli assi
+Bottom	In basso
+Bottom Edges	Bordi inferiori
+Bottom Left	In basso a sinistra
+Bottom Right	In basso a destra
+Bottom Right Pixel Color	Colore pixel in basso a destra
+Bottom left	In basso a sinistra
+Bottom right	In basso a destra
+Box Blur…	Sfocatura media…
+Box height	Altezza riquadro
+Brightness	Luminosità
+Brightness jitter	Variazione luminosità
+Brightness/Contrast	Luminosità/contrasto
+Brightness/Contrast…	Luminosità/contrasto…
+Bring Forward	Porta avanti
+Bring to Front	Porta in primo piano
+Brush Editor	Editor pennelli
+Brush: Background	Pennello: sfondo
+Brush: Foreground	Pennello: primo piano
+Brushes	Pennelli
+Bulge	Rigonfiamento
+Butt	Piatta
+CMYK Color	Colore CMYK
+Calculations	Calcoli
+Calculations…	Calcoli…
+Camera Raw…	Camera Raw…
+Canvas Size	Dimensione quadro
+Canvas Size…	Dimensione quadro…
+Canvas extension	Estensione quadro
+Caps	Maiuscole
+Carries the XMP; the source's EXIF goes into JPEG only	Contiene l'XMP; l'EXIF dell'origine va solo nel JPEG
+Cell size (pixels)	Dimensione cella (pixel)
+Center	Centro
+Center horizontally on the canvas	Centra orizzontalmente sulla tela
+Center vertically on the canvas	Centra verticalmente sulla tela
+Centimeters	Centimetri
+Centre	Centro
+Centre the view on this note	Centra la vista su questa nota
+Change Bit Depth	Cambia profondità di bit
+Change Colour Mode	Cambia metodo di colore
+Change Layer Properties	Cambia proprietà livello
+Change how many pixels the document has, or how large it prints.	Cambia quanti pixel ha il documento o quanto è grande in stampa.
+Channel	Canale
+Channel Mixer	Miscelatore canale
+Channel Mixer…	Miscelatore canale…
+Channel thumbnail	Miniatura canale
+Channels	Canali
+Character	Carattere
+Character Style	Stile carattere
+Character Styles	Stili carattere
+Checkerboard	Scacchiera
+Choose 2 to 256 colours	Scegli da 2 a 256 colori
+Choose a colour profile	Scegli un profilo colore
+Choose a destination folder	Scegli una cartella di destinazione
+Choose a source folder	Scegli una cartella di origine
+Choose at least one page to open	Scegli almeno una pagina da aprire
+Choose at least one side to trim	Scegli almeno un lato da rifilare
+Choose the Action to play	Scegli l'azione da eseguire
+Choose the open grayscale document each channel of the new RGB document comes from.	Scegli il documento in scala di grigio aperto da cui proviene ciascun canale del nuovo documento RGB.
+Choose the pages to open, their resolution and how they open.	Scegli le pagine da aprire, la loro risoluzione e come si aprono.
+Choose the source and the destination folders.	Scegli le cartelle di origine e di destinazione.
+Choose…	Scegli…
+Clear	Cancella
+Clear All	Cancella tutto
+Clear Guides	Cancella guide
+Clear History	Cancella storia
+Clear Layer Style	Cancella stile livello
+Clear Slices	Cancella sezioni
+Clear Strokes	Cancella tratti
+Clear existing guides	Cancella le guide esistenti
+Clear the {noun} from the active text layer	Rimuovi {noun} dal livello di testo attivo
+Cleared {n} slice(s)	{n} sezione/i cancellata/e
+Click an item in the panel first	Fai prima clic su un elemento del pannello
+Click anywhere to sample a colour	Fai clic in un punto qualsiasi per campionare un colore
+Click anywhere to sample a colour, or press Escape.	Fai clic in un punto qualsiasi per campionare un colore, o premi Esc.
+Click the graph to add a point, drag a point to bend the curve, drag it off the graph to remove it	Fai clic sul grafico per aggiungere un punto, trascina un punto per piegare la curva, trascinalo fuori dal grafico per rimuoverlo
+Click the preview to sample a colour from it	Fai clic sull'anteprima per campionarne un colore
+Click the preview to sample the colour to replace	Fai clic sull'anteprima per campionare il colore da sostituire
+Click the ramp to edit its stops.	Fai clic sulla sfumatura per modificarne i punti.
+Clip to layer below	Ritaglia sul livello sottostante
+Clipboard	Appunti
+Clipping	Ritaglio
+Close	Chiudi
+Close All	Chiudi tutto
+Close Alpha Channel	Chiudi canale alfa
+Close Others	Chiudi gli altri
+Close panel	Chiudi pannello
+Clouds	Nuvole
+Codec	Codec
+Color	Colore
+Color Balance	Bilanciamento colore
+Color Balance…	Bilanciamento colore…
+Color Burn	Brucia colore
+Color Dodge	Colore scherma
+Color Dynamics	Dinamica colore
+Color Halftone…	Mezzetinte colore…
+Color Intensity	Intensità colore
+Color Label	Etichetta colore
+Color Lookup	Consultazione colore
+Color Lookup Tables…	Tabelle di consultazione colore…
+Color Lookup…	Consultazione colore…
+Color Overlay	Sovrapposizione colore
+Color Overlay…	Sovrapposizione colore…
+Color Picker	Selettore colore
+Color Range	Intervallo colori
+Color Range…	Intervallo colori…
+Color fringe cleanup: pulls the boundary pixels' color toward the nearby interior ink — a separate edit from mask refinement.	Pulizia frange di colore: avvicina il colore dei pixel del bordo all'inchiostro interno vicino, una modifica separata dal perfezionamento della maschera.
+Color to Alpha…	Colore in alfa…
+Colors	Colori
+Colour	Colore
+Colour varies once per stroke.	Il colore varia una volta per tratto.
+Colours	Colori
+Colours must be 1 to 64, the tolerance above 0 and the corner length at least 1	I colori devono essere da 1 a 64, la tolleranza sopra 0 e la lunghezza dell'angolo almeno 1
+Columns	Colonne
+Columns and rows with gutters between them, inside optional margins, in pixels.	Colonne e righe con canaline tra loro, entro margini facoltativi, in pixel.
+Combine Shapes	Combina forme
+Commit (Enter)	Conferma (Invio)
+Commit Contents	Conferma contenuto
+Composite	Composito
+Condensed	Stretto
+Cone	Cono
+Constant	Costante
+Constrain proportions	Mantieni proporzioni
+Content-Aware	In base al contenuto
+Content-Aware Scale	Scala in base al contenuto
+Contour	Contorno
+Contract Selection	Contrai selezione
+Contract by	Contrai di
+Contract…	Contrai…
+Contrast	Contrasto
+Conversion Options	Opzioni di conversione
+Convert Formats	Converti formati
+Convert Formats…	Converti formati…
+Convert for Smart Filters	Converti per filtri avanzati
+Convert to Layers	Converti in livelli
+Convert to Linked…	Converti in collegato…
+Convert to Paragraph Text	Converti in testo paragrafo
+Convert to Point Text	Converti in testo punto
+Convert to Profile	Converti in profilo
+Convert to Profile works on 8- and 16-bit documents	Converti in profilo funziona su documenti a 8 e 16 bit
+Convert to Profile…	Converti in profilo…
+Convert to Shape	Converti in forma
+Convert to Smart Object	Converti in oggetto avanzato
+Converted to {name} ({intent}): the numbers changed so the colours look the same	Convertito in {name} ({intent}): i valori sono cambiati perché i colori appaiano uguali
+Cool	Freddo
+Copper	Rame
+Copy	Copia
+Copy Layer Style	Copia stile livello
+Copy Merged	Copia unione
+Copyright Notice	Nota di copyright
+Corner length	Lunghezza angolo
+Corner radius	Raggio angolo
+Corner radius applies to rectangles; this path has no corners to round	Il raggio dell'angolo si applica ai rettangoli; questo tracciato non ha angoli da arrotondare
+Corners	Angoli
+Count jitter	Variazione numero
+Create Clipping Mask	Crea maschera di ritaglio
+Create Layer	Crea livello
+Create Layers	Crea livelli
+Crop	Ritaglia
+Crop and Straighten Photos	Ritaglia e raddrizza foto
+Crops the canvas to the content, judged by the basis below.	Ritaglia la tela al contenuto, secondo la base indicata sotto.
+Crystallize…	Cristallizza…
+Current Layer	Livello corrente
+Current Path	Tracciato corrente
+Curve tolerance	Tolleranza curva
+Curves	Curve
+Curves…	Curve…
+Custom	Personale
+Custom Brush	Pennello personale
+Custom: with the Move tool, drag the 16 mesh handles on the canvas	Personale: con lo strumento Sposta, trascina le 16 maniglie della griglia sulla tela
+Custom…	Personale…
+Cut	Taglia
+Cyan	Ciano
+Cyan / Red	Ciano / Rosso
+Cyans	Ciano
+DDS…	DDS…
+DXF…	DXF…
+Dark	Scuro
+Dark Blue	Blu scuro
+Dark Grey	Grigio scuro
+Darken	Scurisci
+Darker Color	Colore più scuro
+Dash	Tratteggio
+Data Set	Set di dati
+Data Sets	Set di dati
+Data Sets…	Set di dati…
+Default	Predefinito
+Default colours  (D)	Colori predefiniti  (D)
+Default colours (D)	Colori predefiniti (D)
+Define	Definisci
+Define Brush Preset…	Definisci predefinito pennello…
+Define Custom Shape…	Definisci forma personale…
+Define New	Definisci nuovo
+Define Pattern…	Definisci pattern…
+Define…	Definisci…
+Delete	Elimina
+Delete Filter Mask	Elimina maschera filtro
+Delete Layer	Elimina livello
+Delete Mask	Elimina maschera
+Delete Vector Mask	Elimina maschera vettoriale
+Delete action	Elimina azione
+Delete channel	Elimina canale
+Delete frame	Elimina fotogramma
+Delete path	Elimina tracciato
+Delete selected layers	Elimina i livelli selezionati
+Delete set and its actions	Elimina il set e le sue azioni
+Delete stop	Elimina punto
+Delete the applied comp	Elimina la composizione applicata
+Delete the selected keyframe	Elimina il fotogramma chiave selezionato
+Delete the selected tool preset	Elimina lo strumento predefinito selezionato
+Delete the selected {noun}	Elimina {noun} selezionato
+Delete the smart filter mask	Elimina la maschera del filtro avanzato
+Delete this note	Elimina questa nota
+Delete this smart filter	Elimina questo filtro avanzato
+Delete this spot channel	Elimina questo canale tinta piatta
+Density	Densità
+Dents…	Ammaccature…
+Desaturate	Togli saturazione
+Description	Descrizione
+Deselect	Deseleziona
+Deselect Layers	Deseleziona livelli
+Despeckle	Smacchia
+Destination	Destinazione
+Destination Space	Spazio di destinazione
+Detail	Dettaglio
+Detail scales	Scale di dettaglio
+Diamond	Rombo
+Difference	Differenza
+Difference Clouds	Nuvole in differenza
+Diffuse…	Diffusione…
+Diffusion	Diffusione
+Diffusion Dither	Dithering diffusione
+Disable / Enable Filter Mask	Disattiva / attiva maschera filtro
+Disable / Enable Mask	Disattiva / attiva maschera
+Disable / Enable Vector Mask	Disattiva / attiva maschera vettoriale
+Disable Mask	Disattiva maschera
+Disable Vector Mask	Disattiva maschera vettoriale
+Displace…	Muovi…
+Dissolve	Dissolvi
+Distance	Distanza
+Distort	Distorci
+Distribute	Distribuisci
+Dither	Dithering
+Dither…	Dithering…
+Divide	Dividi
+Dock this panel here	Ancora qui questo pannello
+Document	Documento
+Document Bounds	Limiti del documento
+Document Info	Info documento
+Document Title	Titolo documento
+Document size	Dimensione documento
+Double-click to edit in Layer Style; drag to the trash to delete	Doppio clic per modificare in Stile livello; trascina nel cestino per eliminare
+Double-click to edit this filter's settings	Doppio clic per modificare le impostazioni di questo filtro
+Double-click to rename	Doppio clic per rinominare
+Drag a line with the Ruler first	Traccia prima una linea con il righello
+Drag to zoom the view	Trascina per ingrandire la vista
+Drop Shadow	Ombra esterna
+Drop Shadow…	Ombra esterna…
+Duotone	Bicromia
+Duotone Options	Opzioni bicromia
+Duotone…	Bicromia…
+Duplicate	Duplica
+Duplicate Layer	Duplica livello
+Duplicate Layer…	Duplica livello…
+Duplicate frame	Duplica fotogramma
+Dust & Scratches…	Polvere e grana…
+EMF…	EMF…
+EXIF and XMP writing is not implemented — only ICC is embedded	La scrittura di EXIF e XMP non è implementata: viene incorporato solo l'ICC
+EXR…	EXR…
+Ease In	Rallenta in entrata
+Ease Out	Rallenta in uscita
+Edge Glow	Bagliore bordi
+Edge refinement: feather, shift, smooth, and contrast over the mask's existing coverage — not subject recognition.	Perfezionamento bordi: sfumatura, spostamento, arrotondamento e contrasto sulla copertura esistente della maschera, senza riconoscimento del soggetto.
+Edges	Bordi
+Edit	Modifica
+Edit Adjustment	Modifica regolazione
+Edit Adjustment…	Modifica regolazione…
+Edit Alpha Channel	Modifica canale alfa
+Edit Contents…	Modifica contenuto…
+Edit Document Records	Modifica registri del documento
+Edit Fill	Modifica riempimento
+Edit Filter Mask	Modifica maschera filtro
+Edit Generator	Modifica generatore
+Edit Group	Modifica gruppo
+Edit Guides	Modifica guide
+Edit Raster	Modifica livello raster
+Edit Saved Selection	Modifica selezione salvata
+Edit Shape	Modifica forma
+Edit Slices	Modifica sezioni
+Edit Smart object	Modifica oggetto avanzato
+Edit Text	Modifica testo
+Edit Timeline	Modifica timeline
+Edit brush…	Modifica pennello…
+Edit fill	Modifica riempimento
+Edit gradient stops — click to open the editor	Modifica i punti della sfumatura: fai clic per aprire l'editor
+Edit in Quick Mask Mode	Modifica in modalità maschera veloce
+Edit this ramp	Modifica questa sfumatura
+Effects	Effetti
+Effects apply to the whole layer and undo as one step.	Gli effetti si applicano all'intero livello e si annullano in un solo passaggio.
+Embed EXIF and XMP	Incorpora EXIF e XMP
+Embed Linked	Incorpora collegato
+Embed colour profile	Incorpora profilo colore
+Embedded source	Origine incorporata
+Emboss…	Effetto rilievo…
+Enable / disable the smart filter mask	Attiva / disattiva la maschera del filtro avanzato
+Enable Mask	Attiva maschera
+Enable Vector Mask	Attiva maschera vettoriale
+Enable at least one export	Attiva almeno un'esportazione
+Enabled	Attivato
+Enlarge smaller images	Ingrandisci le immagini più piccole
+Enter a colour like #3366CC	Inserisci un colore come #3366CC
+Entropy	Entropia
+Equalize	Equalizza
+Essentials	Essenziali
+Every enabled row is written when you export.	Ogni riga attivata viene scritta all'esportazione.
+Every image in the source folder is fitted into the box and written to the destination folder in its own format.	Ogni immagine della cartella di origine viene adattata al riquadro e scritta nella cartella di destinazione nel suo formato.
+Every parameter is at its neutral value — there is nothing to clean	Tutti i parametri sono al valore neutro: non c'è nulla da pulire
+Every parameter is at its neutral value — there is nothing to refine	Tutti i parametri sono al valore neutro: non c'è nulla da perfezionare
+Every variable needs a name	Ogni variabile richiede un nome
+Exact	Esatto
+Exclude Overlapping Shapes	Escludi forme sovrapposte
+Exclusion	Esclusione
+Expand Selection	Espandi selezione
+Expand by	Espandi di
+Expand the dock	Espandi il dock
+Expanded	Espanso
+Expand…	Espandi…
+Export	Esporta
+Export As	Esporta come
+Export Color Lookup	Esporta consultazione colore
+Export Contents…	Esporta contenuto…
+Export Diagnostics…	Esporta diagnostica…
+Export Layers…	Esporta livelli…
+Export PDF	Esporta PDF
+Export as .ABR…	Esporta come .ABR…
+Export as .ACO…	Esporta come .ACO…
+Export as .ASL…	Esporta come .ASL…
+Export set as .atn	Esporta set come .atn
+Export…	Esporta…
+Exposure	Esposizione
+Exposure…	Esposizione…
+Extra Bold	Extra grassetto
+Extra Condensed	Extra stretto
+Extra Expanded	Extra espanso
+Extra Light	Extra chiaro
+Extras	Extra
+Extrude…	Estrusione…
+Eyedropper	Contagocce
+Face	Stile
+Facet	Sfaccettatura
+Fade	Dissolvenza
+Fade…	Dissolvenza…
+Family	Famiglia
+Feather	Sfuma
+Feather Selection	Sfuma selezione
+Feather radius	Raggio sfumatura
+Feather…	Sfuma…
+Fibers…	Fibre…
+Field Blur…	Sfocatura campo…
+File	File
+File Info	Info file
+File Info…	Info file…
+File name	Nome file
+Files that fail are listed in batch-errors.txt in the destination.	I file non riusciti sono elencati in batch-errors.txt nella destinazione.
+Fill	Riempimento
+Fill Filter Mask	Riempi maschera filtro
+Fill Mask	Riempi maschera
+Fill Screen	Riempi schermo
+Fill in File Info, or open a file that has EXIF, to embed metadata	Compila Info file, o apri un file con EXIF, per incorporare i metadati
+Fill path with the foreground colour, on a new shape layer	Riempi il tracciato con il colore di primo piano, su un nuovo livello forma
+Fill type	Tipo di riempimento
+Fills the active selection with the chosen contents.	Riempie la selezione attiva con il contenuto scelto.
+Fill…	Riempi…
+Filter	Filtro
+Filter Gallery	Galleria filtri
+Filter Gallery…	Galleria filtri…
+Find Edges	Trova bordi
+First line	Prima riga
+Fish	Pesce
+Fisheye	Occhio di pesce
+Fit on Screen	Adatta allo schermo
+Fit the whole image in the window	Adatta l'intera immagine alla finestra
+Fixed height	Altezza fissa
+Flag	Bandiera
+Flame…	Fiamma…
+Flat Angled 40	Piatto angolato 40
+Flatten Image	Unico livello
+Flip Canvas Horizontal	Rifletti quadro orizzontale
+Flip Canvas Vertical	Rifletti quadro verticale
+Flip Horizontal	Rifletti orizzontale
+Flip Vertical	Rifletti verticale
+Flip View Horizontal	Rifletti vista orizzontale
+Flip View Vertical	Rifletti vista verticale
+Flow jitter	Variazione flusso
+Folders	Cartelle
+Font: 	Font: 
+Foreground strokes mark what to keep, background strokes what to drop; Preview shows the cut.	I tratti di primo piano segnano cosa tenere, quelli di sfondo cosa scartare; l'anteprima mostra il ritaglio.
+Foreground — double-click for the picker	Primo piano: doppio clic per il selettore
+Foreground/background jitter	Variazione primo piano/sfondo
+Format	Formato
+Fourier	Fourier
+Fourier Transform	Trasformata di Fourier
+Fragment	Frammento
+Frame	Cornice
+Frames	Fotogrammi
+Free Transform	Trasformazione libera
+Free Transform a Copy	Trasforma liberamente una copia
+From Transparency	Da trasparenza
+Fullscreen	Schermo intero
+Fuzziness	Tolleranza
+GIF…	GIF…
+Gamma	Gamma
+Gamut Warning	Avviso gamma
+Gaussian	Gaussiana
+Gaussian Blur…	Controllo sfocatura…
+Generate Mockups	Genera mockup
+Generate Mockups…	Genera mockup…
+Give the brush a name	Dai un nome al pennello
+Give the export a file name	Dai un nome file all'esportazione
+Glass Menus	Menu in vetro
+Global light	Luce globale
+Glyphs	Glifi
+Gradient	Sfumatura
+Gradient Editor	Editor sfumatura
+Gradient Map	Mappa sfumatura
+Gradient Map…	Mappa sfumatura…
+Gradient Overlay	Sovrapposizione sfumatura
+Gradient Overlay…	Sovrapposizione sfumatura…
+Gradient…	Sfumatura…
+Gray	Grigio
+Grayscale	Scala di grigio
+Green	Verde
+Greens	Verdi
+Grid	Griglia
+Grid points	Punti griglia
+Group	Gruppo
+Group Layers	Raggruppa livelli
+Grow	Estendi
+Guide Guy	Guide Guy
+Guides	Guide
+Gutter	Canalina
+H	H
+H.264 (plays everywhere)	H.264 (si riproduce ovunque)
+HDR Toning	Viraggio HDR
+HDR Toning…	Viraggio HDR…
+HSB/HSL…	HSB/HSL…
+Halftone Screen	Retino mezzetinte
+Hard Light	Luce intensa
+Hard Mix	Miscela solida
+Hard Round 24	Tondo duro 24
+Hard Round 4	Tondo duro 4
+Hard edges, no blending. Pixel art only — it aliases on downscale.	Bordi netti, nessuna fusione. Solo pixel art: si seghetta in riduzione.
+Harder Brush	Pennello più duro
+Height	Altezza
+Height to 110%	Altezza al 110%
+Height to 125%	Altezza al 125%
+Height to 80%	Altezza all'80%
+Height to 90%	Altezza al 90%
+Help	Aiuto
+Hide All	Nascondi tutto
+Hide Layers	Nascondi livelli
+Hide Selection	Nascondi selezione
+Hide the source layer	Nascondi il livello di origine
+High Contrast	Contrasto elevato
+High Pass…	Accentua passaggio…
+Highlights	Luci
+Histogram	Istogramma
+Histories	Storie
+History	Storia
+Hold	Mantieni
+Horizontal Centers	Centri orizzontali
+Horizontal Distortion	Distorsione orizzontale
+Horizontal center guide	Guida centrale orizzontale
+Horizontal scale, in percent: widens or narrows the glyphs and their spacing	Scala orizzontale, in percentuale: allarga o restringe i glifi e la loro spaziatura
+Horizontally	Orizzontalmente
+Hue	Tonalità
+Hue jitter	Variazione tonalità
+Hue/Saturation	Tonalità/saturazione
+Hue/Saturation…	Tonalità/saturazione…
+ICC profile	Profilo ICC
+ICO…	ICO…
+Image	Immagine
+Image Options	Opzioni immagine
+Image Rotation	Rotazione immagine
+Image Size	Dimensione immagine
+Image Size…	Dimensione immagine…
+Image size	Dimensione immagine
+Import CSV…	Importa CSV…
+Import PDF	Importa PDF
+Import a CSV of data sets first	Importa prima un CSV di set di dati
+Import a CSV: the first row names the variables, every further row is one data set.	Importa un CSV: la prima riga nomina le variabili, ogni riga successiva è un set di dati.
+In use	In uso
+Inches	Pollici
+Indexed Color	Colore indicizzato
+Indexed Color…	Colore indicizzato…
+Inflate	Gonfia
+Info	Info
+Ink	Inchiostro
+Ink Color	Colore inchiostro
+Ink printed at 0, 25, 50, 75 and 100% tint	Inchiostro stampato con tinta allo 0, 25, 50, 75 e 100%
+Inner Glow	Bagliore interno
+Inner Glow…	Bagliore interno…
+Inner Radius	Raggio interno
+Inner Shadow	Ombra interna
+Inner Shadow…	Ombra interna…
+Inside	Interno
+Intent	Intento
+Intersect Shape Areas	Interseca aree forma
+Intersect with Selection	Interseca con selezione
+Inverse	Inversa
+Inverse Fourier Transform	Trasformata di Fourier inversa
+Invert	Inverti
+Invert coverage	Inverti copertura
+Invert has no parameters	Inverti non ha parametri
+Iris Blur…	Sfocatura diaframma…
+Italic	Corsivo
+JPEG carries the XMP and the source's EXIF	Il JPEG contiene l'XMP e l'EXIF dell'origine
+JPG…	JPG…
+Justify	Giustifica
+Kaleidoscope…	Caleidoscopio…
+Keep as it was	Lascia com'era
+Kept when a comp is first applied	Mantenuto alla prima applicazione di una composizione
+Kerning	Crenatura
+Keyboard Shortcut Sheet…	Riepilogo scelte rapide da tastiera…
+Keyboard Shortcuts…	Scelte rapide da tastiera…
+Keywords	Parole chiave
+Kind	Tipo
+Kurtosis	Curtosi
+Lab Color	Colore Lab
+Landscape	Orizzontale
+Language	Lingua
+Large	Grande
+Last Document State	Ultimo stato del documento
+Last Filter	Ultimo filtro
+Last line	Ultima riga
+Layer	Livello
+Layer Comps	Composizioni livelli
+Layer Edges	Bordi livello
+Layer Mask	Maschera di livello
+Layer Style	Stile livello
+Layer knocks out drop shadow	Il livello foratura l'ombra esterna
+Layer via Copy	Livello tramite copia
+Layer via Cut	Livello tramite taglio
+Layers	Livelli
+Layers panel options	Opzioni pannello Livelli
+Left	Sinistra
+Left Edges	Bordi sinistri
+Left indent	Rientro a sinistra
+Length	Lunghezza
+Lens Blur…	Sfocatura con lente…
+Lens Correction…	Correzione lente…
+Lens Flare…	Riflesso lente…
+Level	Livello
+Levels	Livelli
+Levels…	Livelli…
+Light	Chiaro
+Light Grey	Grigio chiaro
+Lighten	Schiarisci
+Lighter Color	Colore più chiaro
+Lighting Effects…	Effetti di luce…
+Lightness	Luminosità
+Line	Linea
+Linear	Lineare
+Linear Burn	Brucia lineare
+Linear Dodge (Add)	Scherma lineare (aggiungi)
+Linear Light	Luce lineare
+Link / Unlink Mask	Collega / scollega maschera
+Link Layers	Collega livelli
+Link selected layers	Collega i livelli selezionati
+Link with layer	Collega al livello
+Linked	Collegato
+Linked file	File collegato
+Liquify…	Fluidifica…
+Live Shape	Forma dinamica
+Live preview	Anteprima dal vivo
+Live preview is off.	L'anteprima dal vivo è disattivata.
+Load	Carica
+Load .atn	Carica .atn
+Load .cube file…	Carica file .cube…
+Load Selection	Carica selezione
+Load Selection…	Carica selezione…
+Load actions	Carica azioni
+Load channel as selection	Carica canale come selezione
+Load path as a selection	Carica tracciato come selezione
+Loaded file	File caricato
+Lock	Blocca
+Lock All	Blocca tutto
+Lock Guides	Blocca guide
+Lock Image Pixels	Blocca pixel immagine
+Lock Position	Blocca posizione
+Lock Transparent Pixels	Blocca pixel trasparenti
+Lock all	Blocca tutto
+Lock pixels	Blocca pixel
+Lock position	Blocca posizione
+Lock transparent pixels	Blocca pixel trasparenti
+Lookup table	Tabella di consultazione
+Luminance	Luminanza
+Luminance of the preview source; the markers are the black and white points.	Luminanza dell'origine dell'anteprima; i marcatori sono i punti del nero e del bianco.
+Luminosity	Luminosità
+MP4…	MP4…
+Magenta	Magenta
+Magenta / Green	Magenta / Verde
+Magentas	Magenta
+Magic Cut	Taglio magico
+Magic Cut…	Taglio magico…
+Make Frames	Crea fotogrammi
+Make a selection first	Crea prima una selezione
+Make work path from selection	Crea tracciato di lavoro dalla selezione
+Manual	Manuale
+Maps every colour onto one palette. The document keeps RGBA pixels; GIF and PNG export write this palette.	Mappa ogni colore su una palette. Il documento mantiene pixel RGBA; le esportazioni GIF e PNG scrivono questa palette.
+Maps the active layer onto a palette as one undo step; the document stays RGB.	Mappa il livello attivo su una palette in un solo passaggio annullabile; il documento resta RGB.
+Margins	Margini
+Mark this state so you can come back to it	Contrassegna questo stato per poterci tornare
+Mask	Maschera
+Mask source	Origine maschera
+Match Color	Corrispondenza colore
+Match Color…	Corrispondenza colore…
+Matting	Alone
+Maximum	Massimo
+Maximum…	Massimo…
+Mean	Media
+Median	Mediana
+Median…	Mediana…
+Medium	Medio
+Memory	Memoria
+Menu Bar and Canvas	Barra dei menu e tela
+Merge	Unisci
+Merge Channels	Unisci canali
+Merge Channels…	Unisci canali…
+Merge Down	Unisci sotto
+Merge Layers	Unisci livelli
+Merge Visible	Unisci visibili
+Merged	Unito
+Method	Metodo
+Metrics	Metrica
+Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.	Metrica usa la crenatura a coppie del font; 0 disattiva la crenatura; Manuale mette un valore (1/1000 em) fra ogni coppia del testo attuale, e i caratteri digitati dopo iniziano senza crenatura; servono almeno due caratteri, quindi un testo più corto e i valori predefiniti dello strumento Testo non la offrono. Il motore di composizione non ha crenatura ottica, quindi quella modalità non è offerta.
+Mezzotint…	Mezzatinta…
+Midtones	Mezzitoni
+Millimeters	Millimetri
+Min diameter	Diametro min.
+Min roundness	Rotondità min.
+Min size	Dimensione min.
+Minimal	Minimo
+Minimum	Minimo
+Minimum size only applies when pressure controls size.	La dimensione minima vale solo quando la pressione controlla la dimensione.
+Minimum…	Minimo…
+Miter	Spigolo
+Mode	Metodo
+Modify	Modifica
+Monochrome	Monocromatico
+Monotone	Monotono
+More readouts	Altre letture
+More tabs	Altre schede
+Mosaic…	Mosaico…
+Motion Blur…	Sfocatura movimento…
+Move Layer	Sposta livello
+Move a control first: these settings would change nothing	Sposta prima un controllo: queste impostazioni non cambierebbero nulla
+Move this panel	Sposta questo pannello
+Move this panel within its dock	Sposta questo pannello nel suo dock
+Move to	Sposta in
+Move with the layer	Sposta con il livello
+Multiply	Moltiplica
+Name	Nome
+Name Change	Cambio nome
+Name the channel first.	Dai prima un nome al canale.
+Navigator	Navigatore
+Nearest Neighbour	Vicino più prossimo
+Neutralize	Neutralizza
+Neutrals	Neutri
+New	Nuovo
+New Adjustment Layer	Nuovo livello di regolazione
+New Channel	Nuovo canale
+New Document	Nuovo documento
+New Fill Layer	Nuovo livello di riempimento
+New Guide	Nuova guida
+New Guide Layout	Nuovo layout guide
+New Guide Layout…	Nuovo layout guide…
+New Guides from Shape	Nuove guide da forma
+New Guide…	Nuova guida…
+New Layer	Nuovo livello
+New Layer Based Slice	Nuova sezione basata sul livello
+New Selection	Nuova selezione
+New Smart Object via Copy	Nuovo oggetto avanzato tramite copia
+New Snapshot	Nuova istantanea
+New Spot Channel	Nuovo canale tinta piatta
+New Spot Channel…	Nuovo canale tinta piatta…
+New Style Preset	Nuovo stile predefinito
+New channel	Nuovo canale
+New group	Nuovo gruppo
+New layer	Nuovo livello
+New layer comp	Nuova composizione livelli
+New note at the centre of the view	Nuova nota al centro della vista
+New path (saves the Work Path when it is selected)	Nuovo tracciato (salva il tracciato di lavoro quando è selezionato)
+New set	Nuovo set
+New size	Nuova dimensione
+New style from the active layer	Nuovo stile dal livello attivo
+New tool preset from the active tool	Nuovo strumento predefinito dallo strumento attivo
+New {noun} from the active text layer	Nuovo {noun} dal livello di testo attivo
+New…	Nuovo…
+Next Blend Mode	Metodo di fusione successivo
+No Color	Nessun colore
+No character styles yet. New records the active text layer's font, size and look.	Ancora nessuno stile carattere. Nuovo registra font, dimensione e aspetto del livello di testo attivo.
+No command loads a channel as the selection in this build; the Select menu's Load Selection restores a saved selection instead	In questa build nessun comando carica un canale come selezione; Carica selezione del menu Selezione ripristina invece una selezione salvata
+No commands to bind	Nessun comando da associare
+No document	Nessun documento
+No document is open	Nessun documento aperto
+No export selected	Nessuna esportazione selezionata
+No faces listed for this family name	Nessuno stile elencato per questo nome di famiglia
+No frames yet. Add frame makes an _a_ layer: each one is a frame, bottom first.	Ancora nessun fotogramma. Aggiungi fotogramma crea un livello _a_: ognuno è un fotogramma, a partire dal basso.
+No guide crosses the canvas	Nessuna guida attraversa la tela
+No installed family matches	Nessuna famiglia installata corrisponde
+No layer comps yet. New Layer Comp records every layer's visibility, position and appearance.	Ancora nessuna composizione livelli. Nuova composizione livelli registra visibilità, posizione e aspetto di ogni livello.
+No layers yet. Add one with the + button below.	Ancora nessun livello. Aggiungine uno con il pulsante + qui sotto.
+No layers yet: each top-level layer gets a bar on the timeline.	Ancora nessun livello: ogni livello di primo livello riceve una barra nella timeline.
+No notes yet. Click the canvas with the Note tool (I), or New Note pins one at the centre of the view; notes are saved with the document and never exported.	Ancora nessuna nota. Fai clic sulla tela con lo strumento Nota (I), oppure Nuova nota ne fissa una al centro della vista; le note vengono salvate con il documento e mai esportate.
+No open document is the same size as this one	Nessun documento aperto ha le stesse dimensioni di questo
+No paragraph styles yet. New records the active text layer's alignment, indents and spacing.	Ancora nessuno stile paragrafo. Nuovo registra allineamento, rientri e spaziatura del livello di testo attivo.
+No pattern chosen — the overlay paints nothing.	Nessun pattern scelto: la sovrapposizione non dipinge nulla.
+No patterns are defined yet	Non sono ancora definiti pattern
+No profile file was chosen	Non è stato scelto alcun file di profilo
+No recent files yet	Ancora nessun file recente
+No selection has been saved	Non è stata salvata alcuna selezione
+No source recorded for this object	Nessuna origine registrata per questo oggetto
+No stop selected	Nessun punto selezionato
+No style presets yet. Define one with Layer > Layer Style > Define Style Preset, or add a Photoshop library with File > Open (.asl).	Ancora nessuno stile predefinito. Definiscine uno con Livello > Stile livello > Definisci stile predefinito, oppure aggiungi una libreria di Photoshop con File > Apri (.asl).
+No styles yet. The + button saves the active layer's style; File > Open loads an .asl style library.	Ancora nessuno stile. Il pulsante + salva lo stile del livello attivo; File > Apri carica una libreria di stili .asl.
+No such command	Comando inesistente
+No tool presets yet. New Tool Preset saves the active tool with its current options.	Ancora nessuno strumento predefinito. Nuovo strumento predefinito salva lo strumento attivo con le sue opzioni correnti.
+Noise	Disturbo
+None	Nessuno
+Normal	Normale
+Normal Map…	Mappa normale…
+Not a hex colour	Non è un colore esadecimale
+Not installed — shaping with	Non installato: composto con
+Not saved yet	Non ancora salvato
+Notes	Note
+Nothing has changed	Non è cambiato nulla
+Nothing in this submenu is available right now	Al momento nulla in questo sottomenu è disponibile
+Nothing is left to learn the background from: paint over it with the background brush.	Non resta nulla da cui imparare lo sfondo: dipingilo con il pennello dello sfondo.
+Nothing to measure yet — paint or place something on this layer first	Ancora nulla da misurare: dipingi o inserisci prima qualcosa su questo livello
+Nothing to preview.	Nulla da visualizzare in anteprima.
+OK	OK
+Oblique	Obliquo
+Off: the wheel pans the view and Ctrl+wheel zooms	Disattivato: la rotellina scorre la vista e Ctrl+rotellina ingrandisce
+Offset…	Sposta…
+Oil Paint…	Pittura a olio…
+One page holding the flattened image; no vector content.	Una pagina con l'immagine unita; nessun contenuto vettoriale.
+Onion skin	Onion skin
+Only English is available in this build	In questa build è disponibile solo l'inglese
+Only a mask channel can be loaded as a selection here	Qui si può caricare come selezione solo un canale maschera
+Only web-safe colours	Solo colori per il Web
+Opacity	Opacità
+Opacity 10%	Opacità 10%
+Opacity 100%	Opacità 100%
+Opacity 20%	Opacità 20%
+Opacity 30%	Opacità 30%
+Opacity 40%	Opacità 40%
+Opacity 50%	Opacità 50%
+Opacity 60%	Opacità 60%
+Opacity 70%	Opacità 70%
+Opacity 80%	Opacità 80%
+Opacity 90%	Opacità 90%
+Opacity jitter	Variazione opacità
+Opacity key	Chiave opacità
+Opacity must be between 0% and 100%	L'opacità deve essere tra 0% e 100%
+Opacity scales the layer and its effects; Fill scales the layer's own pixels only.	L'opacità agisce sul livello e sui suoi effetti; Riempimento agisce solo sui pixel del livello.
+Opacity stops sit above the bar, colour stops below it.	I punti di opacità stanno sopra la barra, quelli di colore sotto.
+Open	Apri
+Open .ABR…	Apri .ABR…
+Open .ACO…	Apri .ACO…
+Open .ASL…	Apri .ASL…
+Open Recent	Apri recenti
+Open a document first	Apri prima un documento
+Open a document to animate it.	Apri un documento per animarlo.
+Open a document to apply styles to its layers.	Apri un documento per applicare stili ai suoi livelli.
+Open a document to insert glyphs into its text.	Apri un documento per inserire glifi nel suo testo.
+Open a document to keep text styles in it.	Apri un documento per conservarvi stili di testo.
+Open a document to lay guides out on it.	Apri un documento per disporvi delle guide.
+Open a document to pin notes on it.	Apri un documento per fissarvi delle note.
+Open a document to record layer comps.	Apri un documento per registrare composizioni livelli.
+Open a document to see its CSS	Apri un documento per vederne il CSS
+Open a document to see its facts.	Apri un documento per vederne i dati.
+Open a document to see its histogram	Apri un documento per vederne l'istogramma
+Open a document to see its history	Apri un documento per vederne la storia
+Open a document to see its properties	Apri un documento per vederne le proprietà
+Open another document, or add another pixel layer, to match its colours.	Apri un altro documento, o aggiungi un altro livello di pixel, per farne corrispondere i colori.
+Open as	Apri come
+Open editor…	Apri editor…
+Open the Adjustments panel	Apri il pannello Regolazioni
+Open…	Apri…
+Operation	Operazione
+Orange	Arancione
+Other	Altro
+Out of gamut	Fuori gamma
+Outer Glow	Bagliore esterno
+Outer Glow…	Bagliore esterno…
+Outline the path	Traccia il contorno del tracciato
+Output	Output
+Output channel	Canale di output
+Outside	Esterno
+Overlay	Sovrapponi
+PBM…	PBM…
+PDF Presentation…	Presentazione PDF…
+PDF…	PDF…
+PGM…	PGM…
+PNG…	PNG…
+PPM…	PPM…
+Page	Pagina
+Page {n}	Pagina {n}
+Page {page} opens at {w} x {h} px	La pagina {page} si apre a {w} x {h} px
+Pages	Pagine
+Paint	Dipingi
+Paint Filter Mask	Dipingi maschera filtro
+Paint Mask	Dipingi maschera
+Paint over the part to keep with the foreground brush first.	Dipingi prima con il pennello di primo piano la parte da tenere.
+Paint over what to keep and over what to drop	Dipingi su ciò che va tenuto e su ciò che va scartato
+Paint the inside of the path	Dipingi l'interno del tracciato
+Painting	Pittura
+Paints a band along the active selection's border.	Dipinge una fascia lungo il bordo della selezione attiva.
+Pair kerning	Crenatura a coppie
+Palette	Palette
+Paragraph	Paragrafo
+Paragraph Style	Stile paragrafo
+Paragraph Styles	Stili paragrafo
+Particles…	Particelle…
+Paste	Incolla
+Paste Into	Incolla dentro
+Paste Layer Style	Incolla stile livello
+Paste Outside	Incolla fuori
+Paste Special	Incolla speciale
+Paste in Place	Incolla nella stessa posizione
+Path	Tracciato
+Path Blur…	Sfocatura tracciato…
+Path editing lives in the Paths panel	La modifica dei tracciati si trova nel pannello Tracciati
+Paths	Tracciati
+Pattern	Pattern
+Pattern Dither	Dithering pattern
+Pattern Overlay	Sovrapposizione pattern
+Pattern Overlay…	Sovrapposizione pattern…
+Pattern Preview	Anteprima pattern
+Pattern…	Pattern…
+Pencil 1px	Matita 1 px
+Percent	Percentuale
+Perceptual	Percettivo
+Perspective	Prospettiva
+Perspective Warp	Alterazione prospettiva
+Photo Filter	Filtro fotografico
+Photo Filter…	Filtro fotografico…
+Photography	Fotografia
+Picas	Pica
+Pick a filter; it applies at its default settings.	Scegli un filtro; si applica con le impostazioni predefinite.
+Pin Light	Luce puntiforme
+Pinch…	Pizzica…
+Pixel Grid	Griglia pixel
+Pixel dimensions	Dimensioni in pixel
+Pixel mask	Maschera pixel
+Pixelate	Effetto pixel
+Pixels	Pixel
+Place Embedded…	Inserisci incorporato…
+Place Linked…	Inserisci collegato…
+Play	Esegui
+Play from step	Esegui dal passaggio
+Play selection	Esegui selezione
+Play this step (unchecked steps are passed over)	Esegui questo passaggio (i passaggi non selezionati vengono saltati)
+Plays a recorded Action on every image in the source folder and saves each result to the destination.	Esegue un'azione registrata su ogni immagine della cartella di origine e salva ogni risultato nella destinazione.
+Pointer	Puntatore
+Pointillize…	Puntinismo…
+Points	Punti
+Polar Coordinates…	Coordinate polari…
+Position	Posizione
+Position is locked — unlock it in the Layers panel to move or resize	La posizione è bloccata: sbloccala nel pannello Livelli per spostare o ridimensionare
+Position key	Chiave posizione
+Posterize	Posterizza
+Posterize…	Posterizza…
+Precise Cursor	Cursore di precisione
+Preferences…	Preferenze…
+Preserve Transparency	Mantieni trasparenza
+Preserve luminosity	Mantieni luminosità
+Preset Manager…	Gestione predefiniti…
+Press a key…	Premi un tasto…
+Pressure controls flow	La pressione controlla il flusso
+Pressure controls size	La pressione controlla la dimensione
+Preview	Anteprima
+Preview against	Anteprima su
+Preview is off.	L'anteprima è disattivata.
+Previewed on the active layer; applied to its pixels as one undoable step.	Anteprima sul livello attivo; applicato ai suoi pixel in un solo passaggio annullabile.
+Previous Blend Mode	Metodo di fusione precedente
+Print Size	Dimensioni di stampa
+Print as PDF…	Stampa come PDF…
+Print size	Dimensione di stampa
+Prints the grayscale image through one to four inks, each through its own curve. The inks are applied to the pixels when the mode changes.	Stampa l'immagine in scala di grigio con da uno a quattro inchiostri, ciascuno con la propria curva. Gli inchiostri vengono applicati ai pixel al cambio di metodo.
+Print…	Stampa…
+Profile	Profilo
+Profile from File…	Profilo da file…
+Profiles are assigned to RGB documents	I profili si assegnano ai documenti RGB
+Profiles are converted between in RGB documents	La conversione fra profili avviene nei documenti RGB
+Profiles belong to RGB documents; convert to RGB first	I profili appartengono ai documenti RGB; converti prima in RGB
+Proof Colors	Colori di prova
+Properties	Proprietà
+Puppet Warp	Alterazione burattino
+Purge	Svuota
+Purple	Viola
+Quadtone	Quadricromia
+Quality	Qualità
+Quick Export Layer as PNG…	Esportazione rapida livello come PNG…
+Quit	Esci
+RGB Color	Colore RGB
+Radial Blur…	Sfocatura radiale…
+Radius	Raggio
+Radius (px)	Raggio (px)
+Range	Intervallo
+Raster Studio Help	Guida di Raster Studio
+Rasterize	Rasterizza
+Reassign anyway	Riassegna comunque
+Recent	Recenti
+Record	Registra
+Record Source Size	Registra dimensioni origine
+Record an Action in the Actions panel first	Registra prima un'azione nel pannello Azioni
+Record an edit, then replay the whole sequence on any document with at least as many layers.	Registra una modifica, poi riproduci l'intera sequenza su qualsiasi documento con almeno altrettanti livelli.
+Record into set	Registra nel set
+Recording: every edit is captured until Stop	Registrazione: ogni modifica viene acquisita fino a Interrompi
+Red	Rosso
+Redefine the selected {noun} from the active text layer, restyling every layer that uses it	Ridefinisci {noun} selezionato dal livello di testo attivo, riapplicando lo stile a ogni livello che lo usa
+Redo	Ripeti
+Reds	Rossi
+Reduce Colors	Riduci colori
+Reduce Colors changed nothing: the layer already uses only colours of that palette	Riduci colori non ha cambiato nulla: il livello usa già solo colori di quella palette
+Reduce Colors: the layer now uses at most {n} colours	Riduci colori: ora il livello usa al massimo {n} colori
+Reduce Colors…	Riduci colori…
+Reduce Noise…	Riduci disturbo…
+Reduces the grayscale image to pure black and white. The layers are flattened into one, over white.	Riduce l'immagine in scala di grigio a bianco e nero puri. I livelli vengono uniti in uno, su bianco.
+Reference point: Bottom	Punto di riferimento: in basso
+Reference point: Bottom Left	Punto di riferimento: in basso a sinistra
+Reference point: Bottom Right	Punto di riferimento: in basso a destra
+Reference point: Centre	Punto di riferimento: centro
+Reference point: Left	Punto di riferimento: sinistra
+Reference point: Right	Punto di riferimento: destra
+Reference point: Top	Punto di riferimento: in alto
+Reference point: Top Left	Punto di riferimento: in alto a sinistra
+Reference point: Top Right	Punto di riferimento: in alto a destra
+Refine	Perfeziona
+Refine Edge…	Migliora bordo…
+Refine Mask	Migliora maschera
+Refine Mask…	Migliora maschera…
+Regular	Normale
+Relative	Relativo
+Relative Colorimetric	Colorimetrico relativo
+Release Clipping Mask	Rilascia maschera di ritaglio
+Release Notes	Note sulla versione
+Relink to File…	Ricollega al file…
+Remove Black Matte	Rimuovi alone nero
+Remove Color Fringe	Rimuovi frange di colore
+Remove Color Fringe…	Rimuovi frange di colore…
+Remove Fringe	Rimuovi alone
+Remove White Matte	Rimuovi alone bianco
+Remove export	Rimuovi esportazione
+Remove this instance of the effect	Rimuovi questa istanza dell'effetto
+Remove this shortcut	Rimuovi questa scelta rapida
+Rename Layer	Rinomina livello
+Rename Layer…	Rinomina livello…
+Rename set	Rinomina set
+Render	Rendering
+Rendering the preview…	Rendering dell'anteprima…
+Repeat…	Ripeti…
+Replace Color	Sostituisci colore
+Replace Color…	Sostituisci colore…
+Replace Contents	Sostituisci contenuto
+Replace Contents…	Sostituisci contenuto…
+Replace existing guides	Sostituisci le guide esistenti
+Replay	Riproduci di nuovo
+Report an Issue	Segnala un problema
+Reselect	Riseleziona
+Reset	Ripristina
+Reset Transform	Ripristina trasformazione
+Reset View Rotation	Ripristina rotazione vista
+Reset all shortcuts	Ripristina tutte le scelte rapide
+Resize Canvas	Ridimensiona quadro
+Resize Images	Ridimensiona immagini
+Resize Images…	Ridimensiona immagini…
+Resolution	Risoluzione
+Resolution must be greater than zero	La risoluzione deve essere maggiore di zero
+Restore Layer	Ripristina livello
+Result	Risultato
+Return this tool to its defaults	Riporta questo strumento ai valori predefiniti
+Reveal All	Mostra tutto
+Reveal Selection	Mostra selezione
+Reverse	Inverti
+Revert	Ripristina versione precedente
+Rewrites every pixel layer's numbers so the picture looks the same under the destination profile, as one undo step.	Riscrive i valori di ogni livello di pixel perché l'immagine appaia uguale con il profilo di destinazione, in un solo passaggio annullabile.
+Right	Destra
+Right (narrow)	Destra (stretta)
+Right (wide)	Destra (larga)
+Right Edges	Bordi destri
+Right indent	Rientro a destra
+Right-click a swatch to remove it	Fai clic destro su un campione per rimuoverlo
+Ring	Anello
+Ripple…	Increspatura…
+Rise	Innalzamento
+Rotate	Ruota
+Rotate 180°	Ruota di 180°
+Rotate 90° Clockwise	Ruota di 90° in senso orario
+Rotate 90° Counter Clockwise	Ruota di 90° in senso antiorario
+Rotate Canvas	Ruota quadro
+Rotate the active layer so the measured line is level (Enter)	Ruota il livello attivo in modo che la linea misurata sia orizzontale (Invio)
+Rotates the canvas and every layer. Right angles are pixel-exact; other angles resample.	Ruota la tela e ogni livello. Gli angoli retti sono esatti al pixel; gli altri angoli vengono ricampionati.
+Rotation key	Chiave rotazione
+Round	Arrotondato
+Round (computed)	Arrotondato (calcolato)
+Rounded Steps	Passaggi arrotondati
+Roundness jitter	Variazione rotondità
+Rows	Righe
+Rulers	Righelli
+Run	Esegui
+SVG…	SVG…
+Same Radii	Raggi uguali
+Sample a colour from the canvas	Campiona un colore dalla tela
+Sample radius	Raggio di campionamento
+Sampled	Campionato
+Sampled colour	Colore campionato
+Sampled tip not loaded; painting round	Punta campionata non caricata; si dipinge tonda
+Satin…	Raso…
+Saturation	Saturazione
+Saturation jitter	Variazione saturazione
+Save	Salva
+Save As	Salva con nome
+Save As…	Salva con nome…
+Save Brush	Salva pennello
+Save Selection	Salva selezione
+Save Selection…	Salva selezione…
+Save actions	Salva azioni
+Save as PSD…	Salva come PSD…
+Save current brush	Salva il pennello corrente
+Save selection as channel	Salva selezione come canale
+Saves every image in the source folder to the destination in another format, quality or size.	Salva ogni immagine della cartella di origine nella destinazione in un altro formato, qualità o dimensione.
+Scale	Scala
+Scale %	Scala %
+Scale Effects	Scala effetti
+Scale Effects…	Scala effetti…
+Scale H	Scala O
+Scale V	Scala V
+Scale key	Chiave scala
+Scale:	Scala:
+Scales every size and distance of the active layer's style as one undo step.	Scala ogni dimensione e distanza dello stile del livello attivo in un solo passaggio annullabile.
+Scaling by 100% changes nothing	Scalare al 100% non cambia nulla
+Scratch directory	Directory temporanea
+Screen	Scolora
+Screen, print and social presets	Predefiniti per schermo, stampa e social
+Script…	Script…
+Scroll wheel zooms instead of scrolling	La rotellina ingrandisce invece di scorrere
+Search Commands…	Cerca comandi…
+Search layers	Cerca livelli
+Search layers by name	Cerca livelli per nome
+Select	Selezione
+Select All	Seleziona tutto
+Select Bottom Layer	Seleziona livello in basso
+Select Layer Above	Seleziona livello sopra
+Select Layer Below	Seleziona livello sotto
+Select Linked Layers	Seleziona livelli collegati
+Select None	Non selezionare nulla
+Select Top Layer	Seleziona livello in alto
+Select a layer first	Seleziona prima un livello
+Select a layer to see its CSS	Seleziona un livello per vederne il CSS
+Select a layer to see its properties	Seleziona un livello per vederne le proprietà
+Select a layer: a click on a style applies it to the active layer.	Seleziona un livello: un clic su uno stile lo applica al livello attivo.
+Select a path first	Seleziona prima un tracciato
+Select a text layer, or type into one: a click inserts the glyph at the caret.	Seleziona un livello di testo, o digita in uno: un clic inserisce il glifo nel punto di inserimento.
+Select every pixel near one colour	Seleziona ogni pixel vicino a un colore
+Selection	Selezione
+Selection Edges	Bordi selezione
+Selection: white is replaced, black is kept.	Selezione: il bianco viene sostituito, il nero mantenuto.
+Selective Color	Correzione colore selettiva
+Selective Color…	Correzione colore selettiva…
+Selects a band of this width along the selection's edge	Seleziona una fascia di questa larghezza lungo il bordo della selezione
+Semi Condensed	Semi stretto
+Semi Expanded	Semi espanso
+Semibold	Semigrassetto
+Send Backward	Porta indietro
+Send to Back	Porta sotto
+Separate documents	Documenti separati
+Separate keywords with commas or semicolons.	Separa le parole chiave con virgole o punti e virgola.
+Sepia	Seppia
+Set	Set
+Set the History Brush to paint from this state (the marked row)	Imposta il pennello storia per dipingere da questo stato (la riga contrassegnata)
+Shadows	Ombre
+Shadows/Highlights	Ombre/Luci
+Shadows/Highlights…	Ombre/Luci…
+Shape	Forma
+Shape Dynamics	Dinamica forma
+Shape Mosaic…	Mosaico di forme…
+Sharpen	Contrasta
+Sharpen Edges	Contrasta bordi
+Sharpen More	Contrasta maggiormente
+Sharpest, with a little ringing on hard edges.	Il più nitido, con un leggero alone sui bordi netti.
+Shear…	Deformazione…
+Shift Edge	Sposta bordo
+Show	Mostra
+Show / Hide Layer	Mostra / nascondi livello
+Show / hide layer	Mostra / nascondi livello
+Show / hide the effects list	Mostra / nascondi l'elenco degli effetti
+Show / hide the layer style	Mostra / nascondi lo stile livello
+Show / hide this channel	Mostra / nascondi questo canale
+Show / hide this effect	Mostra / nascondi questo effetto
+Show / hide this path	Mostra / nascondi questo tracciato
+Show / hide this smart filter	Mostra / nascondi questo filtro avanzato
+Show Layers	Mostra livelli
+Show every layer	Mostra ogni livello
+Show or hide the position, size and alignment fields	Mostra o nascondi i campi di posizione, dimensione e allineamento
+Show or hide the recorded steps	Mostra o nascondi i passaggi registrati
+Show or hide the set's actions	Mostra o nascondi le azioni del set
+Show this alpha channel alone in grayscale and paint into it; click again to store it	Mostra da solo questo canale alfa in scala di grigio e dipingici; fai di nuovo clic per salvarlo
+Sides	Lati
+Similar	Simile
+Size	Dimensione
+Size jitter	Variazione dimensione
+Skew	Inclina
+Skewness	Asimmetria
+Slice Options	Opzioni sezione
+Slice Options…	Opzioni sezione…
+Slices	Sezioni
+Slices from Guides	Sezioni da guide
+Slices…	Sezioni…
+Small	Piccolo
+Small Caps	Maiuscoletto
+Smart Blur…	Sfocatura migliore…
+Smart Filter	Filtro avanzato
+Smart Filters	Filtri avanzati
+Smart Guides	Guide avanzate
+Smart Object	Oggetto avanzato
+Smart Sharpen…	Maschera di contrasto migliore…
+Smart filter mask: click to paint on it	Maschera del filtro avanzato: fai clic per dipingerci sopra
+Smooth	Arrotondato
+Smooth Selection	Arrotonda selezione
+Smooth draws grey-scale edges; None draws hard, aliased edges. The glyph scaler has one smooth mode, so Sharp, Crisp and Strong are not offered.	Arrotondato disegna bordi in scala di grigio; Nessuno disegna bordi netti e seghettati. Il rasterizzatore dei glifi ha una sola modalità arrotondata, quindi Nitido, Più nitido e Forte non sono offerti.
+Smooth…	Arrotonda…
+Snap	Aggancia
+Snap To	Aggancia a
+Soft Light	Luce soffusa
+Soft Round 100	Tondo morbido 100
+Soft Round 24	Tondo morbido 24
+Soft and cheap. Good for a small enlargement.	Morbido ed economico. Buono per un piccolo ingrandimento.
+Softer Brush	Pennello più morbido
+Solarize	Solarizza
+Solid Color…	Colore uniforme…
+Solidity	Solidità
+Source	Origine
+Source 1	Origine 1
+Source 2	Origine 2
+Source Space	Spazio di origine
+Spectrum	Spettro
+Spherize…	Sferizza…
+Spin Blur…	Sfocatura rotazione…
+Splits the active layer into Linear Light detail layers over a residual, finest on top; together they recomposite to the layer.	Divide il livello attivo in livelli di dettaglio in Luce lineare sopra un residuo, il più fine in alto; insieme ricompongono il livello.
+Spot Channel	Canale tinta piatta
+Spot Channel Options…	Opzioni canale tinta piatta…
+Spot channel: composited over the image as its ink	Canale tinta piatta: composto sull'immagine come suo inchiostro
+Square	Quadrato
+Squeeze	Schiaccia
+Stack Mode	Metodo pila
+Stamp Visible	Timbra visibili
+Standard	Standard
+Standard Deviation	Deviazione standard
+Standard ligatures	Legature standard
+Step Backward	Passo indietro
+Step Forward	Passo avanti
+Stop	Interrompi
+Straighten Layer	Raddrizza livello
+Strength	Intensità
+Stroke	Traccia
+Stroke path with the foreground colour at the brush size, on a new shape layer	Traccia il tracciato con il colore di primo piano alla dimensione del pennello, su un nuovo livello forma
+Stroke…	Traccia…
+Style	Stile
+Styles	Stili
+Styles enabled	Stili attivati
+Stylize	Stilizzazione
+Sub	Pedice
+Subject	Soggetto
+Subtract	Sottrai
+Subtract Front Shape	Sottrai forma anteriore
+Subtract from Selection	Sottrai dalla selezione
+Summation	Somma
+Sunset	Tramonto
+Super	Apice
+Superscript raises and shrinks the text; subscript lowers and shrinks it.	L'apice alza e rimpicciolisce il testo; il pedice lo abbassa e lo rimpicciolisce.
+Surface Blur…	Sfocatura superficie…
+Swap colours  (X)	Scambia colori  (X)
+Swap foreground and background (X)	Scambia primo piano e sfondo (X)
+Swatches	Campioni
+TGA…	TGA…
+TIF…	TIF…
+Templates	Modelli
+Text	Testo
+Text overflows the box	Il testo supera il riquadro
+Text replacement	Sostituzione testo
+Texture Dilation…	Dilatazione texture…
+That channel is no longer in the document	Quel canale non è più nel documento
+That file could not be used:	Non è stato possibile usare quel file:
+The CSV ends inside a quoted field	Il CSV termina all'interno di un campo tra virgolette
+The CSV has a header but no data sets	Il CSV ha un'intestazione ma nessun set di dati
+The CSV is empty	Il CSV è vuoto
+The CSV names a variable that is not defined:	Il CSV nomina una variabile non definita:
+The active layer has no layer style to save	Il livello attivo non ha uno stile livello da salvare
+The active layer is not in the document	Il livello attivo non è nel documento
+The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	L'oggetto avanzato attivo mostra a turno ogni immagine della cartella di origine; ogni risultato viene esportato come PNG nella cartella di destinazione.
+The amount must be within	Il valore deve essere compreso tra
+The angle must be a finite number of degrees	L'angolo deve essere un numero finito di gradi
+The balanced default for photographs.	L'impostazione predefinita bilanciata per le foto.
+The canvas grows to fit the rotated image.	La tela si ingrandisce per contenere l'immagine ruotata.
+The canvas must be at least 1 x 1 pixel	La tela deve essere almeno di 1 x 1 pixel
+The cell size must be 2 to 200 pixels	La dimensione della cella deve essere da 2 a 200 pixel
+The cut is empty: paint more of the part to keep.	Il ritaglio è vuoto: dipingi di più la parte da tenere.
+The destination is the profile the document already has	La destinazione è il profilo che il documento ha già
+The destination must be another folder than the source.	La destinazione deve essere una cartella diversa dall'origine.
+The document has no layers	Il documento non ha livelli
+The document is already in {name}	Il documento è già in {name}
+The document is already tagged with this profile	Il documento ha già questo profilo
+The document is already tagged {name}	Il documento ha già il profilo {name}
+The document's own profile: {error}	Il profilo proprio del documento: {error}
+The first {shown} of {n} pages are listed; a longer file opens only those.	Sono elencate le prime {shown} di {n} pagine; un file più lungo apre solo quelle.
+The image has no opaque pixels to count	L'immagine non ha pixel opachi da contare
+The ink is laid over the image; the selection, if there is one, is where it prints.	L'inchiostro si stende sull'immagine; la selezione, se c'è, è dove viene stampato.
+The last stop has no segment after it.	L'ultimo punto non ha alcun segmento dopo.
+The layer has no pixels to cut.	Il livello non ha pixel da ritagliare.
+The layer's pixels are locked	I pixel del livello sono bloccati
+The list is empty	L'elenco è vuoto
+The margins and gutters leave no room for a column or a row	Margini e canaline non lasciano spazio per una colonna o una riga
+The margins and gutters leave no room for a column or a row.	Margini e canaline non lasciano spazio per una colonna o una riga.
+The name cannot be empty	Il nome non può essere vuoto
+The name has not changed	Il nome non è cambiato
+The name is the file File > Export > Slices writes this slice as. The URL and Alt Tag go into the HTML page it writes beside the images.	Il nome è il file con cui File > Esporta > Sezioni scrive questa sezione. URL e tag Alt vanno nella pagina HTML scritta accanto alle immagini.
+The new canvas is smaller — content outside it will be clipped.	La nuova tela è più piccola: il contenuto al di fuori verrà ritagliato.
+The next text layer the Type tool creates starts with this style.	Il prossimo livello di testo creato dallo strumento Testo inizia con questo stile.
+The panel is already on this side	Il pannello è già su questo lato
+The path encloses no pixel of the canvas	Il tracciato non racchiude alcun pixel della tela
+The position must be a finite number	La posizione deve essere un numero finito
+The preview runs the real brush engine.	L'anteprima usa il vero motore dei pennelli.
+The resolution must be 1 to 2400 ppi	La risoluzione deve essere da 1 a 2400 ppi
+The resolution must be {min} to {max} dpi	La risoluzione deve essere da {min} a {max} dpi
+The rulers and the size readouts use this unit	I righelli e le letture delle dimensioni usano questa unità
+The scale must be between 1% and 1000%	La scala deve essere tra 1% e 1000%
+The selection is kept with the document under this name	La selezione viene conservata con il documento con questo nome
+The source and destination must be different folders	Origine e destinazione devono essere cartelle diverse
+The steps this snapshot named have been discarded	I passaggi indicati da questa istantanea sono stati eliminati
+The table needs a name	La tabella richiede un nome
+The warp has not changed	L'alterazione non è cambiata
+There are no guides to slice along	Non ci sono guide lungo cui sezionare
+There are no slices to clear	Non ci sono sezioni da cancellare
+There is no history to clear	Non c'è storia da cancellare
+There is no live selection to combine with	Non c'è una selezione attiva con cui combinare
+These are matrix-shaper profiles, which carry no perceptual or saturation tables: those two intents convert as Relative Colorimetric.	Sono profili a matrice, senza tabelle percettive o di saturazione: questi due intenti vengono convertiti come Colorimetrico relativo.
+Thin	Sottile
+Third-party notices	Avvisi di terze parti
+This Layer	Questo livello
+This adjustment has no panel controls	Questa regolazione non ha controlli nel pannello
+This adjustment has no settings.	Questa regolazione non ha impostazioni.
+This build keeps channels on layers; it has no free-standing alpha channels yet	Questa build tiene i canali sui livelli; non ha ancora canali alfa indipendenti
+This effect is off. Tick it in the list to edit it.	Questo effetto è disattivato. Selezionalo nell'elenco per modificarlo.
+This format cannot store CMYK, so the document is written as RGB. Choose JPEG or TIFF for CMYK.	Questo formato non può memorizzare CMYK, quindi il documento viene scritto come RGB. Scegli JPEG o TIFF per CMYK.
+This format could not be previewed.	Non è stato possibile visualizzare in anteprima questo formato.
+This format has no metadata slot: nothing is embedded	Questo formato non ha spazio per i metadati: non viene incorporato nulla
+This format has no palette, so the indexed colours are written as RGB. Choose PNG or GIF for the palette.	Questo formato non ha palette, quindi i colori indicizzati vengono scritti come RGB. Scegli PNG o GIF per la palette.
+This format stores 8 bits per channel	Questo formato memorizza 8 bit per canale
+This is a Lab document. No format here stores Lab, so it is converted to RGB on export.	Questo è un documento Lab. Nessun formato qui memorizza Lab, quindi viene convertito in RGB all'esportazione.
+This layer has no mask	Questo livello non ha maschera
+This panel is already at the bottom of its dock	Questo pannello è già in fondo al suo dock
+This panel is already at the top of its dock	Questo pannello è già in cima al suo dock
+This tool has no options	Questo strumento non ha opzioni
+This tool is already at its defaults	Questo strumento ha già i valori predefiniti
+This window cannot read screen pixels, so the eyedropper is unavailable	Questa finestra non può leggere i pixel dello schermo, quindi il contagocce non è disponibile
+This works on a pixel layer; the active layer is a {kind}	Funziona su un livello di pixel; il livello attivo è {kind}
+This works on an 8-bit document	Funziona su un documento a 8 bit
+This works on an RGB document	Funziona su un documento RGB
+Threshold	Soglia
+Threshold…	Soglia…
+Thumbnail Size	Dimensione miniature
+Thumbnail size	Dimensione miniature
+Thumbnails by Document	Miniature per documento
+Thumbnails by Layer	Miniature per livello
+Tiles/List	Riquadri/elenco
+Tiles…	Tessere…
+Tilt-Shift…	Tilt-shift…
+Timeline	Timeline
+Tint	Tinta
+Tint hue	Tonalità tinta
+Tint saturation	Saturazione tinta
+To canvas	Alla tela
+Toggle Link	Attiva/disattiva collegamento
+Tonal width	Ampiezza tonale
+Tone	Tono
+Tone and Detail	Tono e dettagli
+Tool Presets	Strumenti predefiniti
+Top	In alto
+Top Edges	Bordi superiori
+Top Left	In alto a sinistra
+Top Left Pixel Color	Colore pixel in alto a sinistra
+Top Right	In alto a destra
+Top left	In alto a sinistra
+Top right	In alto a destra
+Trace Contour…	Traccia contorno…
+Traces the active layer's colours into shape layers, one per colour.	Ricalca i colori del livello attivo in livelli forma, uno per colore.
+Transform	Trasforma
+Transform Layer	Trasforma livello
+Transform Selection	Trasforma selezione
+Transparency	Trasparenza
+Transparent Pixels	Pixel trasparenti
+Trim Away	Rimuovi
+Trim…	Rifila…
+Tritone	Tricromia
+Turn on Resample to change the pixel count.	Attiva Ricampiona per cambiare il numero di pixel.
+Twirl…	Mulinello…
+Twist	Torsione
+Two variables share a name	Due variabili hanno lo stesso nome
+Type	Testo
+Type a zoom level	Digita un livello di zoom
+Type is edited in Character and Paragraph	Il testo si modifica in Carattere e Paragrafo
+Type tool defaults	Valori predefiniti dello strumento Testo
+UI scale	Scala interfaccia
+URL	URL
+US Letter	Lettera US
+Ultra Condensed	Ultra stretto
+Ultra Expanded	Ultra espanso
+Underlying Layer	Livello sottostante
+Undo	Annulla
+Ungroup Layers	Separa livelli
+Uniform	Uniforme
+Unite Shapes	Unisci forme
+Units	Unità
+Unmake Frames	Annulla fotogrammi
+Unsaved changes	Modifiche non salvate
+Unsharp Mask…	Maschera di contrasto…
+Update the applied comp from the layers	Aggiorna la composizione applicata dai livelli
+Use Black Point Compensation	Usa compensazione punto nero
+Use global light	Usa luce globale
+Using:	In uso:
+Vanishing Point…	Punto di fuga…
+Variables	Variabili
+Variance	Varianza
+Vector Mask	Maschera vettoriale
+Vector density	Densità vettoriale
+Vector enabled	Vettore attivato
+Vector feather	Sfumatura vettoriale
+Vector invert	Inverti vettore
+Vector mask	Maschera vettoriale
+Vectorize	Vettorializza
+Vectorize Bitmap	Vettorializza bitmap
+Vectorize Bitmap…	Vettorializza bitmap…
+Vertical Centers	Centri verticali
+Vertical Distortion	Distorsione verticale
+Vertical center guide	Guida centrale verticale
+Vertical scale, in percent: stretches the glyphs about the baseline; leading is unchanged	Scala verticale, in percentuale: allunga i glifi attorno alla linea di base; l'interlinea non cambia
+Vertically	Verticalmente
+Vibrance	Vividezza
+Vibrance…	Vividezza…
+View	Visualizza
+Violet	Viola
+Visibility	Visibilità
+Visible adjustment layers	Livelli di regolazione visibili
+Vivid Light	Luce vivida
+W	L
+WEBP…	WEBP…
+Waiting for the composite…	In attesa del composito…
+Warm	Caldo
+Warp	Altera
+Warp Style	Stile alterazione
+Warp Text	Altera testo
+Warp Text…	Altera testo…
+Wave	Onda
+Wavelet Decompose	Scomposizione wavelet
+Wavelet Decompose splits into 2 to 7 scales	La scomposizione wavelet divide in 2-7 scale
+Wavelet Decompose works on an sRGB document	La scomposizione wavelet funziona su un documento sRGB
+Wavelet Decompose: the layer has no pixels	Scomposizione wavelet: il livello non ha pixel
+Wavelet Decompose: {n} detail layers over a residual; the source layer is hidden	Scomposizione wavelet: {n} livelli di dettaglio su un residuo; il livello di origine è nascosto
+Wavelet Decompose…	Scomposizione wavelet…
+Wave…	Onda…
+Web (216)	Web (216)
+WebP (lossless)	WebP (senza perdita)
+WebP (lossy)	WebP (con perdita)
+Weight	Peso
+White	Bianco
+White to Black	Da bianco a nero
+Whites	Bianchi
+Width	Larghezza
+Width and height must be at least 1 pixel	Larghezza e altezza devono essere almeno di 1 pixel
+Width must be between 1 and 250 pixels	La larghezza deve essere tra 1 e 250 pixel
+Width to 110%	Larghezza al 110%
+Width to 125%	Larghezza al 125%
+Width to 80%	Larghezza all'80%
+Width to 90%	Larghezza al 90%
+Window	Finestra
+Wind…	Vento…
+With Handles	Con maniglie
+Work Path	Tracciato di lavoro
+Workspace	Area di lavoro
+Wrap to box	Adatta al riquadro
+Writes the visible adjustment layers, applied to an identity lattice, as a 3D LUT (.cube).	Scrive i livelli di regolazione visibili, applicati a un reticolo identità, come LUT 3D (.cube).
+Written as CMYK: a naive ink model, not an ICC press profile.	Scritto come CMYK: un modello di inchiostro semplice, non un profilo di stampa ICC.
+Written as XMP into PNG, JPEG and TIFF files by Export As.	Scritto come XMP nei file PNG, JPEG e TIFF da Esporta come.
+Written with the document's palette.	Scritto con la palette del documento.
+Yellow	Giallo
+Yellow / Blue	Giallo / Blu
+Yellows	Gialli
+ZigZag…	Zig zag…
+Zoom In	Zoom avanti
+Zoom Out	Zoom indietro
+Zoom in	Zoom avanti
+Zoom out	Zoom indietro
+Zoom to Selection	Zoom sulla selezione
+a layer could not be rewritten	non è stato possibile riscrivere un livello
+before / after	prima / dopo
+changed	modificato
+content thumbnail — click to edit the layer's pixels	miniatura contenuto: fai clic per modificare i pixel del livello
+dpi	dpi
+edits are aimed at this mask — right-click for view and mask options	le modifiche vanno su questa maschera: clic destro per opzioni di vista e maschera
+lines past the box	righe oltre il riquadro
+mask off	maschera disattivata
+mask thumbnail — click to edit the layer's mask	miniatura maschera: fai clic per modificare la maschera del livello
+minutes (0 is off)	minuti (0 = disattivato)
+no drop	non rilasciabile
+px	px
+records here	registra qui
+skipped on play:	saltato in riproduzione:
+the layers could not be added	non è stato possibile aggiungere i livelli
+the profile cannot be transformed ({error})	il profilo non può essere trasformato ({error})
+to	a
+vector mask thumbnail — click to edit the vector mask	miniatura maschera vettoriale: fai clic per modificare la maschera vettoriale
+{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time	{format}: la timeline, {frames} fotogrammi a {fps} fps in {length} ms; ogni fotogramma mostra i livelli al suo istante
+{label} is not answered by this route	{label} non riceve risposta da questo percorso
+{label} was refused: {reason}	{label} è stato rifiutato: {reason}
+{name} Residual	{name} Residuo
+{name} Scale {k}	{name} Scala {k}
+{name}: {n} pages	{name}: {n} pagine
+{n} slices from the guides ({cols} x {rows}); they replace the slices there were	{n} sezioni dalle guide ({cols} x {rows}); sostituiscono le sezioni presenti
+{path} is a {space} profile; an RGB document takes an RGB profile	{path} è un profilo {space}; un documento RGB richiede un profilo RGB
+{path} is {len} bytes, larger than any colour profile	{path} è di {len} byte, più grande di qualsiasi profilo colore
+{reason}; this one is {space}	{reason}; questo è {space}

@@ -282,10 +282,16 @@ pub fn face_label(weight: FontWeight, slant: FontSlant, stretch: FontStretch) ->
     if !slant.is_empty() {
         parts.push(slant);
     }
+    // W16-N: each part in the interface language; the "Regular" test above
+    // runs on the English name.
     if parts.is_empty() {
-        return "Regular".to_string();
+        return crate::strings::tr_en("Regular").to_string();
     }
-    parts.join(" ")
+    parts
+        .iter()
+        .map(|p| crate::strings::tr_en(p))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The text layer the panels are editing, if any.

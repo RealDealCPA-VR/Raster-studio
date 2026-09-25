@@ -1641,14 +1641,18 @@ pub fn document_from_psd(
     title: &str,
     history_depth: usize,
 ) -> Result<PsdImport, ImportError> {
-    let file = psd::read(bytes)?;
-    let header = file.header;
-    let (width, height) = (header.width, header.height);
+    let mut file = psd::read(bytes)?;
+    let (width, height) = (file.header.width, file.header.height);
     if !editor_core::canvas_size_is_supported(width, height) {
         return Err(ImportError::PsdCanvas { width, height });
     }
 
     let mut notes = PsdNotes::default();
+    // W16-B: a CMYK / Lab / Indexed / Bitmap / Duotone / Multichannel file is
+    // decoded into the working RGB here and opens in its own document mode.
+    let opened = psd_colour_modes::open_in_mode(&mut file, &mut notes)?;
+    let file = file;
+    let header = file.header;
     let mut tally = Tally::default();
     // W8-D: the patterns the file defines, for its pattern overlays and
     // pattern fill layers to resolve against.
@@ -1676,9 +1680,7 @@ pub fn document_from_psd(
             header.depth.bits()
         ));
     }
-    if header.color_mode == psd::ColorMode::Grayscale {
-        notes.push("a greyscale document was opened as RGB");
-    }
+    // W16-B: a greyscale file opens in Grayscale mode (`open_in_mode`).
     // Card 076: the profile travels with the document. The pixels are NOT
     // transformed at import — they load verbatim into the tiles, and the
     // colour pipeline does the conversion at render, the same contract the
@@ -1751,9 +1753,11 @@ pub fn document_from_psd(
     // W11-C: guides, slices and alpha channels land now; the paths become path layers
     // once the layer tree is built.
     let saved_paths = psd_resources::import_resources(&file, &mut document, &mut notes);
-    if header.depth == psd::Depth::Sixteen {
+    if header.depth == psd::Depth::Sixteen || opened.deep {
         document.meta.bit_depth = 16;
     }
+    // W16-B: the file's own colour mode.
+    document.meta.color_mode = opened.mode;
     let mut tiles = MemoryTileSource::new();
 
     let mut stack = vec![Frame {
@@ -2299,6 +2303,10 @@ mod psd_vector_mask;
 #[path = "psd_resources.rs"]
 mod psd_resources;
 
+// W16-B: every Photoshop colour mode in, CMYK / Lab / Indexed / Grayscale out.
+#[path = "psd_colour_modes.rs"]
+mod psd_colour_modes;
+
 /// One level of the document's tree as `.psd` layer records, bottom-to-top.
 fn psd_layers_for(
     document: &Document,
@@ -2376,17 +2384,27 @@ fn psd_layers_for(
                 let kind: &AdjustmentKind = &adjustment.kind;
                 match psd::adjustments::encode(kind) {
                     Ok(payload) => record.adjustment = Some(payload),
-                    // Card 078: an adjustment whose payload cannot be written
+                    // W16-J: an adjustment whose payload cannot be written
                     // (Auto, Desaturate, Equalize, Shadows/Highlights, Replace
-                    // Color, HDR Toning, Match Color, or settings the layout
-                    // cannot spell) gets NO invented pixels — an empty layer
-                    // plus the note beats pixels that look evaluated but are
-                    // not. Its appearance survives in the flattened preview.
-                    // The note carries the reason, e.g. a Brightness past
-                    // what `brit` stores: nothing is clamped silently.
-                    Err(e) => tally
-                        .adjustments
-                        .push(format!("{} ({})", layer.name, e.reason)),
+                    // Color, HDR Toning, Match Color — Photoshop has no
+                    // adjustment layer for them — or settings the layout
+                    // cannot spell) is never an empty layer: its effect, the
+                    // layers under it with it applied, is written as the
+                    // layer's pixels, and the note names it with the reason
+                    // (e.g. a Brightness past what `brit` stores: nothing is
+                    // clamped silently).
+                    Err(e) => {
+                        record.pixel_data_irrelevant = true; /*W16J-MUT*/
+                        if let Some((bounds, rgba)) =
+                            psd_live::adjustment_as_pixels(document, tiles, id, canvas)?.filter(|_| false /*W16J-MUT*/)
+                        {
+                            record.bounds = bounds.to_psd();
+                            record.set_rgba8(&rgba)?;
+                        }
+                        extras
+                            .rasterised_adjustments
+                            .push(format!("{} ({}: {})", layer.name, e.key, e.reason));
+                    }
                 }
             }
             LayerKind::Raster(_) | LayerKind::Generator(_) => wants_pixels = true,
@@ -2428,13 +2446,15 @@ fn psd_layers_for(
                 render_fallback = true;
             }
             LayerKind::SmartObject(object) => {
-                // W9-M: an embedded, unfiltered smart object travels as a
-                // placed layer (`SoLd`) with its source file in the
-                // document's `lnk2` block; linked or filtered ones keep the
-                // card-078 raster fallback, named.
+                // W9-M: a smart object travels as a placed layer (`SoLd`)
+                // with its source file in the document's `lnk2` block; W16-J:
+                // a linked one names its file in `lnkE`, and its smart
+                // filters ride as `filterFX`. One that cannot (a filter
+                // Photoshop lacks, ...) keeps the card-078 raster fallback,
+                // named with the reason.
                 match psd_live::smart_blocks(document, object, layer.transform, extras) {
-                    Some(blocks) => record.extra.extend(blocks),
-                    None => tally.raster_fallback.push(layer.name.clone()),
+                    Ok(blocks) => record.extra.extend(blocks),
+                    Err(why) => tally.raster_fallback.push(format!("{}: {why}", layer.name)),
                 }
                 wants_pixels = true;
                 render_fallback = true;
@@ -2737,6 +2757,7 @@ pub fn psd_from_document(
             tally.fill_patterns.push(pattern);
         }
     }
+    extras.report(&mut notes);
     extras.finish(&mut file);
     // W9-B: the pixels every exported pattern fill layer names.
     if !tally.fill_patterns.is_empty() {
@@ -2749,6 +2770,9 @@ pub fn psd_from_document(
     // channels.
     psd_resources::export_resources(document, &mut file, &mut notes)?;
     tally.record(&mut notes);
+    // W16-B: CMYK, Lab, Indexed and Grayscale documents are written in their
+    // own mode.
+    psd_colour_modes::save_in_mode(document, composite_rgba8, &mut file, &mut notes)?;
     Ok((psd::write(&file)?, notes))
 }
 

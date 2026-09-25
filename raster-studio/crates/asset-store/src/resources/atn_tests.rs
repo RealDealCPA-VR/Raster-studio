@@ -275,7 +275,7 @@ fn unmapped_and_off_target_steps_say_why() {
     assert!(interpret(&other_make)
         .unwrap_err()
         .contains("other than a layer"));
-    let unknown = AtnStep::new("smartSharpen", "Smart Sharpen", None);
+    let unknown = AtnStep::new("PlsW", "Plastic Wrap", None);
     assert!(interpret(&unknown).unwrap_err().contains("no equivalent"));
 }
 

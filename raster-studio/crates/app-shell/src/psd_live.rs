@@ -16,14 +16,24 @@
 //!   an identity transform. What a `.psd` shape cannot say — a translucent
 //!   fill (a `.psd` fill has no alpha), a stroke under a non-uniform transform,
 //!   a path that does not parse — keeps the card-078 raster fallback, named.
-//! * **Smart objects.** An embedded, unfiltered [`SmartObjectLayer`] is
-//!   written as `SoLd` naming its asset, with the asset's own bytes in the
-//!   document's `lnk2` block and the transform as the four canvas corners of
-//!   the source rectangle. On the way in `SoLd`/`PlLd` plus a matching
-//!   `lnk2`/`lnk3`/`lnkD` entry becomes a smart object whose source is the
-//!   decoded file and whose transform maps it onto those corners. Linked
-//!   objects (whose bytes live elsewhere) and filtered ones (whose filters a
-//!   `.psd` cannot carry) keep the raster fallback.
+//! * **Smart objects.** A [`SmartObjectLayer`] is written as `SoLd` naming
+//!   its asset, with the transform as the four canvas corners of the source
+//!   rectangle. An embedded asset's own bytes go in the document's `lnk2`
+//!   block; W16-J: a linked asset is a `liFE` entry in `lnkE` naming its
+//!   file's path, and the smart filters ride in the `SoLd` descriptor as
+//!   Photoshop's `filterFX` ([`psd::placed::smart_filters`]). On the way in
+//!   `SoLd`/`PlLd` plus a matching `lnk2`/`lnk3`/`lnkD`/`lnkE` entry becomes
+//!   a smart object whose source is the decoded file (a linked one read from
+//!   its path, and linked again), whose transform maps it onto those corners
+//!   and whose filters are live again. What keeps the raster fallback, named
+//!   with the reason: a filter with no Photoshop smart filter (see
+//!   [`psd::placed::smart_filters::MAPPED`]), a Wrap/Mirror edge, a
+//!   smart-filter mask, and on the way in a linked file that cannot be read
+//!   or a filter this build does not have.
+//! * **Adjustments with no `.psd` layer** (W16-J): Auto, Desaturate,
+//!   Equalize, Shadows/Highlights, Replace Color, HDR Toning and Match Color
+//!   have no Photoshop adjustment layer, so their effect is written as
+//!   pixels ([`adjustment_as_pixels`]) — never an empty layer.
 //! * **16 bits.** A 16-bit document is written as a 16-bit `.psd` (raster
 //!   layers at their stored 16-bit samples; rendered fallbacks and masks
 //!   widened exactly from 8 bits) and a 16-bit `.psd` opens as a 16-bit
@@ -42,21 +52,44 @@ use psd::shape::{Knot, LineAlign, LineCap, LineJoin, ShapeData, StrokeStyle, Sub
 /// What a document export collects beside its layer records.
 #[derive(Debug, Default)]
 pub(super) struct PsdExportExtras {
-    /// Embedded smart-object sources, for the document's `lnk2` block.
+    /// Smart-object sources: embedded ones for the document's `lnk2` block,
+    /// W16-J: linked ones (`embedded == false`) for its `lnkE` block.
     pub linked: Vec<LinkedFile>,
     /// Patterns the layers' pattern overlays name, for the `Patt` block.
     pub patterns: Vec<psd::pattern::PsdPattern>,
     /// The document is 16-bit and is written as a 16-bit `.psd`.
     pub deep: bool,
+    /// W16-J: `name (kind: reason)` of each adjustment layer written as its
+    /// effect's pixels ([`adjustment_as_pixels`]) because a `.psd` has no
+    /// layer for it.
+    pub rasterised_adjustments: Vec<String>,
 }
 
 impl PsdExportExtras {
+    /// W16-J: the export's own notes — which adjustments became pixels.
+    pub fn report(&self, notes: &mut PsdNotes) {
+        if !self.rasterised_adjustments.is_empty() {
+            notes.push(format!(
+                "adjustment layer(s) {} have no .psd adjustment layer; each was written as \
+                 a pixel layer showing its effect on the layers under it, which is no longer \
+                 editable as an adjustment",
+                named(&self.rasterised_adjustments)
+            ));
+        }
+    }
+
     /// Put the collected document-level blocks into `file`.
     pub fn finish(self, file: &mut psd::PsdFile) {
-        if !self.linked.is_empty() {
+        if self.linked.iter().any(|f| f.embedded) {
             file.extra.push(psd::TaggedBlock::new(
                 *b"lnk2",
                 psd::placed::encode_linked_files(&self.linked),
+            ));
+        }
+        if self.linked.iter().any(|f| !f.embedded) {
+            file.extra.push(psd::TaggedBlock::new(
+                *b"lnkE",
+                psd::placed::encode_external_files(&self.linked),
             ));
         }
         if !self.patterns.is_empty() {
@@ -221,7 +254,11 @@ pub(super) fn shape_blocks(
         stroke,
     };
     let (soco, mut extra) = data.blocks(width, height);
-    if let Some([l, t, r, b]) = rect {
+    // W16-G: a live shape writes its own origination (radii, ellipse,
+    // line); a plain axis-aligned rectangle path still gets the sharp one.
+    if let Some(vogk) = crate::live_shape::live_vogk(shape, transform) {
+        extra.push(psd::TaggedBlock::new(*b"vogk", vogk));
+    } else if let Some([l, t, r, b]) = rect {
         extra.push(psd::TaggedBlock::new(
             *b"vogk",
             psd::shape::encode_rect_origination(l, t, r, b),
@@ -294,6 +331,11 @@ pub(super) fn shape_from_psd(
         _ => ShapeFillPaint::Solid,
     };
     let path_svg = svg_path::from_knots(&data.path.subpaths)?;
+    // W16-G: a `vogk` that still describes the path keeps the shape live.
+    let (live, path_svg) = match crate::live_shape::live_from_psd(source, &path_svg) {
+        Some((live, regenerated)) => (Some(live), regenerated),
+        None => (None, path_svg),
+    };
     let fill_rule = if data.path.subpaths.first().is_some_and(|s| s.operation == 0) {
         ShapeFillRule::EvenOdd
     } else {
@@ -349,40 +391,83 @@ pub(super) fn shape_from_psd(
         fill_rule,
         stroke,
         fill_paint,
+        live,
     })
 }
 
-/// A smart object's `SoLd` and `PlLd` blocks, registering its source in
-/// `extras`. `None` when the object cannot travel live (see the module docs).
+/// A smart object's `SoLd` (with its smart filters as `filterFX`, W16-J)
+/// and `PlLd` blocks, registering its source in `extras` — embedded bytes
+/// for `lnk2`, a linked file's path for `lnkE`. `Err` names why the object
+/// cannot travel live (see the module docs); the caller keeps its rendered
+/// pixels.
 pub(super) fn smart_blocks(
     document: &Document,
     object: &SmartObjectLayer,
     transform: glam::Affine2,
     extras: &mut PsdExportExtras,
-) -> Option<[psd::TaggedBlock; 2]> {
-    if object.linked || !object.filters.is_empty() || !transform.is_finite() {
-        return None;
+) -> Result<[psd::TaggedBlock; 2], String> {
+    if !transform.is_finite() {
+        return Err("its transform is not finite".into());
     }
-    let AssetOrigin::Embedded { name, bytes } = document.asset_origin(object.asset)? else {
-        return None;
+    if object.filter_mask.is_some() {
+        return Err("its smart-filter mask is not written to a .psd".into());
+    }
+    let filter_fx = if object.filters.is_empty() {
+        None
+    } else {
+        Some(psd::placed::smart_filters::encode_stack(&object.filters).map_err(|w| w.join("; "))?)
     };
-    let (w, h) = match document.asset_source_size(object.asset) {
-        Some(size) => size,
-        None => {
-            let decoded = DecodedImage::decode_bytes(bytes).ok()?;
-            (decoded.width, decoded.height)
+    let origin = document
+        .asset_origin(object.asset)
+        .ok_or("its source is not in the document")?;
+    let id = object.asset.to_string();
+    let (w, h, file) = match origin {
+        AssetOrigin::Embedded { name, bytes } => {
+            let (w, h) = match document.asset_source_size(object.asset) {
+                Some(size) => size,
+                None => {
+                    let decoded = DecodedImage::decode_bytes(bytes)
+                        .map_err(|e| format!("its source did not decode: {e}"))?;
+                    (decoded.width, decoded.height)
+                }
+            };
+            (
+                w,
+                h,
+                LinkedFile::embedded(id.clone(), name.clone(), bytes.clone()),
+            )
+        }
+        AssetOrigin::Linked { path } => {
+            let bytes = std::fs::read(path);
+            let (w, h) = match (document.asset_source_size(object.asset), &bytes) {
+                (Some(size), _) => size,
+                (None, Ok(bytes)) => {
+                    let decoded = DecodedImage::decode_bytes(bytes)
+                        .map_err(|e| format!("its linked file did not decode: {e}"))?;
+                    (decoded.width, decoded.height)
+                }
+                (None, Err(e)) => {
+                    return Err(format!(
+                        "its linked file {} cannot be read: {e}",
+                        path.display()
+                    ))
+                }
+            };
+            let name = path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let head = bytes.as_deref().unwrap_or(&[]);
+            let head = &head[..head.len().min(16)];
+            let file = LinkedFile::external(id.clone(), name, path.to_string_lossy(), head);
+            (w, h, file)
         }
     };
     if w == 0 || h == 0 {
-        return None;
+        return Err("its source is empty".into());
     }
-    let id = object.asset.to_string();
     if !extras.linked.iter().any(|f| f.id == id) {
-        extras.linked.push(LinkedFile::embedded(
-            id.clone(),
-            name.clone(),
-            bytes.clone(),
-        ));
+        extras.linked.push(file);
     }
     let (fw, fh) = (f64::from(w), f64::from(h));
     let mut corners = [0.0f64; 8];
@@ -399,7 +484,7 @@ pub(super) fn smart_blocks(
         corners,
         size: Some((fw, fh)),
     };
-    Some([placed.to_block(), placed.to_legacy_block()])
+    Ok([placed.to_block_with(filter_fx), placed.to_legacy_block()])
 }
 
 /// A placed layer, ready to insert: its kind, transform, source pixels and
@@ -455,10 +540,47 @@ fn smart_from_psd(
     let file = linked
         .find(&placed.id)
         .ok_or("the file it places is not in the document")?;
-    if !file.embedded {
-        return Err("it links to a file outside the document".into());
-    }
-    let decoded = DecodedImage::decode_bytes(&file.data)
+    // W16-J: its smart filters, live again; one this build does not have
+    // would render as a pass-through, so the pixels are kept instead.
+    let filters =
+        match psd::placed::smart_filters::filter_fx_of(source, &psd::ReadOptions::default()) {
+            Some(fx) => {
+                let decoded = psd::placed::smart_filters::decode_stack(&fx);
+                if !decoded.unmapped.is_empty() {
+                    return Err(format!(
+                        "its smart filter(s) {} have no equivalent in this build",
+                        decoded.unmapped.join(", ")
+                    ));
+                }
+                decoded.filters
+            }
+            None => Vec::new(),
+        };
+    // W16-J: a linked (`liFE`) file is read from its path and stays linked.
+    let (origin, bytes) = if file.embedded {
+        (
+            AssetOrigin::Embedded {
+                name: file.name.clone(),
+                bytes: file.data.clone(),
+            },
+            file.data.clone(),
+        )
+    } else {
+        let path = file
+            .path
+            .as_deref()
+            .ok_or("it links to a file outside the document without naming its path")?;
+        let bytes = std::fs::read(path)
+            .map_err(|e| format!("its linked file {path} cannot be read: {e}"))?;
+        (
+            AssetOrigin::Linked {
+                path: std::path::PathBuf::from(path),
+            },
+            bytes,
+        )
+    };
+    let is_linked = !file.embedded;
+    let decoded = DecodedImage::decode_bytes(&bytes)
         .map_err(|e| format!("its source did not decode: {e}"))?;
     let (w, h) = (decoded.width, decoded.height);
     if w == 0 || h == 0 || !editor_core::canvas_size_is_supported(w, h) {
@@ -483,21 +605,92 @@ fn smart_from_psd(
     Ok(PlacedImport {
         kind: LayerKind::SmartObject(SmartObjectLayer {
             asset,
-            linked: false,
-            filters: Vec::new(),
+            linked: is_linked,
+            filters,
             filter_mask: None,
         }),
         transform,
         asset: AssetRecord {
             id: asset,
-            origin: AssetOrigin::Embedded {
-                name: file.name.clone(),
-                bytes: file.data.clone(),
-            },
+            origin,
             source_size: Some((w, h)),
         },
         source: decoded,
     })
+}
+
+// ------------------------------------------- W16-J: adjustments as pixels
+
+/// What an adjustment layer a `.psd` has no layer for does, as pixels: the
+/// layers under it within its context (the nearest isolated group, else the
+/// document), composited with the adjustment applied at full strength, as
+/// the rectangle holding ink and its RGBA. Written as the layer's channels
+/// with its own opacity, blend mode, mask and clipping it composites to the
+/// same result over the same layers — the effect is kept, frozen, instead of
+/// an empty layer. `None` when nothing under it has ink.
+///
+/// Approximations, by construction: a pass-through group between the
+/// adjustment and its context is rendered at full opacity with no mask (its
+/// own opacity and mask apply again to the written layer, which sits inside
+/// it), and the pixels are the composite at the moment of saving — editing
+/// the layers underneath later does not re-run the adjustment.
+pub(super) fn adjustment_as_pixels(
+    document: &Document,
+    tiles: &MemoryTileSource,
+    id: LayerId,
+    canvas: DocRect,
+) -> Result<Option<(DocRect, Vec<u8>)>, ImportError> {
+    let mut staged = document.clone();
+    let neutral = |l: &mut Layer| {
+        l.visible = true;
+        l.opacity = 1.0;
+        l.fill_opacity = 1.0;
+        l.blend_mode = BlendMode::Normal;
+        l.mask = None;
+        l.effects = layer_model::LayerEffects::default();
+    };
+    if let Some(l) = staged.layers.get_mut(id) {
+        neutral(l);
+    }
+    // Hide everything painted after the adjustment, level by level, up to
+    // its context.
+    let mut context = None;
+    let mut at = id;
+    loop {
+        let above: Vec<LayerId> = staged
+            .layers
+            .siblings_of(at)
+            .map(|s| s.iter().take_while(|x| **x != at).copied().collect())
+            .unwrap_or_default();
+        for a in above {
+            if let Some(l) = staged.layers.get_mut(a) {
+                l.visible = false;
+            }
+        }
+        let Some(parent) = staged.layers.parent_of(at) else {
+            break;
+        };
+        let isolated = matches!(
+            staged.layers.get(parent).map(|l| &l.kind),
+            Some(LayerKind::Group(g)) if g.blending == GroupBlending::Isolated
+        );
+        if let Some(l) = staged.layers.get_mut(parent) {
+            neutral(l);
+        }
+        if isolated {
+            context = Some(parent);
+            break;
+        }
+        at = parent;
+    }
+    let rect = raster::PixelRect::new(0, 0, document.width(), document.height());
+    let opts = compositor::CompositeOptions::default();
+    let rendered = match context {
+        Some(group) => compositor::composite_subtree(&staged, tiles, group, rect, 0, opts)?,
+        None => compositor::composite_region(&staged, tiles, rect, 0, opts)?,
+    };
+    let rgba = rendered.to_rgba8(&document.meta.color_space);
+    Ok(crop_to_content(&rgba, canvas))
 }
 
 // ------------------------------------------------------------- 16 bits
@@ -1057,6 +1250,11 @@ pub(super) mod svg_path {
         }
     }
 }
+
+// W16-J: smart filters, linked smart objects and pixel-only adjustments.
+#[cfg(test)]
+#[path = "psd_w16_tests.rs"]
+mod w16_tests;
 
 #[cfg(test)]
 mod tests {

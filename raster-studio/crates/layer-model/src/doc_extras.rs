@@ -53,6 +53,11 @@ pub struct DocumentExtras {
     /// (see [`crate::color_label`]). Appended; a document written before it
     /// loads with no labels.
     pub layer_colors: Vec<crate::color_label::LayerColorLabel>,
+    /// W16-E: the Layer Comps panel's Last Document State — every layer as
+    /// it stood before a comp was applied from it, so the panel's top row
+    /// can put the document back. `None` until a comp is first applied.
+    /// Appended; a document written before it loads with none.
+    pub last_document_state: Option<LayerComp>,
 }
 
 impl DocumentExtras {
@@ -155,6 +160,33 @@ pub struct LayerComp {
     /// Photopea's comp comment.
     pub comment: String,
     pub layers: Vec<CompLayerState>,
+    /// W16-E: which of the recorded aspects Apply puts back — Photopea's
+    /// Visibility, Position and Appearance flags on each comp. All on by
+    /// default, so a comp written before the flags applies as it always did.
+    pub flags: CompFlags,
+}
+
+/// W16-E: the three aspects of a [`LayerComp`] that applying it restores.
+/// A cleared flag leaves that aspect of every layer as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CompFlags {
+    /// Each layer's visibility.
+    pub visibility: bool,
+    /// Each layer's position (its layer-to-document transform).
+    pub position: bool,
+    /// Each layer's opacity, fill, blend mode and layer style.
+    pub appearance: bool,
+}
+
+impl Default for CompFlags {
+    fn default() -> Self {
+        Self {
+            visibility: true,
+            position: true,
+            appearance: true,
+        }
+    }
 }
 
 impl LayerComp {
@@ -178,6 +210,7 @@ impl LayerComp {
             name: name.into(),
             comment: String::new(),
             layers,
+            flags: CompFlags::default(),
         }
     }
 
@@ -372,5 +405,45 @@ mod tests {
         style.apply_to(&mut text);
         assert!(text.paragraph.vertical);
         assert_eq!(text.paragraph.first_line_indent, 12.0);
+    }
+}
+
+#[cfg(test)]
+mod w16e_tests {
+    use super::*;
+
+    /// W16-E: a comp saved before the flags existed loads with all three
+    /// on (it applies as it always did), and a record without the Last
+    /// Document State loads with none.
+    #[test]
+    fn a_comp_written_before_the_flags_loads_with_every_flag_on() {
+        let old = r#"{"layer_comps":[{"name":"A","comment":"","layers":[]}],"last_comp":0}"#;
+        let x: DocumentExtras = serde_json::from_str(old).unwrap();
+        assert_eq!(x.layer_comps[0].flags, CompFlags::default());
+        assert!(x.layer_comps[0].flags.visibility);
+        assert!(x.layer_comps[0].flags.position);
+        assert!(x.layer_comps[0].flags.appearance);
+        assert!(x.last_document_state.is_none());
+    }
+
+    #[test]
+    fn cleared_flags_and_the_last_state_survive_a_round_trip() {
+        let mut x = DocumentExtras::default();
+        let mut comp = LayerComp::capture("Birds", &LayerTree::new());
+        comp.flags.position = false;
+        comp.flags.appearance = false;
+        x.layer_comps.push(comp.clone());
+        x.last_document_state = Some(LayerComp::capture("Last", &LayerTree::new()));
+        let json = serde_json::to_string(&x).unwrap();
+        let back: DocumentExtras = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, x);
+        assert_eq!(
+            back.layer_comps[0].flags,
+            CompFlags {
+                visibility: true,
+                position: false,
+                appearance: false
+            }
+        );
     }
 }

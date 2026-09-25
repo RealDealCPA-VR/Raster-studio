@@ -135,6 +135,34 @@ pub struct LayersState {
     /// True on the frame the rename opened, so the field can take focus and
     /// select its contents once.
     rename_fresh: bool,
+    /// W16-D: layers whose effects list is folded (the row's fx toggle).
+    effects_folded: HashSet<LayerId>,
+    /// W16-D: effects whose eye was switched off in the panel, with the
+    /// parameters the eye puts back (see [`w16`]).
+    hidden_effects: HashMap<LayerId, Vec<(crate::menu::EffectSlot, layer_model::LayerEffects)>>,
+    /// W16-D: the effects row being dragged: the layer, and the effect
+    /// (`None` for the "Effects" row, the whole style).
+    effect_drag: Option<(LayerId, Option<crate::menu::EffectSlot>)>,
+    /// W16-D: the last Alt-click solo — the layer, and the layers it hid.
+    solo: Option<(LayerId, Vec<LayerId>)>,
+    /// W16-D: Photopea's "Thumbnails by Layer" (crop each thumbnail to its
+    /// layer's bounds); off is "Thumbnails by Document", the default.
+    pub thumbs_by_layer: bool,
+    /// W16-D: the application's per-layer crops for "Thumbnails by Layer",
+    /// as UV rectangles of the document-fitted thumbnail.
+    thumb_crops: HashMap<LayerId, egui::Rect>,
+    /// W16-D: Photopea's "Add "copy" to copied layers", stored inverted so
+    /// the derived default (`false`) is Photopea's default (on).
+    pub plain_copy_names: bool,
+    /// W16-D: the panel-options menu is open.
+    pub options_open: bool,
+    /// W16-D: true on the frame the options menu opened, so the opening
+    /// click does not close it.
+    pub options_fresh: bool,
+    /// W16-D: option changes this session (`0`: the stored options win).
+    option_edits: u32,
+    /// W16-D: what the panel asked the application for this frame.
+    requests: Vec<w16::LayersRequest>,
 }
 
 /// Photopea's thumbnail sizes. The multiplier applies to the row height, so a
@@ -145,13 +173,15 @@ pub enum ThumbScale {
     #[default]
     Regular,
     Large,
+    /// W16-D: no thumbnails at all (the smallest step of "− Thumbnail Size").
+    None,
 }
 
 impl ThumbScale {
     /// The row-height multiplier.
     pub fn height(self) -> f32 {
         match self {
-            ThumbScale::Small => 0.85,
+            ThumbScale::Small | ThumbScale::None => 0.85,
             ThumbScale::Regular => 1.0,
             ThumbScale::Large => 1.3,
         }
@@ -162,7 +192,7 @@ impl ThumbScale {
         match self {
             ThumbScale::Small => ThumbScale::Regular,
             ThumbScale::Regular => ThumbScale::Large,
-            ThumbScale::Large => ThumbScale::Small,
+            ThumbScale::Large | ThumbScale::None => ThumbScale::Small,
         }
     }
 
@@ -172,6 +202,7 @@ impl ThumbScale {
             ThumbScale::Small => "S",
             ThumbScale::Regular => "M",
             ThumbScale::Large => "L",
+            ThumbScale::None => "-",
         }
     }
 }
@@ -344,6 +375,10 @@ pub mod ids {
         egui::Id::new("raster-layer-search")
     }
 }
+
+/// W16-D: the effects list, Alt-click solo, trash drops and panel options.
+#[path = "layers_w16.rs"]
+pub mod w16;
 
 /// Where a dragged row would land.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -731,7 +766,12 @@ impl LayersModel {
 
     /// Add an empty raster layer above everything.
     pub fn new_layer(doc: &Document) -> Command {
-        Command::create_layer(Layer::raster(format!("Layer {}", doc.layers.len() + 1)))
+        // W16-N: "Layer" in the interface language.
+        Command::create_layer(Layer::raster(format!(
+            "{} {}",
+            crate::strings::tr_en("Layer"),
+            doc.layers.len() + 1
+        )))
     }
 
     /// Add an empty group at the root.

@@ -139,6 +139,10 @@ pub enum ToolId {
     /// worker and lands one `SetSelection`. See
     /// [`crate::select::ObjectSelectionTool`].
     ObjectSelection,
+    /// W16-G: drag the start/end handles of the active shape's gradient fill
+    /// on the canvas. See
+    /// [`crate::shape::vector_gradient::VectorGradientTool`].
+    VectorGradient,
 }
 
 impl ToolId {
@@ -217,6 +221,8 @@ impl ToolId {
         ToolId::SliceSelect,
         ToolId::Spiral,
         ToolId::Note,
+        // W16-G.
+        ToolId::VectorGradient,
     ];
 }
 

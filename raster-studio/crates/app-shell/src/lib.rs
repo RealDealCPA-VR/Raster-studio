@@ -124,6 +124,8 @@ pub mod interaction_geometry;
 pub mod jobs;
 pub mod keymap;
 pub mod layer_ops;
+/// W16-D: the Layers panel's requests and thumbnail crops, and its tests.
+mod layers_panel_w16;
 pub mod menu_bridge;
 pub mod pen_input;
 pub mod placement;
@@ -147,6 +149,9 @@ pub mod vectorize;
 pub mod version;
 #[cfg(test)]
 mod w10e_tests;
+// W16-G: live shapes' `.psd` origination, and their (and the Parametric
+// Shape and Vector Gradient tools') route tests.
+mod live_shape;
 
 pub use action::{Action, Category, ToolKey};
 pub use canvas_extras::{CanvasExtras, ExtrasReport};

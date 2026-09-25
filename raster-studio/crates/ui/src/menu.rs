@@ -1333,6 +1333,8 @@ impl WarpTextItem {
         WarpTextItem::Style(layer_model::text::WarpStyle::Inflate),
         WarpTextItem::Style(layer_model::text::WarpStyle::Squeeze),
         WarpTextItem::Style(layer_model::text::WarpStyle::Twist),
+        // W16-K: the free mesh, whose handles drag on the canvas.
+        WarpTextItem::Style(layer_model::text::WarpStyle::Custom),
     ];
 
     pub fn label(self) -> String {
@@ -2315,6 +2317,81 @@ pub enum MenuAction {
     /// unrelated layer hidden) over transparent, at canvas size, written as
     /// one PNG where the user picks.
     QuickExportLayer,
+
+    // ---- W16-N: Window > Language, Window > Glass Menus --------------------
+    /// Window ▸ Language ▸ <language>: the interface language, stored in
+    /// preferences and applied the moment it is picked (Photopea's More ▸
+    /// Language). Each row wears the language's own name.
+    SetLanguage(crate::strings::Locale),
+    /// Window ▸ Glass Menus: menus drawn over a translucent fill, the
+    /// document showing through. Stored in preferences.
+    ToggleGlassMenus,
+    // ---- W16-K: View ▸ Mode, Layer ▸ New ▸ Artboard, bar-only rows ------
+    /// View ▸ Mode ▸ Fullscreen / Standard / Menu Bar and Canvas: Photopea's
+    /// three screen modes, the ones `F` steps through.
+    SetScreenMode(ScreenModeItem),
+    /// Layer ▸ New ▸ Artboard: an empty artboard — the canvas when there is
+    /// none yet, else one of the last artboard's size beside it.
+    NewArtboard,
+    /// The Artboard options bar's + buttons: a new artboard of the active
+    /// (else the last) artboard's size, on that side of it.
+    ArtboardNeighbour(ArtboardSide),
+    /// The Crop options bar's Crop by ▸ Current Layer: the canvas cropped to
+    /// the active layer's ink bounds.
+    CropToLayer,
+}
+
+/// W16-K: View ▸ Mode's rows, in Photopea's order.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ScreenModeItem {
+    Fullscreen,
+    Standard,
+    MenuBarAndCanvas,
+}
+
+impl ScreenModeItem {
+    pub const ALL: [ScreenModeItem; 3] = [
+        ScreenModeItem::Fullscreen,
+        ScreenModeItem::Standard,
+        ScreenModeItem::MenuBarAndCanvas,
+    ];
+
+    /// The row's label (Photopea's words).
+    pub const fn label(self) -> &'static str {
+        match self {
+            ScreenModeItem::Fullscreen => "Fullscreen",
+            ScreenModeItem::Standard => "Standard",
+            ScreenModeItem::MenuBarAndCanvas => "Menu Bar and Canvas",
+        }
+    }
+
+    /// The screen mode the row puts the window in.
+    pub const fn mode(self) -> crate::palette::ScreenMode {
+        match self {
+            ScreenModeItem::Fullscreen => crate::palette::ScreenMode::FullScreen,
+            ScreenModeItem::Standard => crate::palette::ScreenMode::Standard,
+            ScreenModeItem::MenuBarAndCanvas => crate::palette::ScreenMode::FullScreenWithMenu,
+        }
+    }
+}
+
+/// W16-K: which side of an artboard [`MenuAction::ArtboardNeighbour`] adds
+/// the new one on.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ArtboardSide {
+    Left,
+    Right,
+    Above,
+    Below,
+}
+
+impl ArtboardSide {
+    pub const ALL: [ArtboardSide; 4] = [
+        ArtboardSide::Left,
+        ArtboardSide::Right,
+        ArtboardSide::Above,
+        ArtboardSide::Below,
+    ];
 }
 
 /// W11-G: which layer [`MenuAction::SelectLayerStep`] makes active.
@@ -2646,6 +2723,8 @@ pub struct MenuContext {
     /// W13-F: the built-in profile the document is tagged with, and whether
     /// it has slices.
     pub w13f: W13fFacts,
+    /// W16-N: Window ▸ Glass Menus is on (the preference).
+    pub glass_menus: bool,
 }
 
 /// W10-I: the active layer's smart object, if it is one.
@@ -2709,6 +2788,7 @@ impl Default for MenuContext {
             has_unselected_link_partners: false,
             layer_extra: LayerExtraFacts::default(),
             w13f: W13fFacts::default(),
+            glass_menus: false,
         }
     }
 }
@@ -2889,6 +2969,8 @@ impl MenuAction {
         out.extend(ExportFormat::ALL.iter().copied().map(MenuAction::Export));
         // W13-L: File > Export As > MP4.
         out.extend(ExportFormat::VIDEO.iter().copied().map(MenuAction::Export));
+        // W16-K: PDF, EMF and DXF.
+        out.extend(ExportFormat::VECTOR.iter().copied().map(MenuAction::Export));
         out.extend([
             MenuAction::ExportLayers,
             MenuAction::ExportSlices,
@@ -3110,6 +3192,14 @@ impl MenuAction {
         out.extend(LayoutId::ALL.iter().copied().map(MenuAction::ApplyLayout));
         out.extend(PanelId::ALL.iter().copied().map(MenuAction::TogglePanel));
         out.extend(design::Theme::ALL.iter().copied().map(MenuAction::SetTheme));
+        // W16-N.
+        out.extend(
+            crate::strings::Locale::ALL
+                .iter()
+                .copied()
+                .map(MenuAction::SetLanguage),
+        );
+        out.push(MenuAction::ToggleGlassMenus);
         // ---- Help ----
         out.extend([
             MenuAction::Help,
@@ -3227,6 +3317,21 @@ impl MenuAction {
             MenuAction::ConvertToPointText,
             MenuAction::ConvertToParagraphText,
         ]);
+        // ---- W16-K ----
+        out.extend(
+            ScreenModeItem::ALL
+                .iter()
+                .copied()
+                .map(MenuAction::SetScreenMode),
+        );
+        out.push(MenuAction::NewArtboard);
+        out.extend(
+            ArtboardSide::ALL
+                .iter()
+                .copied()
+                .map(MenuAction::ArtboardNeighbour),
+        );
+        out.push(MenuAction::CropToLayer);
         out
     }
 
@@ -3421,6 +3526,9 @@ impl MenuAction {
             MenuAction::ApplyLayout(l) => l.title().into(),
             MenuAction::TogglePanel(p) => p.title().into(),
             MenuAction::SetTheme(t) => t.name().into(),
+            // W16-N: a language is named in itself, never translated.
+            MenuAction::SetLanguage(l) => l.display_name().into(),
+            MenuAction::ToggleGlassMenus => "Glass Menus".into(),
 
             MenuAction::Help => "Raster Studio Help".into(),
             MenuAction::ReleaseNotes => "Release Notes".into(),
@@ -3462,6 +3570,14 @@ impl MenuAction {
             MenuAction::Script => "Script…".into(),
             // W13-I
             MenuAction::QuickExportLayer => "Quick Export Layer as PNG…".into(),
+            // W16-K
+            MenuAction::SetScreenMode(m) => m.label().into(),
+            MenuAction::NewArtboard => "Artboard".into(),
+            MenuAction::ArtboardNeighbour(ArtboardSide::Left) => "Add Artboard Left".into(),
+            MenuAction::ArtboardNeighbour(ArtboardSide::Right) => "Add Artboard Right".into(),
+            MenuAction::ArtboardNeighbour(ArtboardSide::Above) => "Add Artboard Above".into(),
+            MenuAction::ArtboardNeighbour(ArtboardSide::Below) => "Add Artboard Below".into(),
+            MenuAction::CropToLayer => "Current Layer".into(),
             // W13-N
             MenuAction::ApplyStyleAt(i) => format!("Apply Style {}", i + 1),
             MenuAction::MagicCut => "Magic Cut…".into(),
@@ -3482,33 +3598,36 @@ impl MenuAction {
     /// number. Everything else falls through to [`MenuAction::label`], which is
     /// the context-free spelling.
     pub fn label_in(self, ctx: &MenuContext) -> String {
+        // W16-N: the drawn label is in the active language; `label` stays
+        // the English source the rest of the application matches on.
+        use crate::strings::{tr_en, tr_owned};
         match self {
             MenuAction::OpenRecent(i) => match ctx.recent_files.get(i) {
                 Some(name) if !name.is_empty() => name.clone(),
-                _ => self.label(),
+                _ => tr_owned(self.label()),
             },
             MenuAction::Undo => match ctx.undo_label.as_deref() {
-                Some(step) => format!("Undo {step}"),
-                None => self.label(),
+                Some(step) => format!("{} {}", tr_en("Undo"), tr_en(step)),
+                None => tr_owned(self.label()),
             },
             MenuAction::Redo => match ctx.redo_label.as_deref() {
-                Some(step) => format!("Redo {step}"),
-                None => self.label(),
+                Some(step) => format!("{} {}", tr_en("Redo"), tr_en(step)),
+                None => tr_owned(self.label()),
             },
             // W11-E: with two or more layers selected, Ctrl+E merges them,
             // and the row says so (Photoshop's one row, two names).
-            MenuAction::MergeDown if ctx.selected_layers >= 2 => MERGE_LAYERS.into(),
+            MenuAction::MergeDown if ctx.selected_layers >= 2 => tr_en(MERGE_LAYERS).into(),
             // W10-G: Edit > Fade names the step it fades ("Fade Apply
             // Invert..."), as the dialog's title does.
             MenuAction::Fade => match ctx.fade_step.as_deref() {
                 Some(step) => {
-                    let fade = self.label();
+                    let fade = tr_owned(self.label());
                     let word = fade.trim_end_matches('…');
-                    format!("{word} {step}{}", &fade[word.len()..])
+                    format!("{word} {}{}", tr_en(step), &fade[word.len()..])
                 }
-                None => self.label(),
+                None => tr_owned(self.label()),
             },
-            _ => self.label(),
+            _ => tr_owned(self.label()),
         }
     }
 
@@ -3531,7 +3650,14 @@ impl MenuAction {
             MenuAction::Paste => Shortcut::ctrl('v'),
             MenuAction::PasteInto => Shortcut::ctrl_shift('v'),
             MenuAction::ClearPixels => Shortcut::bare(Key::Delete),
-            MenuAction::FillDialog => Shortcut::shift('f'),
+            // W16-K: Photopea's Fill chord is Shift+F5 (plain F5 is the
+            // Brushes panel).
+            MenuAction::FillDialog => Shortcut {
+                shift: true,
+                ..Shortcut::bare(Key::F(5))
+            },
+            // W16-K: Photopea's Camera Raw chord.
+            MenuAction::Filter(FilterId::CameraRaw) => Shortcut::ctrl_shift('a'),
             MenuAction::FreeTransform => Shortcut::ctrl('t'),
             MenuAction::Liquify => Shortcut::ctrl_shift('x'),
             MenuAction::KeyboardShortcuts => Shortcut::ctrl_alt_shift('k'),
@@ -3651,6 +3777,8 @@ impl MenuAction {
             MenuAction::ToggleView(flag) => ctx.view.get(flag),
             MenuAction::TogglePanel(panel) => ctx.dock.is_open(panel),
             MenuAction::SetTheme(theme) => ctx.theme == theme,
+            MenuAction::SetLanguage(locale) => crate::strings::active() == locale,
+            MenuAction::ToggleGlassMenus => ctx.glass_menus,
             MenuAction::ApplyLayout(layout) => ctx.dock.layout() == Some(layout),
             MenuAction::SetColorMode(mode) => ctx.color_mode == mode,
             MenuAction::SetBitDepth(depth) => ctx.bit_depth == depth,
@@ -4379,6 +4507,12 @@ impl MenuAction {
                 (ctx.theme == theme).then_some("This appearance is already in use"),
                 Resolution::Enabled(Intent::SetTheme(theme)),
             ),
+            // W16-N: the shell stores the choice in preferences.
+            MenuAction::SetLanguage(locale) => gate(
+                (crate::strings::active() == locale).then_some("This language is already in use"),
+                act(self),
+            ),
+            MenuAction::ToggleGlassMenus => act(self),
 
             // ---- Help ------------------------------------------------------
             MenuAction::Help
@@ -4515,6 +4649,16 @@ impl MenuAction {
             MenuAction::LayerExtra(op) => resolve_layer_extra(op, ctx),
             // ---- W13-I ----
             MenuAction::QuickExportLayer => match ctx.need_layer() {
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            // ---- W16-K ----
+            // A view setting: the shell steps its screen mode to the row's.
+            MenuAction::SetScreenMode(_) => act(self),
+            MenuAction::NewArtboard | MenuAction::ArtboardNeighbour(_) => {
+                gate(ctx.need_document(), act(self))
+            }
+            MenuAction::CropToLayer => match ctx.need_layer() {
                 Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
             },
@@ -4690,7 +4834,8 @@ pub const fn opacity_of_two_digits(first: u8, second: u8) -> u8 {
 
 /// The name a newly created layer gets.
 fn next_layer_name(existing: usize) -> String {
-    format!("Layer {}", existing + 1)
+    // W16-N: "Layer" in the interface language.
+    format!("{} {}", crate::strings::tr_en("Layer"), existing + 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -4763,6 +4908,48 @@ pub fn menu_bar(recent_files: usize) -> Vec<Menu> {
         window_menu(),
         help_menu(),
     ]
+    .into_iter()
+    .map(Menu::localized)
+    .collect()
+}
+
+impl Menu {
+    /// W16-N: the menu with its title and submenu labels in the active
+    /// language ([`crate::strings::tr_en`]); the items translate themselves
+    /// in [`MenuAction::label_in`].
+    fn localized(self) -> Self {
+        fn entry(e: Entry) -> Entry {
+            match e {
+                Entry::Submenu { label, entries } => Entry::Submenu {
+                    label: crate::strings::tr_en(label),
+                    entries: entries.into_iter().map(entry).collect(),
+                },
+                other => other,
+            }
+        }
+        Menu {
+            title: crate::strings::tr_en(self.title),
+            entries: self.entries.into_iter().map(entry).collect(),
+        }
+    }
+}
+
+/// W16-N: run `draw` — the menu bar and the menus it opens — with the menus
+/// filled by [`design::egui_theme::glass_menu_fill`] when Window ▸ Glass
+/// Menus is on. egui draws an open menu in an `Area` that takes the
+/// context's style, so the fill is swapped on the context for the call and
+/// put back after it: no dialog or other window drawn outside `draw` turns
+/// translucent.
+pub fn with_glass_menus<R>(ctx: &egui::Context, on: bool, draw: impl FnOnce() -> R) -> R {
+    if !on {
+        return draw();
+    }
+    let glass = design::egui_theme::glass_menu_fill(design::current_theme(ctx).tokens());
+    let before = ctx.style().visuals.window_fill;
+    ctx.style_mut(|s| s.visuals.window_fill = glass);
+    let out = draw();
+    ctx.style_mut(|s| s.visuals.window_fill = before);
+    out
 }
 
 /// How many recent files the File menu lists.
@@ -4800,6 +4987,8 @@ fn file_menu(recent_files: usize) -> Menu {
                     .iter()
                     // W13-L: and MP4 video, as Photopea lists it here.
                     .chain(&ExportFormat::VIDEO)
+                    // W16-K: and PDF, EMF and DXF.
+                    .chain(&ExportFormat::VECTOR)
                     .map(|f| item(MenuAction::Export(*f)))
                     .collect(),
             ),
@@ -4988,6 +5177,8 @@ fn layer_menu() -> Menu {
                 vec![
                     item(MenuAction::NewLayer),
                     item(MenuAction::NewGroup),
+                    // W16-K: Photopea's Layer ▸ New ▸ Artboard.
+                    item(MenuAction::NewArtboard),
                     Entry::Separator,
                     item(MenuAction::LayerViaCopy),
                     item(MenuAction::LayerViaCut),
@@ -5236,6 +5427,15 @@ fn filter_menu() -> Menu {
 fn view_menu() -> Menu {
     let mut entries: Vec<Entry> = items(ZoomCommand::ALL, MenuAction::Zoom);
     entries.push(Entry::Separator);
+    // W16-K: View ▸ Mode, Photopea's three screen modes (Fullscreen set
+    // apart by a hairline, as Photopea draws it).
+    entries.push(Entry::submenu("Mode", {
+        let mut e = vec![item(MenuAction::SetScreenMode(ScreenModeItem::Fullscreen))];
+        e.push(Entry::Separator);
+        e.extend(items(&ScreenModeItem::ALL[1..], MenuAction::SetScreenMode));
+        e
+    }));
+    entries.push(Entry::Separator);
     // The view's own orientation: the flips are toggles (they stay on, and the
     // menu shows a checkmark), the rotation reset is a one-shot.
     entries.push(item(MenuAction::ResetViewRotation));
@@ -5253,7 +5453,11 @@ fn view_menu() -> Menu {
     );
     entries.push(Entry::submenu(
         "Show",
-        vec![item(MenuAction::ToggleView(ViewFlag::Slices))],
+        // W16-K: Paths, in Photopea's place above Slices.
+        vec![
+            item(MenuAction::ToggleView(ViewFlag::Paths)),
+            item(MenuAction::ToggleView(ViewFlag::Slices)),
+        ],
     ));
     let mut snap_to = items(ViewFlag::SNAP_TO, MenuAction::ToggleView);
     snap_to.push(Entry::Separator);
@@ -5292,6 +5496,12 @@ fn window_menu() -> Menu {
         "Appearance",
         items(design::Theme::ALL, MenuAction::SetTheme),
     ));
+    // W16-N: Photopea's More ▸ Language and Glass Menus.
+    entries.push(Entry::submenu(
+        "Language",
+        items(crate::strings::Locale::ALL, MenuAction::SetLanguage),
+    ));
+    entries.push(item(MenuAction::ToggleGlassMenus));
     Menu {
         title: "Window",
         entries,
@@ -7777,7 +7987,11 @@ mod w10j_view_tests {
         assert!(snap.contains(&MenuAction::SnapToAll) && snap.contains(&MenuAction::SnapToNone));
         assert_eq!(
             actions(submenu(&view, "Show")),
-            vec![MenuAction::ToggleView(ViewFlag::Slices)]
+            // W16-K: Paths above Slices, as in Photopea.
+            vec![
+                MenuAction::ToggleView(ViewFlag::Paths),
+                MenuAction::ToggleView(ViewFlag::Slices)
+            ]
         );
         assert_eq!(
             MenuAction::ToggleView(ViewFlag::Extras).shortcut(),

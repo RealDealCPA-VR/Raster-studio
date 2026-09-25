@@ -810,24 +810,24 @@ fn the_layer_row_context_menu_offers_the_layer_operations() {
     assert_eq!(
         labels,
         vec![
-            // W10-I: Photopea's layer-row menu, in its order.
+            // W16-D: Photopea's layer-row menu — its rows, in its order.
             "Blending Options…",
-            // The ellipsis is earned: the application opens the Duplicate
-            // Layer dialog (the copy's name) for this row.
-            "Duplicate Layer…",
-            "Delete Layer",
-            "Convert to Smart Object",
-            "Rasterize Layer",
-            "Enable Layer Mask",
-            "Create Clipping Mask",
-            "Link Layers",
             // W9-A: Photopea's Select Pixels (the active layer's alpha).
             "Select Pixels",
+            // Photopea's dialog-free copy, then the dialog with the
+            // destination document.
+            "Duplicate Layer",
+            "Duplicate Into…",
+            "Delete",
+            "Convert to Smart Object",
+            "Rasterize",
+            "Rasterize Layer Style",
+            "Convert to Shape",
+            "Create Clipping Mask",
             "Copy Layer Style",
             "Paste Layer Style",
             "Clear Layer Style",
             "Merge Down",
-            "Merge Visible",
             "Flatten Image",
             // W11-E: the colour labels, flat as in Photoshop's row menu.
             "No Color",
@@ -842,20 +842,35 @@ fn the_layer_row_context_menu_offers_the_layer_operations() {
         "the layer row menu's item set"
     );
 
-    // Duplicate is enabled with one raster layer; clicking it duplicates.
-    assert!(items[1].resolution.is_enabled());
-    let intents = h.click_context_item(1);
+    // W16-D: Duplicate Layer asks the application for the dialog-free copy
+    // (through the Layers panel's request queue); Duplicate Into… asks for
+    // the Duplicate Layer dialog.
+    assert!(items[2].resolution.is_enabled());
+    let intents = h.click_context_item(2);
+    assert!(
+        !intents
+            .iter()
+            .any(|i| matches!(i, Intent::Action(ui::menu::MenuAction::DuplicateLayer))),
+        "Duplicate Layer does not open the dialog: {intents:?}"
+    );
+    assert_eq!(
+        h.workspace.layers.take_requests(),
+        vec![ui::panels::layers::w16::LayersRequest::DuplicateLayer]
+    );
+    h.right_click(ui::view::ids::layer_row(id));
+    h.settle();
+    let intents = h.click_context_item(3);
     assert!(
         intents
             .iter()
             .any(|i| matches!(i, Intent::Action(ui::menu::MenuAction::DuplicateLayer))),
-        "clicking the row menu's duplicate row asks to duplicate: {intents:?}"
+        "Duplicate Into… asks for the duplicate dialog: {intents:?}"
     );
 
     // W10-I: a row far down the longer menu is drawn and clickable too —
     // Convert to Smart Object, then (re-armed) Flatten Image.
     for (index, want) in [
-        (3, ui::menu::MenuAction::ConvertToSmartObject),
+        (5, ui::menu::MenuAction::ConvertToSmartObject),
         (14, ui::menu::MenuAction::FlattenImage),
     ] {
         h.right_click(ui::view::ids::layer_row(id));

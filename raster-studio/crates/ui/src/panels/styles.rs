@@ -79,19 +79,60 @@ pub(crate) fn styles_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     } else if active.is_none() {
         ui.label(hint(ui, tr(NO_LAYER)));
     }
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(Space::XSmall.pt(), Space::XSmall.pt());
+    // W16-E: the panel menu's Tiles/List, and the style its Name Change,
+    // Delete and Export act on (the one last clicked, ringed).
+    use crate::panels::panel_menus_w16::{self as menus, Library, ViewMode};
+    let chosen = menus::selected(ui.ctx(), Library::Styles);
+    let mut clicked: Option<usize> = None;
+    if menus::view_mode(ui.ctx(), Library::Styles) == ViewMode::List {
         for (index, (name, effects)) in view.styles.iter().enumerate() {
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side), Sense::hover());
-            let response = ui
-                .interact(rect, ids::tile(index), Sense::click())
-                .on_hover_text(name.clone());
-            paint_tile(ui, rect, effects, response.hovered());
-            if response.clicked() && active.is_some() {
-                w.emit(Intent::Action(MenuAction::ApplyStyleAt(index)));
+            let row = crate::view::list_row_layout(
+                ui,
+                menus::ids::list_row(Library::Styles, index),
+                chosen == Some(index),
+                |ui| {
+                    let chip = t.metrics.list_row_height;
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(chip, chip), Sense::hover());
+                    paint_tile(ui, rect, effects, false);
+                    ui.add_space(Space::XSmall.pt());
+                    ui.label(crate::view::body(ui, name.clone()));
+                },
+            );
+            if row.response.clicked() {
+                clicked = Some(index);
             }
         }
-    });
+    } else {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(Space::XSmall.pt(), Space::XSmall.pt());
+            for (index, (name, effects)) in view.styles.iter().enumerate() {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(side, side), Sense::hover());
+                let response = ui
+                    .interact(rect, ids::tile(index), Sense::click())
+                    .on_hover_text(name.clone());
+                paint_tile(ui, rect, effects, response.hovered());
+                if chosen == Some(index) {
+                    ui.painter().rect_stroke(
+                        rect,
+                        0.0,
+                        egui::Stroke::new(
+                            t.borders.thick,
+                            color32(t.palette.color(ColorRole::SelectionStroke)),
+                        ),
+                    );
+                }
+                if response.clicked() {
+                    clicked = Some(index);
+                }
+            }
+        });
+    }
+    if let Some(index) = clicked {
+        menus::set_selected(ui.ctx(), Library::Styles, Some(index));
+        if active.is_some() {
+            w.emit(Intent::Action(MenuAction::ApplyStyleAt(index)));
+        }
+    }
     ui.add_space(Space::XSmall.pt());
     hairline(ui);
     let can_define = active.is_some_and(|l| !l.effects.is_default());

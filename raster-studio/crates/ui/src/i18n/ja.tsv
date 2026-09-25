@@ -1,0 +1,1609 @@
+# Raster Studio interface strings, ja. One row per line: the English source, a TAB,
+# the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
+# Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
+@name	日本語
+ fps	 fps
+ frames	 フレーム
+ ms	 ms
+ px	 px
+0 bytes	0 バイト
+16 Bits/Channel	16 bit/チャンネル
+16 bit	16 bit
+32 Bits/Channel	32 bit/チャンネル
+3D	3D
+50% Grey	50% グレー
+50% Threshold	2 階調化 (50%)
+8 Bits/Channel	8 bit/チャンネル
+8 bit	8 bit
+90° Clockwise	90°（時計回り）
+90° Counter Clockwise	90°（反時計回り）
+A CSV row has the wrong number of fields, at line	CSV の行のフィールド数が正しくありません。行
+A blank canvas at any size	任意のサイズの空白のカンバス
+A colour channel cannot be deleted	カラーチャンネルは削除できません
+A layered raster editor	レイヤー対応のラスター画像エディター
+A palette holds 2 to 256 colours	パレットには 2〜256 色が入ります
+A saved selection already has that name	その名前の保存済み選択範囲は既にあります
+A saved selection: click to open Select > Load Selection, then choose it by name there	保存済みの選択範囲：クリックすると「選択範囲 > 選択範囲を読み込む」が開くので、そこで名前で選択します
+A slice needs a name	スライスには名前が必要です
+AV1 (smaller, newer players)	AV1（小さいが新しいプレーヤーが必要）
+About Raster Studio	Raster Studio について
+Absolute Colorimetric	絶対的な色域を維持
+Action sets	アクションセット
+Actions	アクション
+Adaptive (median cut)	適応（メディアンカット）
+Add "copy" to copied layers	コピーしたレイヤーに「のコピー」を付ける
+Add Artboard Above	上にアートボードを追加
+Add Artboard Below	下にアートボードを追加
+Add Artboard Left	左にアートボードを追加
+Add Artboard Right	右にアートボードを追加
+Add Filter Mask	フィルターマスクを追加
+Add Media	メディアを追加
+Add Noise…	ノイズを加える…
+Add a layer mask	レイヤーマスクを追加
+Add a smart filter mask	スマートフィルターマスクを追加
+Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read	再生ヘッドの位置にビデオファイル（MP4：H.264 または AV1）をビデオレイヤーとして追加します。音声は読み込まれません
+Add an adjustment layer	調整レイヤーを追加
+Add another instance of this effect	この効果のインスタンスをもう 1 つ追加
+Add current colour	現在のカラーを追加
+Add export	書き出しを追加
+Add frame	フレームを追加
+Add or remove room around the image. Pixels are not resampled.	画像の周囲に余白を追加または削除します。ピクセルは再サンプルされません。
+Add shortcut	ショートカットを追加
+Add to Selection	選択範囲に追加
+Adds one guide at a document coordinate, in pixels.	ドキュメント座標（ピクセル）にガイドを 1 本追加します。
+Adjustments	色調補正
+Advanced	詳細
+Again	再実行
+Again with Copy	再実行してコピー
+Aliased (pencil)	アンチエイリアスなし（鉛筆）
+Align	整列
+Align the bottom edge to the canvas	下端をカンバスに揃える
+Align the left edge to the canvas	左端をカンバスに揃える
+Align the right edge to the canvas	右端をカンバスに揃える
+Align the top edge to the canvas	上端をカンバスに揃える
+Align with layer	レイヤーに揃える
+All	すべて
+All Caps	オールキャップス
+All Caps shapes every lowercase letter as its capital; Small Caps shapes it as a capital at 70 % size. The stored text keeps the case you typed.	オールキャップスは小文字を大文字の形にし、スモールキャップスは 70 % サイズの大文字の形にします。保存されるテキストは入力したとおりの大文字・小文字のままです。
+All Layers	すべてのレイヤー
+Alpha	アルファ
+Already used by	使用中：
+Alt Tag	Alt タグ
+Amount	量
+An export needs at least one output	書き出しには出力が 1 つ以上必要です
+An image or project from this computer	このコンピューターの画像またはプロジェクト
+Angle	角度
+Angle (degrees)	角度（度）
+Angle jitter	角度のジッター
+Animation	アニメーション
+Another slice already has this name	別のスライスが既にこの名前を使っています
+Appearance	外観
+Applied	適用済み
+Apply	適用
+Apply Guides	ガイドを適用
+Apply Image	画像操作
+Apply Image…	画像操作…
+Apply Mask	マスクを適用
+Apply Style	スタイルを適用
+Apply Style 1	スタイル 1 を適用
+Apply Style Preset…	スタイルプリセットを適用…
+Apply the next comp	次のカンプを適用
+Apply the previous comp	前のカンプを適用
+Apply this mask	このマスクを適用
+Approximate. The composited result is what the canvas shows.	近似値です。合成結果はカンバスの表示どおりです。
+Arbitrary…	角度入力…
+Arc	円弧
+Arc Lower	下弦
+Arc Upper	上弦
+Arch	アーチ
+Arrange	重ね順
+Artboard	アートボード
+Artboard from Layers	レイヤーからアートボード
+Artboards in one document	1 つのドキュメント内のアートボード
+Artboards to Files…	アートボードからファイル…
+Assign Profile	プロファイルの指定
+Assigned {name}: the pixel numbers are unchanged, so the colours look different	{name} を指定しました：ピクセル値は変わらないため、色の見え方が変わります
+Author	作成者
+Auto Color	自動カラー補正
+Auto Contrast	自動コントラスト
+Auto Tone	自動トーン補正
+Auto leading	自動行送り
+Auto-Align Layers…	レイヤーを自動整列…
+Auto-Blend Layers…	レイヤーを自動合成…
+Automate	自動処理
+Autosaves of never-saved documents go here; empty uses the default	一度も保存していないドキュメントの自動保存先です。空欄の場合は既定の場所を使います
+Average	平均
+BMP…	BMP…
+Back to the colour this opened on	開いたときのカラーに戻す
+Background — double-click for the picker	背景色 — ダブルクリックでカラーピッカー
+Based On	基準
+Baseline shift	ベースラインシフト
+Baseline to baseline. Auto leading follows the type size.	ベースラインからベースラインまで。自動行送りは文字サイズに従います。
+Batch	バッチ
+Batch…	バッチ…
+Bend	カーブ
+Bevel	ベベル
+Bevel & Emboss	ベベルとエンボス
+Bevel & Emboss…	ベベルとエンボス…
+Bind a text replacement variable to a text layer, or a visibility variable to any layer.	テキスト置換変数をテキストレイヤーに、表示/非表示変数を任意のレイヤーに割り当てます。
+Bitmap	モノクロ 2 階調
+Bitmap…	モノクロ 2 階調…
+Black	ブラック
+Black & White	白黒
+Black & White…	白黒…
+Black to Transparent	黒から透明に
+Black to White	黒から白に
+Black to white through the inks	インクを経由して黒から白へ
+Blacks	黒レベル
+Blend If	ブレンド条件
+Blend Mode: Color	描画モード：カラー
+Blend Mode: Color Burn	描画モード：焼き込みカラー
+Blend Mode: Color Dodge	描画モード：覆い焼きカラー
+Blend Mode: Darken	描画モード：比較（暗）
+Blend Mode: Difference	描画モード：差の絶対値
+Blend Mode: Dissolve	描画モード：ディザ合成
+Blend Mode: Exclusion	描画モード：除外
+Blend Mode: Hard Light	描画モード：ハードライト
+Blend Mode: Hard Mix	描画モード：ハードミックス
+Blend Mode: Hue	描画モード：色相
+Blend Mode: Lighten	描画モード：比較（明）
+Blend Mode: Linear Burn	描画モード：焼き込み（リニア）
+Blend Mode: Linear Dodge (Add)	描画モード：覆い焼き（リニア）- 加算
+Blend Mode: Linear Light	描画モード：リニアライト
+Blend Mode: Luminosity	描画モード：輝度
+Blend Mode: Multiply	描画モード：乗算
+Blend Mode: Normal	描画モード：通常
+Blend Mode: Overlay	描画モード：オーバーレイ
+Blend Mode: Pin Light	描画モード：ピンライト
+Blend Mode: Saturation	描画モード：彩度
+Blend Mode: Screen	描画モード：スクリーン
+Blend Mode: Soft Light	描画モード：ソフトライト
+Blend Mode: Vivid Light	描画モード：ビビッドライト
+Blending	ブレンド
+Blending Options	レイヤー効果
+Blending Options…	レイヤー効果…
+Blending options	ブレンドオプション
+Blends a source document, layer or channel into the active layer as one step.	ソースのドキュメント、レイヤーまたはチャンネルを 1 ステップでアクティブなレイヤーに合成します。
+Blends one channel of each of two sources into a new channel, a selection or a new document.	2 つのソースのそれぞれ 1 チャンネルを合成し、新しいチャンネル、選択範囲または新規ドキュメントにします。
+Blue	ブルー
+Blues	ブルー系
+Blur	ぼかし
+Blur Gallery	ぼかしギャラリー
+Blur More	ぼかし（強）
+Bold	ボールド
+Border Selection	境界線
+Border…	境界線…
+Both axes	両方の軸
+Bottom	下
+Bottom Edges	下端
+Bottom Left	左下
+Bottom Right	右下
+Bottom Right Pixel Color	右下のピクセルの色
+Bottom left	左下
+Bottom right	右下
+Box Blur…	ぼかし（ボックス）…
+Box height	ボックスの高さ
+Brightness	明るさ
+Brightness jitter	明るさのジッター
+Brightness/Contrast	明るさ・コントラスト
+Brightness/Contrast…	明るさ・コントラスト…
+Bring Forward	前面へ
+Bring to Front	最前面へ
+Brush Editor	ブラシエディター
+Brush: Background	ブラシ：背景
+Brush: Foreground	ブラシ：描画色
+Brushes	ブラシ
+Bulge	膨張
+Butt	なし
+CMYK Color	CMYK カラー
+Calculations	演算
+Calculations…	演算…
+Camera Raw…	Camera Raw…
+Canvas Size	カンバスサイズ
+Canvas Size…	カンバスサイズ…
+Canvas extension	カンバス拡張
+Caps	大文字
+Carries the XMP; the source's EXIF goes into JPEG only	XMP を含みます。ソースの EXIF は JPEG にのみ入ります
+Cell size (pixels)	セルサイズ（ピクセル）
+Center	中央
+Center horizontally on the canvas	カンバスの水平方向中央に配置
+Center vertically on the canvas	カンバスの垂直方向中央に配置
+Centimeters	センチメートル
+Centre	中央
+Centre the view on this note	このメモを表示の中央に
+Change Bit Depth	ビット数を変更
+Change Colour Mode	カラーモードを変更
+Change Layer Properties	レイヤープロパティを変更
+Change how many pixels the document has, or how large it prints.	ドキュメントのピクセル数、または印刷サイズを変更します。
+Channel	チャンネル
+Channel Mixer	チャンネルミキサー
+Channel Mixer…	チャンネルミキサー…
+Channel thumbnail	チャンネルサムネール
+Channels	チャンネル
+Character	文字
+Character Style	文字スタイル
+Character Styles	文字スタイル
+Checkerboard	チェッカーボード
+Choose 2 to 256 colours	2〜256 色を選択してください
+Choose a colour profile	カラープロファイルを選択
+Choose a destination folder	保存先フォルダーを選択
+Choose a source folder	ソースフォルダーを選択
+Choose at least one page to open	開くページを 1 つ以上選択してください
+Choose at least one side to trim	トリミングする辺を 1 つ以上選択してください
+Choose the Action to play	再生するアクションを選択
+Choose the open grayscale document each channel of the new RGB document comes from.	新しい RGB ドキュメントの各チャンネルの元になる、開いているグレースケールドキュメントを選択します。
+Choose the pages to open, their resolution and how they open.	開くページ、その解像度、開き方を選択します。
+Choose the source and the destination folders.	ソースフォルダーと保存先フォルダーを選択します。
+Choose…	選択…
+Clear	消去
+Clear All	すべて消去
+Clear Guides	ガイドを消去
+Clear History	ヒストリーを消去
+Clear Layer Style	レイヤースタイルを消去
+Clear Slices	スライスを消去
+Clear Strokes	ストロークを消去
+Clear existing guides	既存のガイドを消去
+Clear the {noun} from the active text layer	アクティブなテキストレイヤーから{noun}を消去
+Cleared {n} slice(s)	{n} 個のスライスを消去しました
+Click an item in the panel first	先にパネルの項目をクリックしてください
+Click anywhere to sample a colour	任意の場所をクリックしてカラーをサンプル
+Click anywhere to sample a colour, or press Escape.	任意の場所をクリックしてカラーをサンプル。Esc キーで中止します。
+Click the graph to add a point, drag a point to bend the curve, drag it off the graph to remove it	グラフをクリックするとポイントを追加、ポイントをドラッグするとカーブを曲げ、グラフの外にドラッグすると削除します
+Click the preview to sample a colour from it	プレビューをクリックしてカラーをサンプル
+Click the preview to sample the colour to replace	プレビューをクリックして置き換えるカラーをサンプル
+Click the ramp to edit its stops.	グラデーションバーをクリックして分岐点を編集します。
+Clip to layer below	下のレイヤーでクリップ
+Clipboard	クリップボード
+Clipping	クリッピング
+Close	閉じる
+Close All	すべて閉じる
+Close Alpha Channel	アルファチャンネルを閉じる
+Close Others	その他を閉じる
+Close panel	パネルを閉じる
+Clouds	雲模様 1
+Codec	コーデック
+Color	カラー
+Color Balance	カラーバランス
+Color Balance…	カラーバランス…
+Color Burn	焼き込みカラー
+Color Dodge	覆い焼きカラー
+Color Dynamics	カラー
+Color Halftone…	カラーハーフトーン…
+Color Intensity	カラーの強さ
+Color Label	カラーラベル
+Color Lookup	カラールックアップ
+Color Lookup Tables…	カラールックアップテーブル…
+Color Lookup…	カラールックアップ…
+Color Overlay	カラーオーバーレイ
+Color Overlay…	カラーオーバーレイ…
+Color Picker	カラーピッカー
+Color Range	色域指定
+Color Range…	色域指定…
+Color fringe cleanup: pulls the boundary pixels' color toward the nearby interior ink — a separate edit from mask refinement.	カラーフリンジの除去：境界のピクセルの色を近くの内側のインキに寄せます。マスクの調整とは別の編集です。
+Color to Alpha…	カラーからアルファ…
+Colors	カラー
+Colour	カラー
+Colour varies once per stroke.	カラーはストロークごとに 1 回変わります。
+Colours	カラー
+Colours must be 1 to 64, the tolerance above 0 and the corner length at least 1	カラー数は 1〜64、許容値は 0 より大きく、コーナーの長さは 1 以上にしてください
+Columns	列
+Columns and rows with gutters between them, inside optional margins, in pixels.	間隔をあけた列と行（ピクセル単位、任意のマージン内）。
+Combine Shapes	シェイプを結合
+Commit (Enter)	確定（Enter）
+Commit Contents	内容を確定
+Composite	合成
+Condensed	コンデンス
+Cone	円錐
+Constant	一定
+Constrain proportions	縦横比を固定
+Content-Aware	コンテンツに応じる
+Content-Aware Scale	コンテンツに応じて拡大・縮小
+Contour	輪郭
+Contract Selection	選択範囲を縮小
+Contract by	縮小量
+Contract…	縮小…
+Contrast	コントラスト
+Conversion Options	変換オプション
+Convert Formats	フォーマットを変換
+Convert Formats…	フォーマットを変換…
+Convert for Smart Filters	スマートフィルター用に変換
+Convert to Layers	レイヤーに変換
+Convert to Linked…	リンクに変換…
+Convert to Paragraph Text	段落テキストに変換
+Convert to Point Text	ポイントテキストに変換
+Convert to Profile	プロファイル変換
+Convert to Profile works on 8- and 16-bit documents	プロファイル変換は 8 bit と 16 bit のドキュメントで動作します
+Convert to Profile…	プロファイル変換…
+Convert to Shape	シェイプに変換
+Convert to Smart Object	スマートオブジェクトに変換
+Converted to {name} ({intent}): the numbers changed so the colours look the same	{name} に変換しました（{intent}）：色の見え方が同じになるよう値が変わりました
+Cool	クール
+Copper	銅
+Copy	コピー
+Copy Layer Style	レイヤースタイルをコピー
+Copy Merged	結合部分をコピー
+Copyright Notice	著作権情報
+Corner length	コーナーの長さ
+Corner radius	角丸の半径
+Corner radius applies to rectangles; this path has no corners to round	角丸の半径は長方形に適用されます。このパスには丸める角がありません
+Corners	コーナー
+Count jitter	数のジッター
+Create Clipping Mask	クリッピングマスクを作成
+Create Layer	レイヤーを作成
+Create Layers	レイヤーを作成
+Crop	切り抜き
+Crop and Straighten Photos	傾きの補正と写真の切り抜き
+Crops the canvas to the content, judged by the basis below.	下の基準で判断し、カンバスを内容に合わせて切り抜きます。
+Crystallize…	結晶化…
+Current Layer	現在のレイヤー
+Current Path	現在のパス
+Curve tolerance	カーブの許容値
+Curves	トーンカーブ
+Curves…	トーンカーブ…
+Custom	カスタム
+Custom Brush	カスタムブラシ
+Custom: with the Move tool, drag the 16 mesh handles on the canvas	カスタム：移動ツールでカンバス上の 16 個のメッシュハンドルをドラッグします
+Custom…	カスタム…
+Cut	カット
+Cyan	シアン
+Cyan / Red	シアン / レッド
+Cyans	シアン系
+DDS…	DDS…
+DXF…	DXF…
+Dark	ダーク
+Dark Blue	ダークブルー
+Dark Grey	ダークグレー
+Darken	比較（暗）
+Darker Color	カラー比較（暗）
+Dash	破線
+Data Set	データセット
+Data Sets	データセット
+Data Sets…	データセット…
+Default	初期設定
+Default colours  (D)	初期設定の描画色と背景色  (D)
+Default colours (D)	初期設定の描画色と背景色 (D)
+Define	定義
+Define Brush Preset…	ブラシを定義…
+Define Custom Shape…	カスタムシェイプを定義…
+Define New	新規定義
+Define Pattern…	パターンを定義…
+Define…	定義…
+Delete	削除
+Delete Filter Mask	フィルターマスクを削除
+Delete Layer	レイヤーを削除
+Delete Mask	マスクを削除
+Delete Vector Mask	ベクトルマスクを削除
+Delete action	アクションを削除
+Delete channel	チャンネルを削除
+Delete frame	フレームを削除
+Delete path	パスを削除
+Delete selected layers	選択したレイヤーを削除
+Delete set and its actions	セットとそのアクションを削除
+Delete stop	分岐点を削除
+Delete the applied comp	適用中のカンプを削除
+Delete the selected keyframe	選択したキーフレームを削除
+Delete the selected tool preset	選択したツールプリセットを削除
+Delete the selected {noun}	選択した{noun}を削除
+Delete the smart filter mask	スマートフィルターマスクを削除
+Delete this note	このメモを削除
+Delete this smart filter	このスマートフィルターを削除
+Delete this spot channel	このスポットカラーチャンネルを削除
+Density	濃度
+Dents…	へこみ…
+Desaturate	彩度を下げる
+Description	説明
+Deselect	選択を解除
+Deselect Layers	レイヤーの選択を解除
+Despeckle	ノイズを軽減
+Destination	保存先
+Destination Space	変換後のカラースペース
+Detail	ディテール
+Detail scales	ディテールのスケール
+Diamond	ダイヤモンド
+Difference	差の絶対値
+Difference Clouds	雲模様 2
+Diffuse…	拡散…
+Diffusion	拡散
+Diffusion Dither	誤差拡散
+Disable / Enable Filter Mask	フィルターマスクを使用しない / 使用
+Disable / Enable Mask	マスクを使用しない / 使用
+Disable / Enable Vector Mask	ベクトルマスクを使用しない / 使用
+Disable Mask	マスクを使用しない
+Disable Vector Mask	ベクトルマスクを使用しない
+Displace…	置き換え…
+Dissolve	ディザ合成
+Distance	距離
+Distort	変形
+Distribute	分布
+Dither	ディザ
+Dither…	ディザ…
+Divide	除算
+Dock this panel here	このパネルをここにドッキング
+Document	ドキュメント
+Document Bounds	ドキュメントの境界
+Document Info	ドキュメント情報
+Document Title	ドキュメントのタイトル
+Document size	ドキュメントサイズ
+Double-click to edit in Layer Style; drag to the trash to delete	ダブルクリックでレイヤースタイルで編集、ゴミ箱にドラッグで削除
+Double-click to edit this filter's settings	ダブルクリックでこのフィルターの設定を編集
+Double-click to rename	ダブルクリックで名前を変更
+Drag a line with the Ruler first	先にものさしツールで線をドラッグしてください
+Drag to zoom the view	ドラッグして表示をズーム
+Drop Shadow	ドロップシャドウ
+Drop Shadow…	ドロップシャドウ…
+Duotone	ダブルトーン
+Duotone Options	ダブルトーンオプション
+Duotone…	ダブルトーン…
+Duplicate	複製
+Duplicate Layer	レイヤーを複製
+Duplicate Layer…	レイヤーを複製…
+Duplicate frame	フレームを複製
+Dust & Scratches…	ダスト＆スクラッチ…
+EMF…	EMF…
+EXIF and XMP writing is not implemented — only ICC is embedded	EXIF と XMP の書き込みは未実装です。ICC のみ埋め込まれます
+EXR…	EXR…
+Ease In	イーズイン
+Ease Out	イーズアウト
+Edge Glow	エッジの光彩
+Edge refinement: feather, shift, smooth, and contrast over the mask's existing coverage — not subject recognition.	エッジの調整：マスクの既存の範囲に対するぼかし、シフト、滑らかさ、コントラストです。被写体の認識は行いません。
+Edges	エッジ
+Edit	編集
+Edit Adjustment	調整を編集
+Edit Adjustment…	調整を編集…
+Edit Alpha Channel	アルファチャンネルを編集
+Edit Contents…	コンテンツを編集…
+Edit Document Records	ドキュメントの記録を編集
+Edit Fill	塗りつぶしを編集
+Edit Filter Mask	フィルターマスクを編集
+Edit Generator	ジェネレーターを編集
+Edit Group	グループを編集
+Edit Guides	ガイドを編集
+Edit Raster	ラスターを編集
+Edit Saved Selection	保存済み選択範囲を編集
+Edit Shape	シェイプを編集
+Edit Slices	スライスを編集
+Edit Smart object	スマートオブジェクトを編集
+Edit Text	テキストを編集
+Edit Timeline	タイムラインを編集
+Edit brush…	ブラシを編集…
+Edit fill	塗りつぶしを編集
+Edit gradient stops — click to open the editor	グラデーションの分岐点を編集 — クリックでエディターを開きます
+Edit in Quick Mask Mode	クイックマスクモードで編集
+Edit this ramp	このグラデーションを編集
+Effects	効果
+Effects apply to the whole layer and undo as one step.	効果はレイヤー全体に適用され、1 ステップで取り消されます。
+Embed EXIF and XMP	EXIF と XMP を埋め込む
+Embed Linked	リンクを埋め込み
+Embed colour profile	カラープロファイルを埋め込む
+Embedded source	埋め込まれたソース
+Emboss…	エンボス…
+Enable / disable the smart filter mask	スマートフィルターマスクの使用 / 不使用
+Enable Mask	マスクを使用
+Enable Vector Mask	ベクトルマスクを使用
+Enable at least one export	書き出しを 1 つ以上有効にしてください
+Enabled	有効
+Enlarge smaller images	小さい画像を拡大
+Enter a colour like #3366CC	#3366CC のようにカラーを入力
+Entropy	エントロピー
+Equalize	平均化（イコライズ）
+Essentials	初期設定
+Every enabled row is written when you export.	有効なすべての行が書き出し時に書き込まれます。
+Every image in the source folder is fitted into the box and written to the destination folder in its own format.	ソースフォルダーの各画像をボックスに合わせ、元の形式のまま保存先フォルダーに書き込みます。
+Every parameter is at its neutral value — there is nothing to clean	すべてのパラメーターがニュートラルな値です。除去するものはありません
+Every parameter is at its neutral value — there is nothing to refine	すべてのパラメーターがニュートラルな値です。調整するものはありません
+Every variable needs a name	各変数には名前が必要です
+Exact	正確
+Exclude Overlapping Shapes	シェイプが重なる領域を中マド
+Exclusion	除外
+Expand Selection	選択範囲を拡張
+Expand by	拡張量
+Expand the dock	ドックを展開
+Expanded	エキスパンド
+Expand…	拡張…
+Export	書き出し
+Export As	書き出し形式
+Export Color Lookup	カラールックアップを書き出し
+Export Contents…	コンテンツを書き出し…
+Export Diagnostics…	診断情報を書き出し…
+Export Layers…	レイヤーを書き出し…
+Export PDF	PDF を書き出し
+Export as .ABR…	.ABR として書き出し…
+Export as .ACO…	.ACO として書き出し…
+Export as .ASL…	.ASL として書き出し…
+Export set as .atn	セットを .atn として書き出し
+Export…	書き出し…
+Exposure	露光量
+Exposure…	露光量…
+Extra Bold	エクストラボールド
+Extra Condensed	エクストラコンデンス
+Extra Expanded	エクストラエキスパンド
+Extra Light	エクストラライト
+Extras	エクストラ
+Extrude…	押し出し…
+Eyedropper	スポイト
+Face	スタイル
+Facet	ぶれ
+Fade	フェード
+Fade…	フェード…
+Family	ファミリー
+Feather	ぼかし
+Feather Selection	選択範囲をぼかす
+Feather radius	ぼかしの半径
+Feather…	ぼかし…
+Fibers…	繊維…
+Field Blur…	フィールドぼかし…
+File	ファイル
+File Info	ファイル情報
+File Info…	ファイル情報…
+File name	ファイル名
+Files that fail are listed in batch-errors.txt in the destination.	失敗したファイルは保存先の batch-errors.txt に一覧表示されます。
+Fill	塗り
+Fill Filter Mask	フィルターマスクを塗りつぶし
+Fill Mask	マスクを塗りつぶし
+Fill Screen	画面に合わせて塗りつぶす
+Fill in File Info, or open a file that has EXIF, to embed metadata	メタデータを埋め込むには、ファイル情報を入力するか、EXIF のあるファイルを開いてください
+Fill path with the foreground colour, on a new shape layer	新規シェイプレイヤーでパスを描画色で塗りつぶす
+Fill type	塗りの種類
+Fills the active selection with the chosen contents.	アクティブな選択範囲を選んだ内容で塗りつぶします。
+Fill…	塗りつぶし…
+Filter	フィルター
+Filter Gallery	フィルターギャラリー
+Filter Gallery…	フィルターギャラリー…
+Find Edges	輪郭検出
+First line	1 行目
+Fish	魚形
+Fisheye	魚眼レンズ
+Fit on Screen	画面サイズに合わせる
+Fit the whole image in the window	画像全体をウィンドウに合わせる
+Fixed height	固定の高さ
+Flag	旗
+Flame…	炎…
+Flat Angled 40	フラット角度 40
+Flatten Image	画像を統合
+Flip Canvas Horizontal	カンバスを左右に反転
+Flip Canvas Vertical	カンバスを上下に反転
+Flip Horizontal	水平方向に反転
+Flip Vertical	垂直方向に反転
+Flip View Horizontal	表示を左右に反転
+Flip View Vertical	表示を上下に反転
+Flow jitter	流量のジッター
+Folders	フォルダー
+Font: 	フォント: 
+Foreground strokes mark what to keep, background strokes what to drop; Preview shows the cut.	描画色のストロークは残す部分、背景色のストロークは除く部分を示します。プレビューで切り抜きを確認できます。
+Foreground — double-click for the picker	描画色 — ダブルクリックでカラーピッカー
+Foreground/background jitter	描画色・背景色のジッター
+Format	形式
+Fourier	フーリエ
+Fourier Transform	フーリエ変換
+Fragment	分割
+Frame	フレーム
+Frames	フレーム
+Free Transform	自由変形
+Free Transform a Copy	コピーを自由変形
+From Transparency	透明部分から
+Fullscreen	フルスクリーン
+Fuzziness	許容量
+GIF…	GIF…
+Gamma	ガンマ
+Gamut Warning	色域外警告
+Gaussian	ガウス分布
+Gaussian Blur…	ぼかし（ガウス）…
+Generate Mockups	モックアップを生成
+Generate Mockups…	モックアップを生成…
+Give the brush a name	ブラシに名前を付けてください
+Give the export a file name	書き出しにファイル名を付けてください
+Glass Menus	ガラスのメニュー
+Global light	包括光源
+Glyphs	字形
+Gradient	グラデーション
+Gradient Editor	グラデーションエディター
+Gradient Map	グラデーションマップ
+Gradient Map…	グラデーションマップ…
+Gradient Overlay	グラデーションオーバーレイ
+Gradient Overlay…	グラデーションオーバーレイ…
+Gradient…	グラデーション…
+Gray	グレー
+Grayscale	グレースケール
+Green	グリーン
+Greens	グリーン系
+Grid	グリッド
+Grid points	グリッドのポイント
+Group	グループ
+Group Layers	レイヤーをグループ化
+Grow	選択範囲を拡張（隣接）
+Guide Guy	Guide Guy
+Guides	ガイド
+Gutter	間隔
+H	H
+H.264 (plays everywhere)	H.264（どこでも再生可能）
+HDR Toning	HDR トーン
+HDR Toning…	HDR トーン…
+HSB/HSL…	HSB/HSL…
+Halftone Screen	ハーフトーンパターン
+Hard Light	ハードライト
+Hard Mix	ハードミックス
+Hard Round 24	ハード円ブラシ 24
+Hard Round 4	ハード円ブラシ 4
+Hard edges, no blending. Pixel art only — it aliases on downscale.	硬いエッジで、ブレンドしません。ピクセルアート専用です。縮小するとジャギーが出ます。
+Harder Brush	硬いブラシ
+Height	高さ
+Height to 110%	高さを 110% に
+Height to 125%	高さを 125% に
+Height to 80%	高さを 80% に
+Height to 90%	高さを 90% に
+Help	ヘルプ
+Hide All	すべてを隠す
+Hide Layers	レイヤーを隠す
+Hide Selection	選択範囲を隠す
+Hide the source layer	ソースレイヤーを隠す
+High Contrast	ハイコントラスト
+High Pass…	ハイパス…
+Highlights	ハイライト
+Histogram	ヒストグラム
+Histories	ヒストリー
+History	ヒストリー
+Hold	ホールド
+Horizontal Centers	水平方向中央
+Horizontal Distortion	水平方向の歪み
+Horizontal center guide	水平方向の中央ガイド
+Horizontal scale, in percent: widens or narrows the glyphs and their spacing	水平比率（%）：字形とその間隔を広げたり狭めたりします
+Horizontally	水平方向
+Hue	色相
+Hue jitter	色相のジッター
+Hue/Saturation	色相・彩度
+Hue/Saturation…	色相・彩度…
+ICC profile	ICC プロファイル
+ICO…	ICO…
+Image	イメージ
+Image Options	画像オプション
+Image Rotation	画像の回転
+Image Size	画像解像度
+Image Size…	画像解像度…
+Image size	画像サイズ
+Import CSV…	CSV を読み込み…
+Import PDF	PDF を読み込み
+Import a CSV of data sets first	先にデータセットの CSV を読み込んでください
+Import a CSV: the first row names the variables, every further row is one data set.	CSV を読み込みます。1 行目が変数名、以降の各行が 1 つのデータセットです。
+In use	使用中
+Inches	インチ
+Indexed Color	インデックスカラー
+Indexed Color…	インデックスカラー…
+Inflate	膨張
+Info	情報
+Ink	インキ
+Ink Color	インキの色
+Ink printed at 0, 25, 50, 75 and 100% tint	0、25、50、75、100% の濃度で印刷したインキ
+Inner Glow	光彩（内側）
+Inner Glow…	光彩（内側）…
+Inner Radius	内側の半径
+Inner Shadow	シャドウ（内側）
+Inner Shadow…	シャドウ（内側）…
+Inside	内側
+Intent	マッチング方法
+Intersect Shape Areas	シェイプ領域が交差
+Intersect with Selection	現在の選択範囲との共通範囲
+Inverse	選択範囲を反転
+Inverse Fourier Transform	逆フーリエ変換
+Invert	階調の反転
+Invert coverage	範囲を反転
+Invert has no parameters	階調の反転にはパラメーターがありません
+Iris Blur…	虹彩絞りぼかし…
+Italic	イタリック
+JPEG carries the XMP and the source's EXIF	JPEG には XMP とソースの EXIF が入ります
+JPG…	JPG…
+Justify	均等配置
+Kaleidoscope…	万華鏡…
+Keep as it was	そのまま
+Kept when a comp is first applied	カンプを初めて適用したときに保持
+Kerning	カーニング
+Keyboard Shortcut Sheet…	キーボードショートカット一覧…
+Keyboard Shortcuts…	キーボードショートカット…
+Keywords	キーワード
+Kind	種類
+Kurtosis	尖度
+Lab Color	Lab カラー
+Landscape	横
+Language	言語
+Large	大
+Last Document State	最終状態
+Last Filter	前回のフィルター
+Last line	最終行
+Layer	レイヤー
+Layer Comps	レイヤーカンプ
+Layer Edges	レイヤーエッジ
+Layer Mask	レイヤーマスク
+Layer Style	レイヤースタイル
+Layer knocks out drop shadow	レイヤーがドロップシャドウをノックアウト
+Layer via Copy	選択範囲をコピーしたレイヤー
+Layer via Cut	選択範囲をカットしたレイヤー
+Layers	レイヤー
+Layers panel options	レイヤーパネルオプション
+Left	左
+Left Edges	左端
+Left indent	左インデント
+Length	長さ
+Lens Blur…	レンズぼかし…
+Lens Correction…	レンズ補正…
+Lens Flare…	逆光…
+Level	レベル
+Levels	レベル補正
+Levels…	レベル補正…
+Light	ライト
+Light Grey	ライトグレー
+Lighten	比較（明）
+Lighter Color	カラー比較（明）
+Lighting Effects…	照明効果…
+Lightness	明度
+Line	線
+Linear	線形
+Linear Burn	焼き込み（リニア）
+Linear Dodge (Add)	覆い焼き（リニア）- 加算
+Linear Light	リニアライト
+Link / Unlink Mask	マスクのリンク / リンク解除
+Link Layers	レイヤーをリンク
+Link selected layers	選択したレイヤーをリンク
+Link with layer	レイヤーとリンク
+Linked	リンク済み
+Linked file	リンクファイル
+Liquify…	ゆがみ…
+Live Shape	ライブシェイプ
+Live preview	ライブプレビュー
+Live preview is off.	ライブプレビューはオフです。
+Load	読み込み
+Load .atn	.atn を読み込み
+Load .cube file…	.cube ファイルを読み込み…
+Load Selection	選択範囲を読み込む
+Load Selection…	選択範囲を読み込む…
+Load actions	アクションを読み込み
+Load channel as selection	チャンネルを選択範囲として読み込む
+Load path as a selection	パスを選択範囲として読み込む
+Loaded file	読み込んだファイル
+Lock	ロック
+Lock All	すべてをロック
+Lock Guides	ガイドをロック
+Lock Image Pixels	画像ピクセルをロック
+Lock Position	位置をロック
+Lock Transparent Pixels	透明ピクセルをロック
+Lock all	すべてをロック
+Lock pixels	ピクセルをロック
+Lock position	位置をロック
+Lock transparent pixels	透明ピクセルをロック
+Lookup table	ルックアップテーブル
+Luminance	輝度
+Luminance of the preview source; the markers are the black and white points.	プレビューのソースの輝度です。マーカーは黒点と白点です。
+Luminosity	輝度
+MP4…	MP4…
+Magenta	マゼンタ
+Magenta / Green	マゼンタ / グリーン
+Magentas	マゼンタ系
+Magic Cut	マジックカット
+Magic Cut…	マジックカット…
+Make Frames	フレームを作成
+Make a selection first	先に選択範囲を作成してください
+Make work path from selection	選択範囲から作業用パスを作成
+Manual	手動
+Maps every colour onto one palette. The document keeps RGBA pixels; GIF and PNG export write this palette.	すべてのカラーを 1 つのパレットに割り当てます。ドキュメントは RGBA ピクセルのままで、GIF と PNG の書き出しにこのパレットが書き込まれます。
+Maps the active layer onto a palette as one undo step; the document stays RGB.	アクティブなレイヤーを 1 回の取り消しステップでパレットに割り当てます。ドキュメントは RGB のままです。
+Margins	マージン
+Mark this state so you can come back to it	この状態に戻れるようにマークする
+Mask	マスク
+Mask source	マスクのソース
+Match Color	カラーの適用
+Match Color…	カラーの適用…
+Matting	マット
+Maximum	最大値
+Maximum…	明るさの最大値…
+Mean	平均
+Median	中央値
+Median…	明るさの中間値…
+Medium	ミディアム
+Memory	メモリ
+Menu Bar and Canvas	メニューバーとカンバス
+Merge	結合
+Merge Channels	チャンネルの結合
+Merge Channels…	チャンネルの結合…
+Merge Down	下のレイヤーと結合
+Merge Layers	レイヤーを結合
+Merge Visible	表示レイヤーを結合
+Merged	結合済み
+Method	方法
+Metrics	メトリクス
+Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.	メトリクスはフォント自身のペアカーニングを使います。0 はカーニングを無効にします。手動は現在のテキストのすべての文字ペアの間に 1 つの値（1/1000 em）を入れ、後で入力した文字はカーニングなしで始まります。2 文字以上が必要なため、それより短いテキストや文字ツールの初期設定では選べません。シェーパーにはオプティカルカーニングがないため、そのモードはありません。
+Mezzotint…	メゾティント…
+Midtones	中間調
+Millimeters	ミリメートル
+Min diameter	最小直径
+Min roundness	最小の真円率
+Min size	最小サイズ
+Minimal	最小
+Minimum	最小値
+Minimum size only applies when pressure controls size.	最小サイズは、筆圧でサイズを制御するときだけ適用されます。
+Minimum…	明るさの最小値…
+Miter	マイター
+Mode	モード
+Modify	選択範囲を変更
+Monochrome	モノクロ
+Monotone	モノトーン
+More readouts	その他の表示
+More tabs	その他のタブ
+Mosaic…	モザイク…
+Motion Blur…	ぼかし（移動）…
+Move Layer	レイヤーを移動
+Move a control first: these settings would change nothing	先にコントロールを動かしてください。この設定では何も変わりません
+Move this panel	このパネルを移動
+Move this panel within its dock	このパネルをドック内で移動
+Move to	移動先
+Move with the layer	レイヤーと一緒に移動
+Multiply	乗算
+Name	名前
+Name Change	名前の変更
+Name the channel first.	先にチャンネルに名前を付けてください。
+Navigator	ナビゲーター
+Nearest Neighbour	ニアレストネイバー
+Neutralize	中和
+Neutrals	ニュートラル系
+New	新規
+New Adjustment Layer	新規調整レイヤー
+New Channel	新規チャンネル
+New Document	新規ドキュメント
+New Fill Layer	新規塗りつぶしレイヤー
+New Guide	新規ガイド
+New Guide Layout	新規ガイドレイアウト
+New Guide Layout…	新規ガイドレイアウト…
+New Guides from Shape	シェイプから新規ガイド
+New Guide…	新規ガイド…
+New Layer	新規レイヤー
+New Layer Based Slice	レイヤーから新規スライス
+New Selection	新規選択
+New Smart Object via Copy	コピーから新規スマートオブジェクト
+New Snapshot	新規スナップショット
+New Spot Channel	新規スポットカラーチャンネル
+New Spot Channel…	新規スポットカラーチャンネル…
+New Style Preset	新規スタイルプリセット
+New channel	新規チャンネル
+New group	新規グループ
+New layer	新規レイヤー
+New layer comp	新規レイヤーカンプ
+New note at the centre of the view	表示の中央に新規メモ
+New path (saves the Work Path when it is selected)	新規パス（選択時は作業用パスを保存）
+New set	新規セット
+New size	新しいサイズ
+New style from the active layer	アクティブなレイヤーから新規スタイル
+New tool preset from the active tool	アクティブなツールから新規ツールプリセット
+New {noun} from the active text layer	アクティブなテキストレイヤーから新規{noun}
+New…	新規…
+Next Blend Mode	次の描画モード
+No Color	カラーなし
+No character styles yet. New records the active text layer's font, size and look.	文字スタイルはまだありません。新規で、アクティブなテキストレイヤーのフォント、サイズ、外観を記録します。
+No command loads a channel as the selection in this build; the Select menu's Load Selection restores a saved selection instead	このビルドにはチャンネルを選択範囲として読み込むコマンドがありません。代わりに選択範囲メニューの「選択範囲を読み込む」で保存済み選択範囲を復元します
+No commands to bind	割り当てるコマンドがありません
+No document	ドキュメントなし
+No document is open	開いているドキュメントがありません
+No export selected	書き出しが選択されていません
+No faces listed for this family name	このファミリー名にはスタイルがありません
+No frames yet. Add frame makes an _a_ layer: each one is a frame, bottom first.	フレームはまだありません。「フレームを追加」で _a_ レイヤーを作成します。各レイヤーが 1 フレームで、一番下から順になります。
+No guide crosses the canvas	カンバスを横切るガイドがありません
+No installed family matches	一致するインストール済みファミリーがありません
+No layer comps yet. New Layer Comp records every layer's visibility, position and appearance.	レイヤーカンプはまだありません。新規レイヤーカンプで各レイヤーの表示状態、位置、外観を記録します。
+No layers yet. Add one with the + button below.	レイヤーはまだありません。下の + ボタンで追加してください。
+No layers yet: each top-level layer gets a bar on the timeline.	レイヤーはまだありません。最上位の各レイヤーにタイムラインのバーが付きます。
+No notes yet. Click the canvas with the Note tool (I), or New Note pins one at the centre of the view; notes are saved with the document and never exported.	メモはまだありません。メモツール（I）でカンバスをクリックするか、「新規メモ」で表示の中央に貼り付けます。メモはドキュメントと一緒に保存され、書き出されることはありません。
+No open document is the same size as this one	これと同じサイズの開いているドキュメントはありません
+No paragraph styles yet. New records the active text layer's alignment, indents and spacing.	段落スタイルはまだありません。新規で、アクティブなテキストレイヤーの揃え、インデント、間隔を記録します。
+No pattern chosen — the overlay paints nothing.	パターンが選択されていません。オーバーレイは何も描画しません。
+No patterns are defined yet	定義済みのパターンはまだありません
+No profile file was chosen	プロファイルファイルが選択されていません
+No recent files yet	最近使用したファイルはまだありません
+No selection has been saved	保存された選択範囲はありません
+No source recorded for this object	このオブジェクトのソースは記録されていません
+No stop selected	分岐点が選択されていません
+No style presets yet. Define one with Layer > Layer Style > Define Style Preset, or add a Photoshop library with File > Open (.asl).	スタイルプリセットはまだありません。「レイヤー > レイヤースタイル > スタイルプリセットを定義」で定義するか、「ファイル > 開く」（.asl）で Photoshop のライブラリを追加してください。
+No styles yet. The + button saves the active layer's style; File > Open loads an .asl style library.	スタイルはまだありません。+ ボタンでアクティブなレイヤーのスタイルを保存し、「ファイル > 開く」で .asl スタイルライブラリを読み込みます。
+No such command	そのようなコマンドはありません
+No tool presets yet. New Tool Preset saves the active tool with its current options.	ツールプリセットはまだありません。新規ツールプリセットで、アクティブなツールを現在のオプションとともに保存します。
+Noise	ノイズ
+None	なし
+Normal	通常
+Normal Map…	法線マップ…
+Not a hex colour	16 進数のカラーではありません
+Not installed — shaping with	未インストール — 次のフォントで組版中：
+Not saved yet	未保存
+Notes	メモ
+Nothing has changed	何も変更されていません
+Nothing in this submenu is available right now	現在、このサブメニューで使用できる項目はありません
+Nothing is left to learn the background from: paint over it with the background brush.	背景を学習する対象が残っていません。背景ブラシで塗ってください。
+Nothing to measure yet — paint or place something on this layer first	まだ計測するものがありません。先にこのレイヤーに描画するか配置してください
+Nothing to preview.	プレビューするものがありません。
+OK	OK
+Oblique	斜体
+Off: the wheel pans the view and Ctrl+wheel zooms	オフ：ホイールで表示をスクロールし、Ctrl+ホイールでズームします
+Offset…	スクロール…
+Oil Paint…	油彩…
+One page holding the flattened image; no vector content.	統合した画像を含む 1 ページです。ベクトルコンテンツはありません。
+Onion skin	オニオンスキン
+Only English is available in this build	このビルドでは英語のみ使用できます
+Only a mask channel can be loaded as a selection here	ここで選択範囲として読み込めるのはマスクチャンネルだけです
+Only web-safe colours	Web セーフカラーのみに制限
+Opacity	不透明度
+Opacity 10%	不透明度 10%
+Opacity 100%	不透明度 100%
+Opacity 20%	不透明度 20%
+Opacity 30%	不透明度 30%
+Opacity 40%	不透明度 40%
+Opacity 50%	不透明度 50%
+Opacity 60%	不透明度 60%
+Opacity 70%	不透明度 70%
+Opacity 80%	不透明度 80%
+Opacity 90%	不透明度 90%
+Opacity jitter	不透明度のジッター
+Opacity key	不透明度のキー
+Opacity must be between 0% and 100%	不透明度は 0%〜100% にしてください
+Opacity scales the layer and its effects; Fill scales the layer's own pixels only.	不透明度はレイヤーとその効果を、塗りはレイヤー自身のピクセルだけを調整します。
+Opacity stops sit above the bar, colour stops below it.	不透明度の分岐点はバーの上、カラーの分岐点は下にあります。
+Open	開く
+Open .ABR…	.ABR を開く…
+Open .ACO…	.ACO を開く…
+Open .ASL…	.ASL を開く…
+Open Recent	最近使用したファイルを開く
+Open a document first	先にドキュメントを開いてください
+Open a document to animate it.	アニメーションにするドキュメントを開いてください。
+Open a document to apply styles to its layers.	レイヤーにスタイルを適用するドキュメントを開いてください。
+Open a document to insert glyphs into its text.	テキストに字形を挿入するドキュメントを開いてください。
+Open a document to keep text styles in it.	テキストスタイルを保持するドキュメントを開いてください。
+Open a document to lay guides out on it.	ガイドをレイアウトするドキュメントを開いてください。
+Open a document to pin notes on it.	メモを貼るドキュメントを開いてください。
+Open a document to record layer comps.	レイヤーカンプを記録するドキュメントを開いてください。
+Open a document to see its CSS	ドキュメントを開くと CSS が表示されます
+Open a document to see its facts.	ドキュメントを開くと情報が表示されます。
+Open a document to see its histogram	ドキュメントを開くとヒストグラムが表示されます
+Open a document to see its history	ドキュメントを開くとヒストリーが表示されます
+Open a document to see its properties	ドキュメントを開くとプロパティが表示されます
+Open another document, or add another pixel layer, to match its colours.	カラーを合わせるには、別のドキュメントを開くか、別のピクセルレイヤーを追加してください。
+Open as	開く形式
+Open editor…	エディターを開く…
+Open the Adjustments panel	色調補正パネルを開く
+Open…	開く…
+Operation	操作
+Orange	オレンジ
+Other	その他
+Out of gamut	色域外
+Outer Glow	光彩（外側）
+Outer Glow…	光彩（外側）…
+Outline the path	パスの境界線を描く
+Output	出力
+Output channel	出力チャンネル
+Outside	外側
+Overlay	オーバーレイ
+PBM…	PBM…
+PDF Presentation…	PDF プレゼンテーション…
+PDF…	PDF…
+PGM…	PGM…
+PNG…	PNG…
+PPM…	PPM…
+Page	ページ
+Page {n}	{n} ページ
+Page {page} opens at {w} x {h} px	{page} ページは {w} x {h} px で開きます
+Pages	ページ
+Paint	ペイント
+Paint Filter Mask	フィルターマスクをペイント
+Paint Mask	マスクをペイント
+Paint over the part to keep with the foreground brush first.	先に、残す部分を描画色のブラシで塗ってください。
+Paint over what to keep and over what to drop	残す部分と除く部分を塗ってください
+Paint the inside of the path	パスの内側を塗りつぶす
+Painting	ペイント
+Paints a band along the active selection's border.	アクティブな選択範囲の境界に沿って帯を塗ります。
+Pair kerning	ペアカーニング
+Palette	パレット
+Paragraph	段落
+Paragraph Style	段落スタイル
+Paragraph Styles	段落スタイル
+Particles…	パーティクル…
+Paste	ペースト
+Paste Into	選択範囲内へペースト
+Paste Layer Style	レイヤースタイルをペースト
+Paste Outside	選択範囲外へペースト
+Paste Special	特殊ペースト
+Paste in Place	同じ位置にペースト
+Path	パス
+Path Blur…	パスぼかし…
+Path editing lives in the Paths panel	パスの編集はパスパネルで行います
+Paths	パス
+Pattern	パターン
+Pattern Dither	パターンディザ
+Pattern Overlay	パターンオーバーレイ
+Pattern Overlay…	パターンオーバーレイ…
+Pattern Preview	パターンプレビュー
+Pattern…	パターン…
+Pencil 1px	鉛筆 1 px
+Percent	パーセント
+Perceptual	知覚的
+Perspective	遠近法
+Perspective Warp	遠近法ワープ
+Photo Filter	レンズフィルター
+Photo Filter…	レンズフィルター…
+Photography	写真
+Picas	パイカ
+Pick a filter; it applies at its default settings.	フィルターを選んでください。初期設定で適用されます。
+Pin Light	ピンライト
+Pinch…	つまむ…
+Pixel Grid	ピクセルグリッド
+Pixel dimensions	ピクセル数
+Pixel mask	ピクセルマスク
+Pixelate	ピクセレート
+Pixels	ピクセル
+Place Embedded…	埋め込みを配置…
+Place Linked…	リンクを配置…
+Play	再生
+Play from step	このステップから再生
+Play selection	選択範囲を再生
+Play this step (unchecked steps are passed over)	このステップを再生（チェックのないステップはスキップ）
+Plays a recorded Action on every image in the source folder and saves each result to the destination.	記録したアクションをソースフォルダーの各画像で再生し、各結果を保存先に保存します。
+Pointer	ポインター
+Pointillize…	点描…
+Points	ポイント
+Polar Coordinates…	極座標…
+Position	位置
+Position is locked — unlock it in the Layers panel to move or resize	位置がロックされています。移動やサイズ変更をするには、レイヤーパネルでロックを解除してください
+Position key	位置のキー
+Posterize	ポスタリゼーション
+Posterize…	ポスタリゼーション…
+Precise Cursor	正確なカーソル
+Preferences…	環境設定…
+Preserve Transparency	透明部分の保持
+Preserve luminosity	輝度を保持
+Preset Manager…	プリセットマネージャー…
+Press a key…	キーを押してください…
+Pressure controls flow	筆圧で流量を制御
+Pressure controls size	筆圧でサイズを制御
+Preview	プレビュー
+Preview against	プレビューの背景
+Preview is off.	プレビューはオフです。
+Previewed on the active layer; applied to its pixels as one undoable step.	アクティブなレイヤーでプレビューし、1 回の取り消し可能なステップでそのピクセルに適用します。
+Previous Blend Mode	前の描画モード
+Print Size	プリントサイズ
+Print as PDF…	PDF としてプリント…
+Print size	プリントサイズ
+Prints the grayscale image through one to four inks, each through its own curve. The inks are applied to the pixels when the mode changes.	グレースケール画像を 1〜4 色のインキで、それぞれ独自のカーブを通してプリントします。モードを変更するとインキがピクセルに適用されます。
+Print…	プリント…
+Profile	プロファイル
+Profile from File…	ファイルからプロファイル…
+Profiles are assigned to RGB documents	プロファイルは RGB ドキュメントに指定します
+Profiles are converted between in RGB documents	プロファイル間の変換は RGB ドキュメントで行います
+Profiles belong to RGB documents; convert to RGB first	プロファイルは RGB ドキュメントのものです。先に RGB に変換してください
+Proof Colors	校正カラー
+Properties	プロパティ
+Puppet Warp	パペットワープ
+Purge	メモリをクリア
+Purple	パープル
+Quadtone	クワッドトーン
+Quality	画質
+Quick Export Layer as PNG…	レイヤーを PNG としてクイック書き出し…
+Quit	終了
+RGB Color	RGB カラー
+Radial Blur…	ぼかし（放射状）…
+Radius	半径
+Radius (px)	半径（px）
+Range	範囲
+Raster Studio Help	Raster Studio ヘルプ
+Rasterize	ラスタライズ
+Reassign anyway	それでも割り当て直す
+Recent	最近使用
+Record	記録
+Record Source Size	ソースサイズを記録
+Record an Action in the Actions panel first	先にアクションパネルでアクションを記録してください
+Record an edit, then replay the whole sequence on any document with at least as many layers.	編集を記録し、同じ数以上のレイヤーがある任意のドキュメントで一連の操作全体を再生します。
+Record into set	セットに記録
+Recording: every edit is captured until Stop	記録中：停止するまですべての編集が記録されます
+Red	レッド
+Redefine the selected {noun} from the active text layer, restyling every layer that uses it	選択した{noun}をアクティブなテキストレイヤーから再定義し、それを使うすべてのレイヤーのスタイルを更新します
+Redo	やり直し
+Reds	レッド系
+Reduce Colors	カラー数を減らす
+Reduce Colors changed nothing: the layer already uses only colours of that palette	カラー数を減らすでは何も変わりませんでした。レイヤーは既にそのパレットのカラーだけを使っています
+Reduce Colors: the layer now uses at most {n} colours	カラー数を減らす：レイヤーのカラー数は最大 {n} 色になりました
+Reduce Colors…	カラー数を減らす…
+Reduce Noise…	ノイズを軽減…
+Reduces the grayscale image to pure black and white. The layers are flattened into one, over white.	グレースケール画像を純粋な白と黒にします。レイヤーは白の上で 1 つに統合されます。
+Reference point: Bottom	基準点：下
+Reference point: Bottom Left	基準点：左下
+Reference point: Bottom Right	基準点：右下
+Reference point: Centre	基準点：中央
+Reference point: Left	基準点：左
+Reference point: Right	基準点：右
+Reference point: Top	基準点：上
+Reference point: Top Left	基準点：左上
+Reference point: Top Right	基準点：右上
+Refine	調整
+Refine Edge…	境界線を調整…
+Refine Mask	マスクを調整
+Refine Mask…	マスクを調整…
+Regular	レギュラー
+Relative	相対
+Relative Colorimetric	相対的な色域を維持
+Release Clipping Mask	クリッピングマスクを解除
+Release Notes	リリースノート
+Relink to File…	ファイルに再リンク…
+Remove Black Matte	黒マット削除
+Remove Color Fringe	カラーフリンジを除去
+Remove Color Fringe…	カラーフリンジを除去…
+Remove Fringe	フリンジ削除
+Remove White Matte	白マット削除
+Remove export	書き出しを削除
+Remove this instance of the effect	この効果のインスタンスを削除
+Remove this shortcut	このショートカットを削除
+Rename Layer	レイヤー名を変更
+Rename Layer…	レイヤー名を変更…
+Rename set	セット名を変更
+Render	描画
+Rendering the preview…	プレビューをレンダリング中…
+Repeat…	繰り返し…
+Replace Color	色の置き換え
+Replace Color…	色の置き換え…
+Replace Contents	コンテンツを置き換え
+Replace Contents…	コンテンツを置き換え…
+Replace existing guides	既存のガイドを置き換え
+Replay	もう一度再生
+Report an Issue	問題を報告
+Reselect	再選択
+Reset	リセット
+Reset Transform	変形をリセット
+Reset View Rotation	表示の回転をリセット
+Reset all shortcuts	すべてのショートカットをリセット
+Resize Canvas	カンバスサイズを変更
+Resize Images	画像をリサイズ
+Resize Images…	画像をリサイズ…
+Resolution	解像度
+Resolution must be greater than zero	解像度は 0 より大きくしてください
+Restore Layer	レイヤーを復元
+Result	結果
+Return this tool to its defaults	このツールを初期設定に戻す
+Reveal All	すべての領域を表示
+Reveal Selection	選択範囲を表示
+Reverse	反転
+Revert	復帰
+Rewrites every pixel layer's numbers so the picture looks the same under the destination profile, as one undo step.	各ピクセルレイヤーの値を書き換え、変換後のプロファイルで同じに見えるようにします。1 回の取り消しステップです。
+Right	右
+Right (narrow)	右（狭い）
+Right (wide)	右（広い）
+Right Edges	右端
+Right indent	右インデント
+Right-click a swatch to remove it	スウォッチを右クリックすると削除します
+Ring	リング
+Ripple…	波紋…
+Rise	上昇
+Rotate	回転
+Rotate 180°	180° 回転
+Rotate 90° Clockwise	90° 回転（時計回り）
+Rotate 90° Counter Clockwise	90° 回転（反時計回り）
+Rotate Canvas	画像の回転
+Rotate the active layer so the measured line is level (Enter)	計測した線が水平になるようにアクティブなレイヤーを回転（Enter）
+Rotates the canvas and every layer. Right angles are pixel-exact; other angles resample.	カンバスとすべてのレイヤーを回転します。直角はピクセル単位で正確で、その他の角度は再サンプルされます。
+Rotation key	回転のキー
+Round	丸型
+Round (computed)	丸型（計算）
+Rounded Steps	丸めたステップ
+Roundness jitter	真円率のジッター
+Rows	行
+Rulers	定規
+Run	実行
+SVG…	SVG…
+Same Radii	半径を統一
+Sample a colour from the canvas	カンバスからカラーをサンプル
+Sample radius	サンプル半径
+Sampled	サンプル
+Sampled colour	サンプルしたカラー
+Sampled tip not loaded; painting round	サンプルした先端が読み込まれていません。円形で描画します
+Satin…	サテン…
+Saturation	彩度
+Saturation jitter	彩度のジッター
+Save	保存
+Save As	別名で保存
+Save As…	別名で保存…
+Save Brush	ブラシを保存
+Save Selection	選択範囲を保存
+Save Selection…	選択範囲を保存…
+Save actions	アクションを保存
+Save as PSD…	PSD として保存…
+Save current brush	現在のブラシを保存
+Save selection as channel	選択範囲をチャンネルとして保存
+Saves every image in the source folder to the destination in another format, quality or size.	ソースフォルダーの各画像を、別の形式、画質またはサイズで保存先に保存します。
+Scale	拡大・縮小
+Scale %	比率 %
+Scale Effects	効果を拡大・縮小
+Scale Effects…	効果を拡大・縮小…
+Scale H	水平比率
+Scale V	垂直比率
+Scale key	拡大・縮小のキー
+Scale:	比率：
+Scales every size and distance of the active layer's style as one undo step.	アクティブなレイヤーのスタイルのすべてのサイズと距離を 1 回の取り消しステップで拡大・縮小します。
+Scaling by 100% changes nothing	100% での拡大・縮小では何も変わりません
+Scratch directory	仮想記憶ディスク
+Screen	スクリーン
+Screen, print and social presets	画面、印刷、ソーシャル用のプリセット
+Script…	スクリプト…
+Scroll wheel zooms instead of scrolling	ホイールでスクロールせずにズーム
+Search Commands…	コマンドを検索…
+Search layers	レイヤーを検索
+Search layers by name	名前でレイヤーを検索
+Select	選択範囲
+Select All	すべてを選択
+Select Bottom Layer	最下層のレイヤーを選択
+Select Layer Above	上のレイヤーを選択
+Select Layer Below	下のレイヤーを選択
+Select Linked Layers	リンクしたレイヤーを選択
+Select None	選択しない
+Select Top Layer	最上層のレイヤーを選択
+Select a layer first	先にレイヤーを選択してください
+Select a layer to see its CSS	レイヤーを選択すると CSS が表示されます
+Select a layer to see its properties	レイヤーを選択するとプロパティが表示されます
+Select a layer: a click on a style applies it to the active layer.	レイヤーを選択してください。スタイルをクリックするとアクティブなレイヤーに適用されます。
+Select a path first	先にパスを選択してください
+Select a text layer, or type into one: a click inserts the glyph at the caret.	テキストレイヤーを選択するか入力してください。クリックすると字形がキャレット位置に挿入されます。
+Select every pixel near one colour	1 つのカラーに近いすべてのピクセルを選択
+Selection	選択範囲
+Selection Edges	選択範囲の境界線
+Selection: white is replaced, black is kept.	選択範囲：白は置き換えられ、黒は保持されます。
+Selective Color	特定色域の選択
+Selective Color…	特定色域の選択…
+Selects a band of this width along the selection's edge	選択範囲の境界に沿ってこの幅の帯を選択します
+Semi Condensed	セミコンデンス
+Semi Expanded	セミエキスパンド
+Semibold	セミボールド
+Send Backward	背面へ
+Send to Back	最背面へ
+Separate documents	別々のドキュメント
+Separate keywords with commas or semicolons.	キーワードはカンマまたはセミコロンで区切ります。
+Sepia	セピア
+Set	セット
+Set the History Brush to paint from this state (the marked row)	ヒストリーブラシのソースをこの状態にする（マークした行）
+Shadows	シャドウ
+Shadows/Highlights	シャドウ・ハイライト
+Shadows/Highlights…	シャドウ・ハイライト…
+Shape	シェイプ
+Shape Dynamics	シェイプ
+Shape Mosaic…	シェイプモザイク…
+Sharpen	シャープ
+Sharpen Edges	シャープ（輪郭のみ）
+Sharpen More	シャープ（強）
+Sharpest, with a little ringing on hard edges.	最もシャープで、硬いエッジに少しリンギングが出ます。
+Shear…	シアー…
+Shift Edge	エッジをシフト
+Show	表示
+Show / Hide Layer	レイヤーの表示 / 非表示
+Show / hide layer	レイヤーの表示 / 非表示
+Show / hide the effects list	効果リストの表示 / 非表示
+Show / hide the layer style	レイヤースタイルの表示 / 非表示
+Show / hide this channel	このチャンネルの表示 / 非表示
+Show / hide this effect	この効果の表示 / 非表示
+Show / hide this path	このパスの表示 / 非表示
+Show / hide this smart filter	このスマートフィルターの表示 / 非表示
+Show Layers	レイヤーを表示
+Show every layer	すべてのレイヤーを表示
+Show or hide the position, size and alignment fields	位置、サイズ、整列のフィールドを表示または非表示
+Show or hide the recorded steps	記録したステップを表示または非表示
+Show or hide the set's actions	セットのアクションを表示または非表示
+Show this alpha channel alone in grayscale and paint into it; click again to store it	このアルファチャンネルだけをグレースケールで表示してペイントします。もう一度クリックすると保存します
+Sides	辺の数
+Similar	近似色を選択
+Size	サイズ
+Size jitter	サイズのジッター
+Skew	ゆがみ
+Skewness	歪度
+Slice Options	スライスオプション
+Slice Options…	スライスオプション…
+Slices	スライス
+Slices from Guides	ガイドからスライス
+Slices…	スライス…
+Small	小
+Small Caps	スモールキャップス
+Smart Blur…	ぼかし（詳細）…
+Smart Filter	スマートフィルター
+Smart Filters	スマートフィルター
+Smart Guides	スマートガイド
+Smart Object	スマートオブジェクト
+Smart Sharpen…	スマートシャープ…
+Smart filter mask: click to paint on it	スマートフィルターマスク：クリックしてペイント
+Smooth	滑らかに
+Smooth Selection	選択範囲を滑らかに
+Smooth draws grey-scale edges; None draws hard, aliased edges. The glyph scaler has one smooth mode, so Sharp, Crisp and Strong are not offered.	「滑らかに」はグレースケールのエッジを描き、「なし」は硬いジャギーのエッジを描きます。字形スケーラーには滑らかなモードが 1 つしかないため、「シャープ」「鮮明」「強く」はありません。
+Smooth…	滑らかに…
+Snap	スナップ
+Snap To	スナップ先
+Soft Light	ソフトライト
+Soft Round 100	ソフト円ブラシ 100
+Soft Round 24	ソフト円ブラシ 24
+Soft and cheap. Good for a small enlargement.	ソフトで軽い処理です。小さな拡大に向いています。
+Softer Brush	柔らかいブラシ
+Solarize	ソラリゼーション
+Solid Color…	べた塗り…
+Solidity	濃度
+Source	ソース
+Source 1	ソース 1
+Source 2	ソース 2
+Source Space	変換前のカラースペース
+Spectrum	スペクトル
+Spherize…	球面…
+Spin Blur…	スピンぼかし…
+Splits the active layer into Linear Light detail layers over a residual, finest on top; together they recomposite to the layer.	アクティブなレイヤーを、残差の上に重ねたリニアライトのディテールレイヤー（最も細かいものが一番上）に分割します。合わせると元のレイヤーに戻ります。
+Spot Channel	スポットカラーチャンネル
+Spot Channel Options…	スポットカラーチャンネルオプション…
+Spot channel: composited over the image as its ink	スポットカラーチャンネル：インキとして画像の上に合成されます
+Square	正方形
+Squeeze	絞り込み
+Stack Mode	スタックモード
+Stamp Visible	表示レイヤーを結合したスタンプ
+Standard	標準
+Standard Deviation	標準偏差
+Standard ligatures	欧文標準合字
+Step Backward	1 段階戻る
+Step Forward	1 段階進む
+Stop	停止
+Straighten Layer	レイヤーの角度補正
+Strength	強さ
+Stroke	境界線
+Stroke path with the foreground colour at the brush size, on a new shape layer	新規シェイプレイヤーで、描画色とブラシサイズでパスの境界線を描く
+Stroke…	境界線を描く…
+Style	スタイル
+Styles	スタイル
+Styles enabled	スタイル有効
+Stylize	表現手法
+Sub	下付き
+Subject	被写体
+Subtract	減算
+Subtract Front Shape	前面シェイプを削除
+Subtract from Selection	現在の選択範囲から一部削除
+Summation	合計
+Sunset	夕焼け
+Super	上付き
+Superscript raises and shrinks the text; subscript lowers and shrinks it.	上付きは文字を上げて縮小し、下付きは下げて縮小します。
+Surface Blur…	ぼかし（表面）…
+Swap colours  (X)	描画色と背景色を入れ替え  (X)
+Swap foreground and background (X)	描画色と背景色を入れ替え (X)
+Swatches	スウォッチ
+TGA…	TGA…
+TIF…	TIF…
+Templates	テンプレート
+Text	テキスト
+Text overflows the box	テキストがボックスからあふれています
+Text replacement	テキストの置換
+Texture Dilation…	テクスチャの拡張…
+That channel is no longer in the document	そのチャンネルはもうドキュメント内にありません
+That file could not be used:	そのファイルは使用できませんでした：
+The CSV ends inside a quoted field	CSV が引用符で囲まれたフィールドの途中で終わっています
+The CSV has a header but no data sets	CSV にヘッダーはありますがデータセットがありません
+The CSV is empty	CSV が空です
+The CSV names a variable that is not defined:	CSV に定義されていない変数名があります：
+The active layer has no layer style to save	アクティブなレイヤーに保存するレイヤースタイルがありません
+The active layer is not in the document	アクティブなレイヤーがドキュメントにありません
+The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	アクティブなスマートオブジェクトにソースフォルダーの各画像を順に表示し、各結果を PNG として保存先フォルダーに書き出します。
+The amount must be within	値は次の範囲内にしてください
+The angle must be a finite number of degrees	角度は有限の度数にしてください
+The balanced default for photographs.	写真向けのバランスのとれた初期設定です。
+The canvas grows to fit the rotated image.	回転した画像が収まるようにカンバスが大きくなります。
+The canvas must be at least 1 x 1 pixel	カンバスは 1 x 1 ピクセル以上にしてください
+The cell size must be 2 to 200 pixels	セルサイズは 2〜200 ピクセルにしてください
+The cut is empty: paint more of the part to keep.	切り抜き結果が空です。残す部分をもっと塗ってください。
+The destination is the profile the document already has	変換後のプロファイルはドキュメントの現在のプロファイルと同じです
+The destination must be another folder than the source.	保存先はソースとは別のフォルダーにしてください。
+The document has no layers	ドキュメントにレイヤーがありません
+The document is already in {name}	ドキュメントは既に {name} です
+The document is already tagged with this profile	ドキュメントには既にこのプロファイルが指定されています
+The document is already tagged {name}	ドキュメントには既に {name} が指定されています
+The document's own profile: {error}	ドキュメント自身のプロファイル：{error}
+The first {shown} of {n} pages are listed; a longer file opens only those.	{n} ページのうち最初の {shown} ページを表示しています。それより長いファイルではこれらだけが開きます。
+The image has no opaque pixels to count	画像に数えられる不透明ピクセルがありません
+The ink is laid over the image; the selection, if there is one, is where it prints.	インキは画像の上に重ねられます。選択範囲がある場合はそこに印刷されます。
+The last stop has no segment after it.	最後の分岐点の後にはセグメントがありません。
+The layer has no pixels to cut.	レイヤーに切り抜くピクセルがありません。
+The layer's pixels are locked	レイヤーのピクセルはロックされています
+The list is empty	リストは空です
+The margins and gutters leave no room for a column or a row	マージンと間隔で、列や行の余地がありません
+The margins and gutters leave no room for a column or a row.	マージンと間隔で、列や行の余地がありません。
+The name cannot be empty	名前は空にできません
+The name has not changed	名前は変わっていません
+The name is the file File > Export > Slices writes this slice as. The URL and Alt Tag go into the HTML page it writes beside the images.	名前は、ファイル > 書き出し > スライスがこのスライスを書き込むファイル名です。URL と Alt タグは画像と一緒に書き出す HTML ページに入ります。
+The new canvas is smaller — content outside it will be clipped.	新しいカンバスの方が小さいため、はみ出した内容は切り取られます。
+The next text layer the Type tool creates starts with this style.	文字ツールで次に作成するテキストレイヤーはこのスタイルで始まります。
+The panel is already on this side	パネルは既にこちら側にあります
+The path encloses no pixel of the canvas	パスがカンバスのピクセルを 1 つも囲んでいません
+The position must be a finite number	位置は有限の数値にしてください
+The preview runs the real brush engine.	プレビューは実際のブラシエンジンで描画します。
+The resolution must be 1 to 2400 ppi	解像度は 1〜2400 ppi にしてください
+The resolution must be {min} to {max} dpi	解像度は {min}〜{max} dpi にしてください
+The rulers and the size readouts use this unit	定規とサイズの表示でこの単位を使用します
+The scale must be between 1% and 1000%	比率は 1%〜1000% にしてください
+The selection is kept with the document under this name	選択範囲はこの名前でドキュメントとともに保存されます
+The source and destination must be different folders	ソースと保存先は別のフォルダーにしてください
+The steps this snapshot named have been discarded	このスナップショットが指していたステップは破棄されました
+The table needs a name	テーブルには名前が必要です
+The warp has not changed	ワープは変わっていません
+There are no guides to slice along	スライスに使えるガイドがありません
+There are no slices to clear	消去するスライスがありません
+There is no history to clear	消去するヒストリーがありません
+There is no live selection to combine with	組み合わせる選択範囲がありません
+These are matrix-shaper profiles, which carry no perceptual or saturation tables: those two intents convert as Relative Colorimetric.	これらは知覚的テーブルや彩度テーブルを持たないマトリックス型プロファイルです。この 2 つのマッチング方法は相対的な色域を維持として変換されます。
+Thin	シン
+Third-party notices	サードパーティに関する通知
+This Layer	このレイヤー
+This adjustment has no panel controls	この調整にはパネルのコントロールがありません
+This adjustment has no settings.	この調整には設定がありません。
+This build keeps channels on layers; it has no free-standing alpha channels yet	このビルドではチャンネルをレイヤーに保持します。独立したアルファチャンネルはまだありません
+This effect is off. Tick it in the list to edit it.	この効果はオフです。編集するにはリストでチェックを入れてください。
+This format cannot store CMYK, so the document is written as RGB. Choose JPEG or TIFF for CMYK.	この形式は CMYK を保存できないため、ドキュメントは RGB で書き込まれます。CMYK には JPEG または TIFF を選んでください。
+This format could not be previewed.	この形式はプレビューできませんでした。
+This format has no metadata slot: nothing is embedded	この形式にはメタデータの格納場所がありません。何も埋め込まれません
+This format has no palette, so the indexed colours are written as RGB. Choose PNG or GIF for the palette.	この形式にはパレットがないため、インデックスカラーは RGB で書き込まれます。パレットには PNG または GIF を選んでください。
+This format stores 8 bits per channel	この形式はチャンネルあたり 8 bit で保存します
+This is a Lab document. No format here stores Lab, so it is converted to RGB on export.	これは Lab ドキュメントです。ここには Lab を保存できる形式がないため、書き出し時に RGB に変換されます。
+This layer has no mask	このレイヤーにはマスクがありません
+This panel is already at the bottom of its dock	このパネルは既にドックの一番下にあります
+This panel is already at the top of its dock	このパネルは既にドックの一番上にあります
+This tool has no options	このツールにはオプションがありません
+This tool is already at its defaults	このツールは既に初期設定です
+This window cannot read screen pixels, so the eyedropper is unavailable	このウィンドウは画面のピクセルを読み取れないため、スポイトは使用できません
+This works on a pixel layer; the active layer is a {kind}	これはピクセルレイヤーで動作します。アクティブなレイヤーは{kind}です
+This works on an 8-bit document	これは 8 bit ドキュメントで動作します
+This works on an RGB document	これは RGB ドキュメントで動作します
+Threshold	2 階調化
+Threshold…	2 階調化…
+Thumbnail Size	サムネールサイズ
+Thumbnail size	サムネールのサイズ
+Thumbnails by Document	ドキュメント別サムネール
+Thumbnails by Layer	レイヤー別サムネール
+Tiles/List	タイル/リスト
+Tiles…	タイル…
+Tilt-Shift…	チルトシフト…
+Timeline	タイムライン
+Tint	着色
+Tint hue	着色の色相
+Tint saturation	着色の彩度
+To canvas	カンバスへ
+Toggle Link	リンクを切り替え
+Tonal width	階調の幅
+Tone	トーン
+Tone and Detail	トーンとディテール
+Tool Presets	ツールプリセット
+Top	上
+Top Edges	上端
+Top Left	左上
+Top Left Pixel Color	左上のピクセルの色
+Top Right	右上
+Top left	左上
+Top right	右上
+Trace Contour…	輪郭のトレース…
+Traces the active layer's colours into shape layers, one per colour.	アクティブなレイヤーのカラーを、カラーごとに 1 つのシェイプレイヤーにトレースします。
+Transform	変形
+Transform Layer	レイヤーを変形
+Transform Selection	選択範囲を変形
+Transparency	透明度
+Transparent Pixels	透明ピクセル
+Trim Away	トリミングする部分
+Trim…	トリミング…
+Tritone	トライトーン
+Turn on Resample to change the pixel count.	ピクセル数を変えるには「再サンプル」をオンにしてください。
+Twirl…	渦巻き…
+Twist	ねじれ
+Two variables share a name	2 つの変数が同じ名前です
+Type	文字
+Type a zoom level	ズームレベルを入力
+Type is edited in Character and Paragraph	文字は文字パネルと段落パネルで編集します
+Type tool defaults	文字ツールの初期設定
+UI scale	UI の拡大率
+URL	URL
+US Letter	US レター
+Ultra Condensed	ウルトラコンデンス
+Ultra Expanded	ウルトラエキスパンド
+Underlying Layer	下になっているレイヤー
+Undo	取り消し
+Ungroup Layers	レイヤーのグループ解除
+Uniform	均等
+Unite Shapes	シェイプを結合
+Units	単位
+Unmake Frames	フレームを解除
+Unsaved changes	未保存の変更
+Unsharp Mask…	アンシャープマスク…
+Update the applied comp from the layers	適用中のカンプをレイヤーから更新
+Use Black Point Compensation	黒点の補正を使用
+Use global light	包括光源を使用
+Using:	使用中：
+Vanishing Point…	消点…
+Variables	変数
+Variance	分散
+Vector Mask	ベクトルマスク
+Vector density	ベクトルの濃度
+Vector enabled	ベクトル有効
+Vector feather	ベクトルのぼかし
+Vector invert	ベクトルを反転
+Vector mask	ベクトルマスク
+Vectorize	ベクトル化
+Vectorize Bitmap	ビットマップをベクトル化
+Vectorize Bitmap…	ビットマップをベクトル化…
+Vertical Centers	垂直方向中央
+Vertical Distortion	垂直方向の歪み
+Vertical center guide	垂直方向の中央ガイド
+Vertical scale, in percent: stretches the glyphs about the baseline; leading is unchanged	垂直比率（%）：ベースラインを基準に字形を伸縮します。行送りは変わりません
+Vertically	垂直方向
+Vibrance	自然な彩度
+Vibrance…	自然な彩度…
+View	表示
+Violet	バイオレット
+Visibility	表示
+Visible adjustment layers	表示中の調整レイヤー
+Vivid Light	ビビッドライト
+W	W
+WEBP…	WEBP…
+Waiting for the composite…	合成画像を待機中…
+Warm	暖色
+Warp	ワープ
+Warp Style	ワープスタイル
+Warp Text	ワープテキスト
+Warp Text…	ワープテキスト…
+Wave	波形
+Wavelet Decompose	ウェーブレット分解
+Wavelet Decompose splits into 2 to 7 scales	ウェーブレット分解は 2〜7 スケールに分割します
+Wavelet Decompose works on an sRGB document	ウェーブレット分解は sRGB ドキュメントで動作します
+Wavelet Decompose: the layer has no pixels	ウェーブレット分解：レイヤーにピクセルがありません
+Wavelet Decompose: {n} detail layers over a residual; the source layer is hidden	ウェーブレット分解：残差の上に {n} 個のディテールレイヤー。ソースレイヤーは非表示です
+Wavelet Decompose…	ウェーブレット分解…
+Wave…	波形…
+Web (216)	Web（216）
+WebP (lossless)	WebP（可逆）
+WebP (lossy)	WebP（非可逆）
+Weight	太さ
+White	ホワイト
+White to Black	白から黒に
+Whites	白レベル
+Width	幅
+Width and height must be at least 1 pixel	幅と高さは 1 ピクセル以上にしてください
+Width must be between 1 and 250 pixels	幅は 1〜250 ピクセルにしてください
+Width to 110%	幅を 110% に
+Width to 125%	幅を 125% に
+Width to 80%	幅を 80% に
+Width to 90%	幅を 90% に
+Window	ウィンドウ
+Wind…	風…
+With Handles	ハンドル付き
+Work Path	作業用パス
+Workspace	ワークスペース
+Wrap to box	ボックスで折り返す
+Writes the visible adjustment layers, applied to an identity lattice, as a 3D LUT (.cube).	表示中の調整レイヤーを恒等格子に適用し、3D LUT（.cube）として書き出します。
+Written as CMYK: a naive ink model, not an ICC press profile.	CMYK として書き込み：簡易なインキモデルで、ICC の印刷プロファイルではありません。
+Written as XMP into PNG, JPEG and TIFF files by Export As.	書き出し形式で PNG、JPEG、TIFF ファイルに XMP として書き込まれます。
+Written with the document's palette.	ドキュメントのパレットで書き込みました。
+Yellow	イエロー
+Yellow / Blue	イエロー / ブルー
+Yellows	イエロー系
+ZigZag…	ジグザグ…
+Zoom In	ズームイン
+Zoom Out	ズームアウト
+Zoom in	ズームイン
+Zoom out	ズームアウト
+Zoom to Selection	選択範囲にズーム
+a layer could not be rewritten	レイヤーを書き換えられませんでした
+before / after	前 / 後
+changed	変更済み
+content thumbnail — click to edit the layer's pixels	コンテンツのサムネール — クリックしてレイヤーのピクセルを編集
+dpi	dpi
+edits are aimed at this mask — right-click for view and mask options	編集はこのマスクが対象です — 右クリックで表示とマスクのオプション
+lines past the box	ボックスからはみ出した行
+mask off	マスクオフ
+mask thumbnail — click to edit the layer's mask	マスクのサムネール — クリックしてレイヤーのマスクを編集
+minutes (0 is off)	分（0 でオフ）
+no drop	ドロップ不可
+px	px
+records here	ここに記録
+skipped on play:	再生時にスキップ：
+the layers could not be added	レイヤーを追加できませんでした
+the profile cannot be transformed ({error})	プロファイルを変換できません（{error}）
+to	〜
+vector mask thumbnail — click to edit the vector mask	ベクトルマスクのサムネール — クリックしてベクトルマスクを編集
+{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time	{format}：タイムライン、{fps} fps で {frames} フレーム、{length} ms。各フレームはその時点のレイヤーを表示します
+{label} is not answered by this route	このルートは{label}に応答しません
+{label} was refused: {reason}	{label}は拒否されました：{reason}
+{name} Residual	{name} 残差
+{name} Scale {k}	{name} スケール {k}
+{name}: {n} pages	{name}：{n} ページ
+{n} slices from the guides ({cols} x {rows}); they replace the slices there were	ガイドから {n} 個のスライス（{cols} x {rows}）。既存のスライスを置き換えます
+{path} is a {space} profile; an RGB document takes an RGB profile	{path} は {space} プロファイルです。RGB ドキュメントには RGB プロファイルが必要です
+{path} is {len} bytes, larger than any colour profile	{path} は {len} バイトで、どのカラープロファイルよりも大きいです
+{reason}; this one is {space}	{reason}。このドキュメントは {space} です

@@ -907,7 +907,14 @@ impl DialogHost {
             // toggling the effect at its defaults. The dialog lists every
             // effect; the row clicked is just the way in, the same way
             // Photopea's Blending Options… is.
-            ui::menu::MenuAction::LayerStyle(_) => match layer_style_dialog(editor, false) {
+            ui::menu::MenuAction::LayerStyle(slot) => match layer_style_dialog(editor, false) {
+                // W16-D: on the page of the effect the row named (a Layers
+                // panel effect row's double-click, Layer ▸ Layer Style ▸ …).
+                Some(ActiveDialog::LayerStyle(mut dialog)) => {
+                    dialog.select(ui::panels::layers::w16::effect_kind(*slot));
+                    self.open(ActiveDialog::LayerStyle(dialog));
+                    true
+                }
                 Some(dialog) => {
                     self.open(dialog);
                     true

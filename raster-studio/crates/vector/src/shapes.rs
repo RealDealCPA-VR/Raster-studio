@@ -423,6 +423,301 @@ pub fn spiral(center: Point, radii: Point, inner: f64, turns: f64, clockwise: bo
     }
 }
 
+// ------------------------------------ W16-G: Photopea's parametric shapes ----
+
+/// W16-G: Photopea's parametric Arrow (the Parametric Shape tool's "Arrow",
+/// its `YC(2, ...)` outline): a shaft `weight` wide from `from` to `to`, a
+/// head at the start and/or the end `head_width` across and `head_length`
+/// along the axis, both in pixels, and `concavity_pct` (`-50..=50`) pulling
+/// the middle of each head's base towards its tip by two thirds of that
+/// percentage of the head length — Photopea's proportions exactly.
+///
+/// One closed polygon, emitted in positive orientation like every primitive
+/// here. Empty for non-finite input, a zero-length drag or a head no wider
+/// than nothing with no shaft either.
+#[allow(clippy::too_many_arguments)]
+pub fn parametric_arrow(
+    from: Point,
+    to: Point,
+    weight: f64,
+    head_width: f64,
+    head_length: f64,
+    concavity_pct: f64,
+    start: bool,
+    end: bool,
+) -> Path {
+    let finite = [weight, head_width, head_length, concavity_pct]
+        .iter()
+        .all(|v| v.is_finite());
+    if !from.is_finite() || !to.is_finite() || !finite {
+        return Path::new();
+    }
+    let (dx, dy) = (to.x - from.x, to.y - from.y);
+    let len = (dx * dx + dy * dy).sqrt();
+    if len <= 0.0 {
+        return Path::new();
+    }
+    let half = weight.max(0.0) * 0.5;
+    let head_len = head_length.max(0.0);
+    let half_head = head_width.max(0.0) * 0.5;
+    let back = head_len * (2.0 / 3.0) * concavity_pct.clamp(-50.0, 50.0) / 100.0;
+    let base = head_len - back;
+    // Local frame: `across` is x, `along` (from the start) is y.
+    let mut local: Vec<(f64, f64)> = Vec::new();
+    if start {
+        local.extend([
+            (-half, base),
+            (-half_head, head_len),
+            (0.0, 0.0),
+            (half_head, head_len),
+            (half, base),
+        ]);
+    } else if half == 0.0 {
+        local.push((0.0, 0.0));
+    } else {
+        local.extend([(-half, 0.0), (half, 0.0)]);
+    }
+    if end {
+        local.extend([
+            (half, len - base),
+            (half_head, len - head_len),
+            (0.0, len),
+            (-half_head, len - head_len),
+            (-half, len - base),
+        ]);
+    } else if half == 0.0 {
+        local.push((0.0, len));
+    } else {
+        local.extend([(half, len), (-half, len)]);
+    }
+    let (ux, uy) = (dx / len, dy / len);
+    let (nx, ny) = (-uy, ux);
+    let verts: Vec<Point> = local
+        .iter()
+        .map(|&(a, b)| point(from.x + a * nx + b * ux, from.y + a * ny + b * uy))
+        .collect();
+    let path = Path::from_polyline(&verts, true);
+    if path.signed_area2(0.1).abs() <= f64::EPSILON {
+        return Path::new();
+    }
+    if path.signed_area2(0.1) < 0.0 {
+        path.reversed()
+    } else {
+        path
+    }
+}
+
+/// W16-G: Photopea's parametric Grid (the Parametric Shape tool's "Grid",
+/// its `aHM` outline): the box `b` with `rows` x `cols` cells cut out of it,
+/// `border` pixels of frame round and between them. The frame is emitted in
+/// positive orientation and every cell in the negative one, so under the
+/// nonzero rule the cells are holes and the frame is what fills.
+///
+/// Empty for a degenerate box, no rows or columns, or a border that leaves
+/// the cells no room.
+pub fn grid(b: Bounds, rows: u32, cols: u32, border: f64) -> Path {
+    if b.is_empty() || !b.min.is_finite() || !b.max.is_finite() || !border.is_finite() {
+        return Path::new();
+    }
+    if rows == 0 || cols == 0 {
+        return Path::new();
+    }
+    let border = border.max(0.0);
+    let (w, h) = (b.width(), b.height());
+    let cell_w = (w - border * f64::from(cols + 1)) / f64::from(cols);
+    let cell_h = (h - border * f64::from(rows + 1)) / f64::from(rows);
+    if cell_w <= 0.0 || cell_h <= 0.0 {
+        return Path::new();
+    }
+    let mut path = rect(b);
+    if path.signed_area2(0.1) < 0.0 {
+        path = path.reversed();
+    }
+    for row in 0..rows {
+        for col in 0..cols {
+            let x = b.min.x + border + f64::from(col) * (cell_w + border);
+            let y = b.min.y + border + f64::from(row) * (cell_h + border);
+            let mut cell = rect(Bounds::from_xywh(x, y, cell_w, cell_h));
+            if cell.signed_area2(0.1) > 0.0 {
+                cell = cell.reversed();
+            }
+            path.extend(&cell);
+        }
+    }
+    path
+}
+
+/// W16-G: a closed polygon through `verts` with every corner rounded by a
+/// circular arc of `radius` pixels (Photopea's Parametric Shape "Corner
+/// Radius" on a Polygon or Star). Each arc is tangent to both edges at a
+/// corner; a corner too sharp or edges too short for the radius get the
+/// largest arc that fits in half of each edge. A zero radius is the plain
+/// polygon. The ring keeps the orientation `verts` has.
+pub fn rounded_polygon(verts: &[Point], radius: f64) -> Path {
+    if verts.len() < 3 || verts.iter().any(|v| !v.is_finite()) || !radius.is_finite() {
+        return Path::new();
+    }
+    if radius <= 0.0 {
+        return Path::from_polyline(verts, true);
+    }
+    let n = verts.len();
+    // Per corner: the tangent point on the incoming edge, on the outgoing
+    // edge, and the two cubic handles between them.
+    let corners: Vec<[Point; 4]> = (0..n)
+        .map(|i| {
+            let v = verts[i];
+            let prev = verts[(i + n - 1) % n];
+            let next = verts[(i + 1) % n];
+            let (lp, ln) = (prev.distance(v), next.distance(v));
+            if lp <= 0.0 || ln <= 0.0 {
+                return [v; 4];
+            }
+            let (up, un) = ((prev - v) / lp, (next - v) / ln);
+            // The corner's interior angle, halved.
+            let half = up.dot(un).clamp(-1.0, 1.0).acos() * 0.5;
+            let tan_half = half.tan();
+            if !(tan_half > 1e-9) || !tan_half.is_finite() || half >= FRAC_PI_2 - 1e-9 {
+                // A straight or degenerate corner has nothing to round.
+                return [v; 4];
+            }
+            let t = (radius / tan_half).min(lp * 0.5).min(ln * 0.5);
+            let r = t * tan_half;
+            let sweep = PI - 2.0 * half;
+            let k = 4.0 / 3.0 * (sweep / 4.0).tan() * r;
+            let (a, b) = (v + up * t, v + un * t);
+            [a, a - up * k, b - un * k, b]
+        })
+        .collect();
+    let mut p = Path::new();
+    p.move_to(corners[0][3]);
+    for c in corners.iter().skip(1).chain(std::iter::once(&corners[0])) {
+        p.line_to(c[0]);
+        if c[0] != c[3] {
+            p.push(PathEl::CurveTo(c[1], c[2], c[3]));
+        }
+    }
+    p.close();
+    p
+}
+
+#[cfg(test)]
+mod w16g_tests {
+    use super::*;
+    use crate::fill::{fill, FillOptions};
+    use crate::hit::contains;
+    use crate::FillRule;
+
+    #[test]
+    fn a_parametric_arrow_has_its_head_only_where_asked() {
+        let a = parametric_arrow(
+            point(0.0, 50.0),
+            point(100.0, 50.0),
+            4.0,
+            20.0,
+            30.0,
+            0.0,
+            false,
+            true,
+        );
+        assert!(!a.is_empty() && a.is_finite());
+        assert!(a.signed_area2(0.1) > 0.0, "positive orientation");
+        let b = a.bounds();
+        assert_eq!((b.min.x, b.max.x), (0.0, 100.0));
+        assert_eq!((b.min.y, b.max.y), (40.0, 60.0), "the head is 20 wide");
+        let inside = |x: f64, y: f64| contains(&a, point(x, y), FillRule::NonZero);
+        // The head is wide near the end, the shaft thin near the start.
+        assert!(inside(75.0, 57.0));
+        assert!(!inside(10.0, 57.0));
+        assert!(inside(10.0, 51.0));
+        // A head at both ends, and concavity pulls the base in.
+        let both = parametric_arrow(
+            point(0.0, 0.0),
+            point(0.0, 100.0),
+            4.0,
+            20.0,
+            30.0,
+            50.0,
+            true,
+            true,
+        );
+        assert!(contains(&both, point(8.0, 25.0), FillRule::NonZero));
+        assert!(contains(&both, point(8.0, 75.0), FillRule::NonZero));
+        assert!(parametric_arrow(
+            point(1.0, 1.0),
+            point(1.0, 1.0),
+            4.0,
+            20.0,
+            30.0,
+            0.0,
+            false,
+            true
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn a_grid_fills_its_frame_and_leaves_its_cells_open() {
+        let g = grid(Bounds::from_xywh(0.0, 0.0, 100.0, 70.0), 3, 4, 10.0);
+        assert_eq!(g.subpaths().len(), 1 + 12);
+        let inside = |x: f64, y: f64| contains(&g, point(x, y), FillRule::NonZero);
+        assert!(inside(5.0, 5.0), "the frame fills");
+        assert!(!inside(15.0, 15.0), "a cell is a hole");
+        // 4 columns of 12.5 px cells between five 10 px borders across 100.
+        assert!(inside(26.0, 15.0), "the border between two cells fills");
+        let area = fill(
+            &g,
+            &FillOptions {
+                tolerance: 0.001,
+                ..FillOptions::default()
+            },
+        )
+        .unwrap()
+        .area();
+        // Three rows of 10 px cells between four 10 px borders down 70.
+        let cells = 12.0 * 12.5 * 10.0;
+        assert!((area - (7000.0 - cells)).abs() < 1.0, "{area}");
+        assert!(grid(Bounds::from_xywh(0.0, 0.0, 20.0, 20.0), 3, 3, 10.0).is_empty());
+    }
+
+    #[test]
+    fn a_rounded_polygon_cuts_its_corners_by_the_radius() {
+        let square = [
+            point(0.0, 0.0),
+            point(100.0, 0.0),
+            point(100.0, 100.0),
+            point(0.0, 100.0),
+        ];
+        let sharp = rounded_polygon(&square, 0.0);
+        assert!(contains(&sharp, point(1.0, 1.0), FillRule::NonZero));
+        let round = rounded_polygon(&square, 20.0);
+        let inside = |x: f64, y: f64| contains(&round, point(x, y), FillRule::NonZero);
+        assert!(!inside(2.0, 2.0), "the corner is rounded off");
+        assert!(inside(50.0, 1.0) && inside(10.0, 50.0), "the edges stay");
+        // A 20 px arc on a right angle: the same outline as a rounded rect.
+        let rr = rounded_rect(
+            Bounds::from_xywh(0.0, 0.0, 100.0, 100.0),
+            CornerRadii::uniform(20.0),
+        );
+        let (a, b) = (area(&round), area(&rr));
+        assert!((a - b).abs() < 0.5, "{a} vs {b}");
+        // A radius too big for the edges is clamped to half an edge.
+        let huge = rounded_polygon(&square, 1e6);
+        assert!(huge.is_finite() && (area(&huge) - std::f64::consts::PI * 2500.0).abs() < 5.0);
+    }
+
+    fn area(p: &Path) -> f64 {
+        fill(
+            p,
+            &FillOptions {
+                tolerance: 0.001,
+                ..FillOptions::default()
+            },
+        )
+        .unwrap()
+        .area()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

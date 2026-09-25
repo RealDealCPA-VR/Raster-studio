@@ -108,8 +108,15 @@ impl PanelId {
         PanelId::GuideGuy,
     ];
 
-    /// Panel title, as shown on its header and in the Window menu.
-    pub const fn title(self) -> &'static str {
+    /// Panel title, as shown on its header and in the Window menu, in the
+    /// active language (W16-N: [`crate::strings::tr_en`]; [`PanelId::key`]
+    /// is the stable id).
+    pub fn title(self) -> &'static str {
+        crate::strings::tr_en(self.english_title())
+    }
+
+    /// W16-N: the English title, the source the language tables translate.
+    pub const fn english_title(self) -> &'static str {
         match self {
             PanelId::Layers => "Layers",
             PanelId::History => "History",

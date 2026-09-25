@@ -713,6 +713,14 @@ pub struct ShapeLayer {
     /// predate it load and save unchanged.
     #[serde(default, skip_serializing_if = "ShapeFillPaint::is_solid")]
     pub fill_paint: ShapeFillPaint,
+    /// W16-G: the parameters the shape was drawn with (Photopea's live
+    /// shape), so the Properties panel can edit a rectangle's size, position
+    /// and corner radii after drawing. Live only while it still regenerates
+    /// `path_svg` exactly (`tools::shape::live_shape_of`); `None` for a
+    /// plain path. Appended and skipped when `None`, so documents that
+    /// predate it load and save unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<crate::live_shape::LiveShape>,
 }
 
 impl Default for ShapeLayer {
@@ -723,6 +731,7 @@ impl Default for ShapeLayer {
             fill_rule: ShapeFillRule::NonZero,
             stroke: None,
             fill_paint: ShapeFillPaint::Solid,
+            live: None,
         }
     }
 }
@@ -1155,6 +1164,12 @@ mod tests {
                 angle_deg: 30.0,
                 ..ShapeGradientFill::default()
             }),
+            live: Some(crate::live_shape::LiveShape::Ellipse {
+                x: 1.0,
+                y: 2.0,
+                w: 3.0,
+                h: 4.0,
+            }),
         };
         let layer = Layer::with_kind("Shape", LayerKind::Shape(s.clone()));
         let back: Layer = serde_json::from_str(&serde_json::to_string(&layer).unwrap()).unwrap();
@@ -1172,6 +1187,7 @@ mod tests {
             |s: &mut ShapeLayer| s.stroke.as_mut().unwrap().miter_limit = 4.0,
             |s: &mut ShapeLayer| s.stroke.as_mut().unwrap().align = ShapeStrokeAlign::Center,
             |s: &mut ShapeLayer| s.fill_paint = ShapeFillPaint::Solid,
+            |s: &mut ShapeLayer| s.live = None,
         ] {
             let mut other = s.clone();
             mutate(&mut other);

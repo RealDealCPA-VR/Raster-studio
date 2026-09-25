@@ -27,7 +27,7 @@ use crate::bytes::Sink;
 use crate::codec::{encode_channel_as, encode_merged_as, ChannelShape};
 use crate::error::{PsdError, PsdResult};
 use crate::flatten::flatten_with;
-use crate::header::{Depth, PsdHeader};
+use crate::header::{ColorMode, Depth, PsdHeader};
 use crate::limits::WriteOptions;
 use crate::model::{
     GroupData, LayerKind, MergedImage, PsdFile, PsdLayer, PsdMask, Rect, CHANNEL_ALPHA,
@@ -74,7 +74,57 @@ fn check_header(header: PsdHeader) -> PsdResult<()> {
             header.color_mode, header.channels
         )));
     }
+    // W16-B: the colour modes past RGB and Greyscale, each with what it needs.
+    match header.color_mode {
+        ColorMode::Bitmap => {
+            return Err(PsdError::InvalidDocument(
+                "a Bitmap document is held at 8 bits here and is written as Greyscale; this \
+                 writer does not pack 1-bit samples"
+                    .into(),
+            ))
+        }
+        ColorMode::Indexed if header.depth != Depth::Eight => {
+            return Err(PsdError::InvalidDocument(format!(
+                "an Indexed document is 8-bit, not {}-bit",
+                header.depth.bits()
+            )))
+        }
+        _ => {}
+    }
     Ok(())
+}
+
+/// W16-B: the colour mode data a mode needs, checked before anything is
+/// written: an Indexed file's 768-byte palette. (A Duotone record is written
+/// back as it was read; the reader treats one it cannot parse as greyscale.)
+fn check_mode_data(file: &PsdFile) -> PsdResult<()> {
+    let palette = crate::colour_modes::INDEXED_MODE_DATA_LEN;
+    if file.header.color_mode == ColorMode::Indexed && file.color_mode_data.len() != palette {
+        return Err(PsdError::InvalidDocument(format!(
+            "an Indexed document needs a 768-byte palette, not {} bytes",
+            file.color_mode_data.len()
+        )));
+    }
+    Ok(())
+}
+
+/// W16-B: the composite of a print-mode document the caller supplied none
+/// for. The fallback flattener composites RGB and grey only, so this is blank
+/// paper in the mode's own encoding (no ink; Lab's `a`/`b` at their
+/// midpoint), transparent where there is an alpha channel.
+fn paper_composite(header: PsdHeader, max_bytes: u64) -> PsdResult<MergedImage> {
+    let mut merged = crate::flatten::empty_merged_with(header, max_bytes)?;
+    if header.color_mode == ColorMode::Lab {
+        for plane in merged.channels.iter_mut().skip(1).take(2) {
+            for (i, v) in plane.iter_mut().enumerate() {
+                // The high byte of a 16-bit sample, or the one 8-bit byte.
+                let high = header.depth.bytes_per_sample() == 1
+                    || i % header.depth.bytes_per_sample() == 0;
+                *v = if high { 0x80 } else { 0 };
+            }
+        }
+    }
+    Ok(merged)
 }
 
 /// Serialise with default options (RLE everywhere, 72 dpi if unset).
@@ -138,6 +188,7 @@ fn put_section_even(sink: &mut Sink, body: &[u8], psb: bool) {
 fn write_impl(file: &PsdFile, opts: &WriteOptions, psb: bool) -> PsdResult<Vec<u8>> {
     let header = file.header;
     check_header(header)?;
+    check_mode_data(file)?;
     let mut sink = Sink::new();
     header.write_as(&mut sink, psb);
 
@@ -162,7 +213,10 @@ fn write_impl(file: &PsdFile, opts: &WriteOptions, psb: bool) -> PsdResult<Vec<u
         // A header alone decides how big this canvas is, and a header can come
         // from a thirty-eight byte file. `flatten_with` refuses before it
         // reserves; `check_header` above only bounds the *edge*, not the total.
-        None => flatten_with(file, opts.max_flatten_bytes)?,
+        None if matches!(header.color_mode, ColorMode::Rgb | ColorMode::Grayscale) => {
+            flatten_with(file, opts.max_flatten_bytes)?
+        }
+        None => paper_composite(header, opts.max_flatten_bytes)?,
     };
     if merged.channels.len() != header.channels as usize {
         return Err(PsdError::InvalidDocument(format!(

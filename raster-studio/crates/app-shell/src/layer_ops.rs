@@ -275,6 +275,34 @@ pub fn stamp_visible(editor: &mut Editor) -> Result<String, String> {
     Ok("Stamped every visible layer onto a new layer".to_string())
 }
 
+thread_local! {
+    /// W16-D: Photopea's Layers panel option "Add "copy" to copied layers",
+    /// handed over every frame by `Preferences::sync_layers_panel`. On
+    /// unless the user switched it off.
+    static ADD_COPY_SUFFIX: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// W16-D: set the "Add "copy" to copied layers" option.
+pub fn set_add_copy_suffix(on: bool) {
+    ADD_COPY_SUFFIX.with(|c| c.set(on));
+}
+
+/// W16-D: whether copies are named "<name> copy" (the option on) or keep
+/// their source's name (off).
+pub fn add_copy_suffix() -> bool {
+    ADD_COPY_SUFFIX.with(|c| c.get())
+}
+
+/// W16-D: the name a copy of a layer called `source` gets when nobody typed
+/// one — "<name> copy", or the source's own name with the option off.
+pub fn copy_name(source: &str) -> String {
+    if add_copy_suffix() {
+        ui::dialogs::DuplicateLayerDialog::suggested_name(source)
+    } else {
+        source.to_string()
+    }
+}
+
 /// Layer ▸ Duplicate Layer…: copy the active layer directly above itself
 /// under `name` — the dialog's, or Photoshop's "<name> copy" when nothing
 /// was asked (a chord). One undoable step: the layer, its pixels, its mask
@@ -315,8 +343,7 @@ pub(crate) fn duplicate_commands(
         .layers
         .get(source_id)
         .ok_or("The active layer is not in the tree")?;
-    let copy_name =
-        name.unwrap_or_else(|| ui::dialogs::DuplicateLayerDialog::suggested_name(&source.name));
+    let copy_name = name.unwrap_or_else(|| copy_name(&source.name));
     let status = format!("Duplicated {} as {}", source.name, copy_name);
     let label = format!("Duplicate {}", source.name);
     let mut commands = Vec::new();

@@ -258,6 +258,11 @@ impl Editor {
         path: &Path,
         history_depth: usize,
     ) -> Result<Option<(OpenDocument, usize, usize)>, String> {
+        // W16-I: an SVG, EPS or one-page PDF / AI that reads as layers comes
+        // back (File > Revert) as its layers.
+        if let Some(doc) = Self::open_vector_layered(id, path, history_depth) {
+            return Ok(Some((doc, 1, 1)));
+        }
         if w13d_format(path) != Some(ImportFormat::Pdf) {
             return Ok(None);
         }
@@ -287,6 +292,14 @@ impl Editor {
         &mut self,
         path: &Path,
     ) -> Option<Result<Effect, ActionError>> {
+        // W16-I: an SVG, EPS or one-page PDF / AI opens as its layers; when
+        // they cannot be read, an EPS / PDF opens below as one picture and
+        // the status line says why.
+        let no_layers = match self.open_vector_document(path) {
+            vector_w16::VectorOpen::Done(result) => return Some(result),
+            vector_w16::VectorOpen::NoLayers(why) => Some(why),
+            vector_w16::VectorOpen::NotOurs => None,
+        };
         let format = w13d_format(path)?;
         let failed =
             |e: String| ActionError::failed(Action::Open, format!("{}: {e}", path.display()));
@@ -331,6 +344,10 @@ impl Editor {
         Some(match outcome {
             Ok((doc, note)) => {
                 self.install_opened(doc, path);
+                let note = match no_layers {
+                    Some(why) => format!("{note}; its layers could not be read ({why})"),
+                    None => note,
+                };
                 self.status = Some(format!("Opened {}: {note}", path.display()));
                 self.touch();
                 Ok(Effect::DocumentSet)
@@ -343,3 +360,7 @@ impl Editor {
 #[cfg(test)]
 #[path = "editor_open_pages_tests.rs"]
 mod tests;
+
+/// W16-I: SVG, EPS and one-page PDF / AI opened as layers.
+#[path = "import_vector_w16.rs"]
+pub(crate) mod vector_w16;

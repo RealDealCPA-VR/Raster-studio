@@ -401,6 +401,59 @@ pub struct Preferences {
     /// user set on it), on the same terms as `brush_presets`.
     #[serde(deserialize_with = "lenient")]
     pub tool_presets: Option<Vec<ui::panels::tool_presets::SavedToolPreset>>,
+    /// W16-N: Window > Glass Menus: the menus drawn over a translucent fill
+    /// (`design::Tokens::glass_menu_fill`). Off by default; a file written
+    /// before the field existed reads as off.
+    pub glass_menus: bool,
+    /// W16-D: the Layers panel's options (Photopea's Layers panel menu):
+    /// thumbnail size, thumbnails by layer or by document bounds, and "Add
+    /// "copy" to copied layers". A file written before the field existed
+    /// reads as the defaults.
+    pub layers_panel: LayersPanelPrefs,
+}
+
+/// W16-D: the Layers panel's options as the preferences file keeps them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LayersPanelPrefs {
+    /// `none`, `small`, `regular` or `large` (anything else reads as
+    /// `regular`).
+    pub thumbnail_size: String,
+    /// Thumbnails cropped to each layer's bounds; off is Photopea's default,
+    /// thumbnails by document.
+    pub thumbnails_by_layer: bool,
+    /// Photopea's "Add "copy" to copied layers", on by default.
+    pub add_copy: bool,
+}
+
+impl Default for LayersPanelPrefs {
+    fn default() -> Self {
+        Self::from_options(ui::panels::layers::w16::PanelOptions {
+            thumb_scale: ui::panels::layers::ThumbScale::default(),
+            thumbs_by_layer: false,
+            add_copy: true,
+        })
+    }
+}
+
+impl LayersPanelPrefs {
+    /// The panel's options these preferences name.
+    pub fn options(&self) -> ui::panels::layers::w16::PanelOptions {
+        ui::panels::layers::w16::PanelOptions {
+            thumb_scale: ui::panels::layers::ThumbScale::from_key(&self.thumbnail_size),
+            thumbs_by_layer: self.thumbnails_by_layer,
+            add_copy: self.add_copy,
+        }
+    }
+
+    /// The preferences the panel's `options` are stored as.
+    pub fn from_options(options: ui::panels::layers::w16::PanelOptions) -> Self {
+        Self {
+            thumbnail_size: options.thumb_scale.key().to_string(),
+            thumbnails_by_layer: options.thumbs_by_layer,
+            add_copy: options.add_copy,
+        }
+    }
 }
 
 /// W4-I: read an optional list, answering `None` for anything malformed —
@@ -445,6 +498,8 @@ impl Default for Preferences {
             swatches: None,
             brush_presets: None,
             tool_presets: None,
+            glass_menus: false,
+            layers_panel: LayersPanelPrefs::default(),
         }
     }
 }
@@ -564,6 +619,34 @@ impl Preferences {
             self.tool_presets = Some(live);
             changed = true;
         }
+        // W16-D: the Layers panel's options, on the same terms.
+        changed |= self.sync_layers_panel(w);
+        changed
+    }
+
+    /// W16-D: keep the Layers panel's options and these preferences in step,
+    /// the way [`Preferences::sync_panel_presets`] keeps the lists: a panel
+    /// whose options the user has not touched this session takes the stored
+    /// ones (the load on start); a touched one is stored. The copy-name
+    /// preference is handed to [`crate::layer_ops`] every frame, so every
+    /// route that duplicates a layer names the copy by it. Answers `true`
+    /// when these preferences changed.
+    pub fn sync_layers_panel(&mut self, w: &mut ui::Workspace) -> bool {
+        let live = w.layers.panel_options();
+        let mut changed = false;
+        if w.layers.option_edits() == 0 {
+            let saved = self.layers_panel.options();
+            if saved != live {
+                w.layers.restore_panel_options(saved);
+            }
+        } else {
+            let next = LayersPanelPrefs::from_options(live);
+            if self.layers_panel != next {
+                self.layers_panel = next;
+                changed = true;
+            }
+        }
+        crate::layer_ops::set_add_copy_suffix(w.layers.panel_options().add_copy);
         changed
     }
 
@@ -659,6 +742,13 @@ mod tests {
                 )],
                 gradient: None,
             }]),
+            glass_menus: true,
+            // W16-D: the Layers panel's options, every one off its default.
+            layers_panel: LayersPanelPrefs {
+                thumbnail_size: "none".to_string(),
+                thumbnails_by_layer: true,
+                add_copy: false,
+            },
         };
 
         prefs.save(&paths.preferences_file()).unwrap();

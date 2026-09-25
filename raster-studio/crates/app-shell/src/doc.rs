@@ -135,7 +135,8 @@ pub fn next_layer_name(doc: &Document) -> String {
         .collect();
     let mut n = doc.layers.len() + 1;
     loop {
-        let candidate = format!("Layer {n}");
+        // W16-N: "Layer" in the interface language, as Photopea names it.
+        let candidate = format!("{} {n}", ui::strings::tr_en("Layer"));
         if !taken.iter().any(|t| *t == candidate) {
             return candidate;
         }

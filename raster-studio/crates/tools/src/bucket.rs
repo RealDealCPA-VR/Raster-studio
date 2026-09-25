@@ -36,6 +36,42 @@ pub enum FillContent {
     Pattern,
 }
 
+/// W16-C: the Paint Bucket's Fill option key (a Choice over
+/// [`FillSource::CHOICES`]).
+pub const FILL_SOURCE_KEY: &str = "fill_source";
+
+/// W16-C: what the Paint Bucket's Fill drop-down offers, as Photopea's does:
+/// the foreground colour, or the active pattern (the one the pattern-driven
+/// tools share, [`crate::tool::ToolContext::pattern`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FillSource {
+    #[default]
+    Foreground,
+    Pattern,
+}
+
+impl FillSource {
+    /// The drop-down's rows, index for index with [`FillSource::from_choice`].
+    pub const CHOICES: &'static [&'static str] = &["Foreground", "Pattern"];
+
+    /// The row at `index`; an out-of-range index clamps to the last row, as
+    /// every Choice does.
+    pub fn from_choice(index: usize) -> Self {
+        match index {
+            0 => Self::Foreground,
+            _ => Self::Pattern,
+        }
+    }
+
+    /// What a fill from this source lays down.
+    pub fn content(self) -> FillContent {
+        match self {
+            Self::Foreground => FillContent::Foreground,
+            Self::Pattern => FillContent::Pattern,
+        }
+    }
+}
+
 /// Paint-bucket options.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct FillSettings {
@@ -319,11 +355,11 @@ impl Default for PaintBucketTool {
 }
 
 impl Tool for PaintBucketTool {
+    /// W16-C: always the Paint Bucket, whatever it fills with — the Fill
+    /// source is one of its options ([`FILL_SOURCE_KEY`]), so a bucket set to
+    /// Pattern is still the tool the palette selected.
     fn id(&self) -> ToolId {
-        match self.content {
-            FillContent::Pattern => ToolId::PatternFill,
-            _ => ToolId::PaintBucket,
-        }
+        ToolId::PaintBucket
     }
 
     fn on_pointer_down(
@@ -411,6 +447,18 @@ impl Tool for PaintBucketTool {
     /// and (W9-L) the options bar's paint Mode ([`crate::BLEND_MODE_KEY`], a
     /// Choice indexing [`BlendMode::ALL`], clamped like every Choice).
     fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
+        // W16-C: Photopea's Fill drop-down, Foreground or Pattern.
+        if key == FILL_SOURCE_KEY {
+            return match setting {
+                ToolSetting::Choice(i) => {
+                    self.content = FillSource::from_choice(i).content();
+                    Ok(())
+                }
+                _ => Err(ToolError::OptionKindMismatch {
+                    key: key.to_owned(),
+                }),
+            };
+        }
         if key == crate::BLEND_MODE_KEY {
             return match setting {
                 ToolSetting::Choice(i) => {

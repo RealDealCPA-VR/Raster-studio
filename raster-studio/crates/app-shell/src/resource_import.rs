@@ -13,6 +13,7 @@
 //! | `.aco`, `.ase` | the Swatches panel (and so the preferences file) |
 //! | `.icc`, `.icm` | assigned to the active document (re-tags it; exports carry it) |
 //! | `.atn` | W13-E: a new set in the Actions library (`actions_library`), its steps kept parametric; a step with no equivalent here is listed and skipped on play |
+//! | `.acv`, `.3dl`, `.look` | W16-L: a Curves / Color Lookup adjustment layer on the active document ([`w16`]) |
 //!
 //! The Swatches panel and the options bar live in the chrome's workspace,
 //! not in the editor, so what they receive is queued here
@@ -25,6 +26,10 @@ use std::path::Path;
 use asset_store::resources::{self, GradientResource, Resource, ResourceKind};
 
 use super::{Action, ActionError, Editor, Effect};
+
+/// W16-L: `.acv` curves presets and `.3dl` / `.look` 3D LUTs.
+#[path = "resource_import_w16.rs"]
+pub(crate) mod w16;
 
 /// What the status line adds for imported custom shapes: where to pick them.
 pub const SHAPES_NOTE: &str = "pick them from the Custom Shape tool's Shape list";
@@ -103,13 +108,17 @@ impl Editor {
     /// Whether File > Open routes `path` to [`Self::open_resource`] rather
     /// than decoding it as an image.
     pub fn is_resource_path(path: &Path) -> bool {
-        ResourceKind::of_path(path).is_some()
+        ResourceKind::of_path(path).is_some() || w16::is_w16_resource_path(path)
     }
 
     /// Read a resource file and add what it carries to its library. The
     /// status line says what landed; a file that yields nothing, or cannot be
     /// read, is an error naming why.
     pub fn open_resource(&mut self, path: &Path) -> Result<Effect, ActionError> {
+        // W16-L: a curves preset or a `.3dl` / `.look` LUT becomes a layer.
+        if let Some(result) = None::<Result<Effect, ActionError>> { // REVIEWMUT self.open_w16_resource(path) {
+            return result;
+        }
         let fail = |e: &dyn std::fmt::Display| {
             ActionError::failed(Action::Open, format!("{}: {e}", path.display()))
         };
@@ -255,3 +264,9 @@ impl Editor {
 #[cfg(test)]
 #[path = "resource_import_tests.rs"]
 mod tests;
+
+// W16-L: the new routes, the new File > Open formats and WOFF fonts, driven
+// through the real editor.
+#[cfg(test)]
+#[path = "resource_import_w16_tests.rs"]
+mod w16_tests;

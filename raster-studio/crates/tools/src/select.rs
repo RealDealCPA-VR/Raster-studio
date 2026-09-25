@@ -487,7 +487,49 @@ impl LassoKind {
     }
 }
 
+/// W16-A: how far, in screen pixels, a press may land from the previous press
+/// and still close an open lasso outline as the second half of a double-click
+/// (Photopea: "double-click to close"). The tool is handed no timestamps, so a
+/// second press on the same spot is what it recognises; the view's zoom turns
+/// the screen distance into document pixels.
+pub const LASSO_DOUBLE_CLICK_PX: f32 = 4.0;
+
+/// W16-A: the reserved setting the shell sends a lasso holding an open outline
+/// when Backspace or Delete is pressed: the last point placed is removed, and
+/// removing the only one ends the outline. It is not an options-bar key (no
+/// registry spec names it); `Tool` offers no other object-safe door from a
+/// `Box<dyn Tool>` to the lasso.
+pub const LASSO_REMOVE_LAST_POINT: &str = "lasso_remove_last_point";
+
+/// W16-A: Photoshop's default magnetic-lasso Frequency, which lays anchors the
+/// [`MAGNETIC_ANCHOR_SPACING`] apart.
+pub const MAGNETIC_FREQUENCY_DEFAULT: i32 = 57;
+
+/// W16-A: the weakest edge (a normalised Sobel magnitude) a magnetic anchor
+/// snaps to; on flatter ground the anchor stays where the pointer is.
+const MAGNETIC_MIN_EDGE: f32 = 0.1;
+
+/// W16-A: the anchor spacing a magnetic-lasso Frequency (`0..=100`) asks
+/// for — a higher frequency lays anchors closer together. The default
+/// ([`MAGNETIC_FREQUENCY_DEFAULT`]) is the [`MAGNETIC_ANCHOR_SPACING`] the
+/// lasso has always used.
+pub fn magnetic_spacing(frequency: i32) -> f32 {
+    let f = frequency.clamp(0, 100) as f32;
+    let per_step = (60.0 - MAGNETIC_ANCHOR_SPACING) / MAGNETIC_FREQUENCY_DEFAULT as f32;
+    (60.0 - f * per_step).max(2.0)
+}
+
 /// The three lassos.
+///
+/// W16-A: the polygonal and magnetic lassos hold their outline open between
+/// presses (Photopea): Enter ([`Tool::commit`]), a double-click, or a press
+/// on the first point closes it; Backspace/Delete removes the last point
+/// ([`LASSO_REMOVE_LAST_POINT`]); Escape drops it. The magnetic lasso lays
+/// its anchors itself as the pointer moves — button down or not — each one
+/// pulled onto the strongest edge within Width, a press adds one, and a drag
+/// released back on its start still closes. Holding Alt while dragging the
+/// freehand lasso draws a straight segment; released with Alt still held, the
+/// outline stays open for straight segments, and letting Alt go closes it.
 pub struct LassoTool {
     kind: LassoKind,
     /// The magnetic lasso's snap: the options bar's Width (`search_radius`)
@@ -498,6 +540,23 @@ pub struct LassoTool {
     points: Vec<Vec2>,
     dragging: bool,
     op: BooleanOp,
+    /// W16-A: a freehand outline released with Alt held stays open, and the
+    /// presses after it place straight segments.
+    alt_poly: bool,
+    /// W16-A: whether this freehand drag has seen Alt up. Alt held since the
+    /// press means Subtract, not straight segments.
+    alt_armed: bool,
+    /// W16-A: the free end of the Alt-held straight segment, for the overlay.
+    rubber: Option<Vec2>,
+    /// W16-A: where the last press landed, with the double-click radius at
+    /// its zoom — a second press there, with no travel in between, is the
+    /// double-click that closes.
+    last_press: Option<(Vec2, f32)>,
+    /// W16-A: the magnetic lasso's anchor spacing (its Frequency).
+    spacing: f32,
+    /// W16-A: the pixels the magnetic lasso snaps its anchors onto, read once
+    /// at the press that starts an outline.
+    edge_image: Option<(raster::PixelRect, Vec<u8>)>,
 }
 
 impl LassoTool {
@@ -509,6 +568,12 @@ impl LassoTool {
             points: Vec::new(),
             dragging: false,
             op: BooleanOp::Replace,
+            alt_poly: false,
+            alt_armed: false,
+            rubber: None,
+            last_press: None,
+            spacing: MAGNETIC_ANCHOR_SPACING,
+            edge_image: None,
         }
     }
 
@@ -517,11 +582,115 @@ impl LassoTool {
         &self.points
     }
 
+    /// W16-A: the magnetic lasso's anchor spacing, in document pixels.
+    pub fn anchor_spacing(&self) -> f32 {
+        self.spacing
+    }
+
+    /// W16-A: an outline held open between presses — what Enter confirms and
+    /// Backspace edits. A freehand outline is only open in its Alt mode.
+    fn open_between_presses(&self) -> bool {
+        !self.points.is_empty()
+            && !self.dragging
+            && (self.kind != LassoKind::Freehand || self.alt_poly)
+    }
+
+    fn reset(&mut self) {
+        self.points.clear();
+        self.dragging = false;
+        self.alt_poly = false;
+        self.alt_armed = false;
+        self.rubber = None;
+        self.last_press = None;
+        self.edge_image = None;
+    }
+
+    /// W16-A: Backspace/Delete — drop the last point of an open outline.
+    /// Removing the only point ends the outline. `false` when no outline is
+    /// open between presses.
+    pub fn remove_last_point(&mut self) -> bool {
+        if !self.open_between_presses() {
+            return false;
+        }
+        self.points.pop();
+        self.last_press = None;
+        if self.points.is_empty() {
+            self.reset();
+        }
+        true
+    }
+
+    /// W16-A: pull a magnetic anchor onto the strongest edge within Width
+    /// (`search_radius`, capped at 32 px) of `p`, weighted by Contrast
+    /// (`edge_weight`) and a small pull back towards the pointer
+    /// (`straight_weight`). With no pixels read, a zero Contrast, or no edge
+    /// stronger than [`MAGNETIC_MIN_EDGE`] nearby, `p` is kept.
+    fn snap_anchor(&self, p: Vec2) -> Vec2 {
+        let Some((rect, px)) = &self.edge_image else {
+            return p;
+        };
+        if self.magnetic.edge_weight <= 0.0 || rect.is_empty() {
+            return p;
+        }
+        let (x0, y0) = (rect.x, rect.y);
+        let (w, h) = (rect.width as i64, rect.height as i64);
+        let lum = |x: i64, y: i64| -> f32 {
+            let lx = (x - x0).clamp(0, w - 1);
+            let ly = (y - y0).clamp(0, h - 1);
+            let i = ((ly * w + lx) * 4) as usize;
+            let Some(c) = px.get(i..i + 4) else {
+                return 0.0;
+            };
+            let luma = 0.299 * c[0] as f32 + 0.587 * c[1] as f32 + 0.114 * c[2] as f32;
+            luma / 255.0 * (c[3] as f32 / 255.0)
+        };
+        let r = self.magnetic.search_radius.clamp(1, 32) as i64;
+        let (cx, cy) = (p.x.floor() as i64, p.y.floor() as i64);
+        let mut best: Option<(f32, Vec2)> = None;
+        for y in (cy - r).max(y0)..=(cy + r).min(y0 + h - 1) {
+            for x in (cx - r).max(x0)..=(cx + r).min(x0 + w - 1) {
+                let centre = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+                let d = (centre - p).length();
+                if d > r as f32 {
+                    continue;
+                }
+                let gx = (lum(x + 1, y - 1) + 2.0 * lum(x + 1, y) + lum(x + 1, y + 1))
+                    - (lum(x - 1, y - 1) + 2.0 * lum(x - 1, y) + lum(x - 1, y + 1));
+                let gy = (lum(x - 1, y + 1) + 2.0 * lum(x, y + 1) + lum(x + 1, y + 1))
+                    - (lum(x - 1, y - 1) + 2.0 * lum(x, y - 1) + lum(x + 1, y - 1));
+                let g = (gx * gx + gy * gy).sqrt() / 4.0;
+                if g < MAGNETIC_MIN_EDGE {
+                    continue;
+                }
+                let score = g * self.magnetic.edge_weight - self.magnetic.straight_weight * d;
+                if best.is_none_or(|(s, _)| score > s) {
+                    best = Some((score, centre));
+                }
+            }
+        }
+        best.map_or(p, |(_, q)| q)
+    }
+
+    /// W16-A: lay a magnetic anchor at `p` (snapped) when the pointer has
+    /// travelled the Frequency's spacing from the last one.
+    fn lay_anchor(&mut self, p: Vec2) {
+        if self
+            .points
+            .last()
+            .is_none_or(|last| (p - *last).length() >= self.spacing)
+        {
+            let anchor = self.snap_anchor(p);
+            if self.points.last() != Some(&anchor) {
+                self.points.push(anchor);
+            }
+        }
+    }
+
     /// Close the outline and emit it — the Enter key, and what clicking the
     /// first vertex of a polygonal lasso does.
     pub fn close(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
         let pts = std::mem::take(&mut self.points);
-        self.dragging = false;
+        self.reset();
         if pts.len() < 3 {
             return Ok(());
         }
@@ -546,6 +715,16 @@ impl LassoTool {
     }
 }
 
+/// W16-A: the double-click distance in document pixels at `ctx`'s zoom.
+fn double_click_doc_px(ctx: &ToolContext<'_>) -> f32 {
+    let zoom = ctx.view.zoom;
+    if zoom.is_finite() && zoom > 0.0 {
+        LASSO_DOUBLE_CLICK_PX / zoom
+    } else {
+        LASSO_DOUBLE_CLICK_PX
+    }
+}
+
 impl Tool for LassoTool {
     fn id(&self) -> ToolId {
         self.kind.tool_id()
@@ -557,23 +736,57 @@ impl Tool for LassoTool {
         event: PointerEvent,
     ) -> Result<(), ToolError> {
         crate::error::finite_pt("lasso point", event.pos)?;
+        let pos = event.pos;
         if self.points.is_empty() {
             self.op = gesture_op(self.options.mode, event.modifiers);
         }
-        match self.kind {
-            LassoKind::Polygonal => {
-                // Clicking back on the first vertex closes the outline.
-                if self.points.len() >= 3
-                    && (event.pos - self.points[0]).length() <= POLYGON_CLOSE_PX
-                {
-                    return self.close(ctx);
-                }
-                self.points.push(event.pos);
+        // W16-A: an outline held open between presses. A press back on its
+        // first point, or a second press on the last one (a double-click),
+        // closes it; any other press adds to it.
+        if self.open_between_presses() {
+            let double = self
+                .last_press
+                .is_some_and(|(q, r)| (pos - q).length() <= r) && false /*RVMUT*/;
+            let on_start =
+                self.points.len() >= 3 && (pos - self.points[0]).length() <= POLYGON_CLOSE_PX;
+            if double || on_start {
+                return self.close(ctx);
             }
-            _ => {
-                self.points.clear();
-                self.points.push(event.pos);
+            self.last_press = Some((pos, double_click_doc_px(ctx)));
+            match self.kind {
+                LassoKind::Polygonal => self.points.push(pos),
+                LassoKind::Magnetic => {
+                    let anchor = self.snap_anchor(pos);
+                    self.points.push(anchor);
+                    self.dragging = true;
+                }
+                LassoKind::Freehand => {
+                    self.points.push(pos);
+                    self.dragging = true;
+                    self.alt_armed = true;
+                }
+            }
+            return Ok(());
+        }
+        // A fresh outline.
+        self.reset();
+        self.last_press = Some((pos, double_click_doc_px(ctx)));
+        match self.kind {
+            LassoKind::Polygonal => self.points.push(pos),
+            LassoKind::Magnetic => {
+                self.edge_image = ctx
+                    .sample_key()
+                    .ok()
+                    .and_then(|key| read_rgba8(ctx.tiles, key, ctx.canvas).ok())
+                    .map(|px| (ctx.canvas, px));
+                let anchor = self.snap_anchor(pos);
+                self.points.push(anchor);
                 self.dragging = true;
+            }
+            LassoKind::Freehand => {
+                self.points.push(pos);
+                self.dragging = true;
+                self.alt_armed = !event.modifiers.alt;
             }
         }
         Ok(())
@@ -581,41 +794,73 @@ impl Tool for LassoTool {
 
     fn on_pointer_move(
         &mut self,
-        _ctx: &mut ToolContext<'_>,
+        ctx: &mut ToolContext<'_>,
         event: PointerEvent,
     ) -> Result<(), ToolError> {
-        if !self.dragging {
-            return Ok(());
+        let pos = event.pos;
+        // W16-A: travel between two presses means they are not a double-click.
+        if self.last_press.is_some_and(|(q, r)| (pos - q).length() > r) {
+            self.last_press = None;
         }
-        crate::error::finite_pt("lasso point", event.pos)?;
         match self.kind {
+            // The painter draws the rubber segment to the pointer itself.
+            LassoKind::Polygonal => Ok(()),
             // A magnetic lasso wants sparse anchors: the snap runs between
             // them, and one anchor per pointer sample would pin the path to
-            // every wobble of the hand.
+            // every wobble of the hand. W16-A: with the button up too, once
+            // an outline is open — Photopea's click, then move.
             LassoKind::Magnetic => {
-                if self
-                    .points
-                    .last()
-                    .is_none_or(|p| (event.pos - *p).length() >= MAGNETIC_ANCHOR_SPACING)
-                {
-                    self.points.push(event.pos);
+                if self.dragging || self.open_between_presses() {
+                    crate::error::finite_pt("lasso point", pos)?;
+                    self.lay_anchor(pos);
+                }
+                Ok(())
+            }
+            LassoKind::Freehand => {
+                if self.dragging {
+                    crate::error::finite_pt("lasso point", pos)?;
+                    // W16-A: Alt pressed during the drag draws a straight
+                    // segment from the last point to the pointer.
+                    if event.modifiers.alt && self.alt_armed {
+                        self.rubber = Some(pos);
+                    } else {
+                        if !event.modifiers.alt {
+                            self.alt_armed = true;
+                        }
+                        self.rubber = None;
+                        self.points.push(pos);
+                    }
+                    Ok(())
+                } else if self.alt_poly && !self.points.is_empty() {
+                    crate::error::finite_pt("lasso point", pos)?;
+                    // W16-A: letting Alt go closes the straight-segment
+                    // outline (Photoshop's lasso), as Enter would.
+                    if event.modifiers.alt {
+                        self.rubber = Some(pos);
+                        Ok(())
+                    } else {
+                        self.close(ctx)
+                    }
+                } else {
+                    Ok(())
                 }
             }
-            _ => self.points.push(event.pos),
         }
-        Ok(())
     }
 
-    /// W4-A: the outline so far, while there is one. A freehand or magnetic
-    /// lasso closes on release, so it is published closed; a polygonal one
-    /// is open until its first vertex is clicked again.
+    /// W4-A: the outline so far, while there is one. A freehand lasso closes
+    /// on release, so it is published closed; W16-A: a polygonal or
+    /// magnetic outline — and a freehand one in its Alt mode — is open until
+    /// Enter, a double-click or a press on its first point closes it.
     fn live_geometry(&self) -> Option<crate::tool::SessionGeometry> {
         if self.points.is_empty() {
             return None;
         }
+        let mut points = self.points.clone();
+        points.extend(self.rubber);
         Some(crate::tool::SessionGeometry::Lasso {
-            points: self.points.clone(),
-            closed: self.kind != LassoKind::Polygonal,
+            points,
+            closed: self.kind == LassoKind::Freehand && !self.alt_poly,
         })
     }
 
@@ -624,39 +869,81 @@ impl Tool for LassoTool {
         ctx: &mut ToolContext<'_>,
         event: PointerEvent,
     ) -> Result<(), ToolError> {
-        match self.kind {
+        if !self.dragging {
             // A polygonal lasso's release is not the end of anything.
+            return Ok(());
+        }
+        match self.kind {
             LassoKind::Polygonal => Ok(()),
-            _ => {
-                if self.dragging {
-                    self.points.push(event.pos);
-                    self.close(ctx)
-                } else {
+            LassoKind::Magnetic => {
+                self.dragging = false;
+                // W16-A: a drag released back on its start closes; any other
+                // release leaves the outline open for the pointer to extend.
+                if self.points.len() >= 3
+                    && (event.pos - self.points[0]).length() <= POLYGON_CLOSE_PX
+                {
+                    return self.close(ctx);
+                }
+                Ok(())
+            }
+            LassoKind::Freehand => {
+                crate::error::finite_pt("lasso point", event.pos)?;
+                self.points.push(event.pos);
+                if event.modifiers.alt && self.alt_armed {
+                    // W16-A: released with Alt held — the outline stays open
+                    // and the next presses place straight segments.
+                    self.dragging = false;
+                    self.rubber = None;
+                    self.alt_poly = true;
                     Ok(())
+                } else {
+                    self.close(ctx)
                 }
             }
         }
     }
 
     fn cancel(&mut self, _ctx: &mut ToolContext<'_>) {
-        self.points.clear();
-        self.dragging = false;
+        self.reset();
+    }
+
+    /// W16-A: Enter closes an outline held open between presses.
+    fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
+        if false /*RVMUT*/ && self.open_between_presses() {
+            self.close(ctx)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn has_pending_commit(&self) -> bool {
+        self.open_between_presses()
     }
 
     /// The shared selection keys plus the magnetic lasso's two snap controls
     /// (the registry's `search_radius` "Width" and `edge_weight` "Contrast"),
     /// which `lasso_magnetic` reads out of [`LassoTool::magnetic`] at close.
+    /// W16-A: plus the magnetic lasso's `frequency` and the shell's
+    /// [`LASSO_REMOVE_LAST_POINT`].
     fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
         if self.options.set(key, setting)? {
             return Ok(());
         }
         match (key, setting) {
+            (LASSO_REMOVE_LAST_POINT, ToolSetting::Bool(true)) => {
+                self.remove_last_point();
+                Ok(())
+            }
             ("search_radius", ToolSetting::Int(v)) => {
                 self.magnetic.search_radius = v.clamp(1, 256) as u32;
                 Ok(())
             }
             ("edge_weight", ToolSetting::Float(v)) => {
                 self.magnetic.edge_weight = finite("edge weight", v)?.clamp(0.0, 4.0);
+                Ok(())
+            }
+            ("frequency", ToolSetting::Int(v)) if self.kind == LassoKind::Magnetic => {
+                self.spacing = magnetic_spacing(v);
                 Ok(())
             }
             ("search_radius", _) | ("edge_weight", _) => Err(ToolError::OptionKindMismatch {
@@ -673,6 +960,117 @@ impl Tool for LassoTool {
     fn is_active(&self) -> bool {
         !self.points.is_empty()
     }
+}
+
+/// W16-A: a press inside the selection with a selection tool, in New mode and
+/// with no modifier held, drags the selection OUTLINE (Photopea) — the pixels
+/// stay. This is the gesture's arithmetic; `app-shell` routes the pointer to
+/// it and lands the moved outline as one `SetSelection` step on release.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OutlineDrag {
+    press: Vec2,
+    offset: IVec2,
+}
+
+impl OutlineDrag {
+    /// Whether a press at `pos` starts an outline drag: something is
+    /// selected under the pointer, no modifier is held (Shift adds, Alt
+    /// subtracts, Ctrl lends the Move tool) and the options bar's Mode is
+    /// New.
+    pub fn begins(selection: &Selection, pos: Vec2, modifiers: Modifiers, mode: BooleanOp) -> bool {
+        mode == BooleanOp::Replace
+            && modifiers == Modifiers::NONE
+            && !selection.is_none()
+            && pos.is_finite()
+            && selection.coverage_at(IVec2::new(pos.x.floor() as i32, pos.y.floor() as i32)) > 0.0
+    }
+
+    pub fn new(press: Vec2) -> Self {
+        Self {
+            press,
+            offset: IVec2::ZERO,
+        }
+    }
+
+    /// Follow the pointer to `pos`: the offset is whole pixels, and Shift
+    /// constrains it to a multiple of 45 degrees.
+    pub fn drag_to(&mut self, pos: Vec2, shift: bool) -> IVec2 {
+        if !pos.is_finite() {
+            return self.offset;
+        }
+        let d = pos - self.press;
+        let d = if shift { constrain_to_45(d) } else { d };
+        self.offset = IVec2::new(d.x.round() as i32, d.y.round() as i32);
+        self.offset
+    }
+
+    /// The whole-pixel offset so far.
+    pub fn offset(&self) -> IVec2 {
+        self.offset
+    }
+
+    /// Where the press landed.
+    pub fn press(&self) -> Vec2 {
+        self.press
+    }
+}
+
+/// W16-A: `d` projected onto the nearest multiple of 45 degrees.
+pub fn constrain_to_45(d: Vec2) -> Vec2 {
+    if d == Vec2::ZERO || !d.is_finite() {
+        return d;
+    }
+    let step = std::f32::consts::FRAC_PI_4;
+    let angle = (d.y.atan2(d.x) / step).round() * step;
+    let dir = Vec2::new(angle.cos(), angle.sin());
+    // Exact zeros on the axes, so a constrained drag never drifts a pixel.
+    let dir = Vec2::new(
+        if dir.x.abs() < 1e-4 { 0.0 } else { dir.x },
+        if dir.y.abs() < 1e-4 { 0.0 } else { dir.y },
+    );
+    dir * d.dot(dir) / dir.length_squared()
+}
+
+/// W16-A: `selection` moved by whole pixels `by` — a rectangle stays a
+/// rectangle; a mask is resampled nearest-neighbour, so no coverage changes.
+pub fn translate_selection(
+    selection: &Selection,
+    canvas: raster::PixelRect,
+    by: IVec2,
+) -> Result<Selection, ToolError> {
+    Ok(match selection {
+        Selection::None => Selection::None,
+        Selection::Rect { min, max } => Selection::Rect {
+            min: *min + by,
+            max: *max + by,
+        },
+        mask => {
+            let canvas = selection::Rect::from_xywh(
+                canvas.x.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+                canvas.y.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+                canvas.width,
+                canvas.height,
+            );
+            selection::transform_selection(
+                mask,
+                canvas,
+                glam::Affine2::from_translation(by.as_vec2()),
+                selection::transform::ResampleFilter::Nearest,
+            )?
+        }
+    })
+}
+
+/// W16-A: the options bar's Mode as a selection tool's settings carry it
+/// (the registry's `mode` choice), `New` when absent.
+pub fn mode_of_settings(settings: &[(String, ToolSetting)]) -> BooleanOp {
+    settings
+        .iter()
+        .find_map(|(key, setting)| match (key.as_str(), setting) {
+            ("mode", ToolSetting::Choice(i)) => SELECTION_MODES.get(*i).copied(),
+            _ => None,
+        })
+        .unwrap_or(BooleanOp::Replace)
 }
 
 /// Which colour-driven selector a [`WandTool`] is.
@@ -1556,5 +1954,205 @@ mod object_selection_tests {
         assert!(registry::make(ToolId::ObjectSelection)
             .set_setting("tolerance", ToolSetting::Float(0.5))
             .is_err());
+    }
+}
+
+/// W16-A: the lassos' open outline (Enter, double-click, Backspace, the
+/// magnetic lasso's click-then-move anchors) and the outline drag's
+/// arithmetic, on the tools themselves. The shell routes are proved in
+/// the `select_w16_shell_tests` of `app-shell`.
+#[cfg(test)]
+mod w16a_tests {
+    use super::*;
+    use crate::tiles::MemoryTiles;
+    use layer_model::LayerId;
+    use raster::PixelRect;
+
+    /// A 64x64 layer: dark, then light from x = 16 to 31, then dark — two
+    /// vertical edges for the magnetic lasso.
+    fn banded(tiles: &mut MemoryTiles, key: PixelKey) {
+        let ts = raster::TILE_SIZE as usize;
+        let mut data = vec![0u8; ts * ts * 4];
+        for y in 0..64usize {
+            for x in 0..64usize {
+                let g = if (16..32).contains(&x) { 220 } else { 40 };
+                let i = (y * ts + x) * 4;
+                data[i..i + 4].copy_from_slice(&[g, g, g, 255]);
+            }
+        }
+        tiles.put(key, raster::TileCoord::new(0, 0, 0), data);
+    }
+
+    fn at(x: f32, y: f32) -> PointerEvent {
+        PointerEvent::at(x, y)
+    }
+
+    #[test]
+    fn a_polygonal_outline_closes_on_enter_or_a_double_click_and_backspace_edits_it() {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64));
+        let mut poly = LassoTool::new(LassoKind::Polygonal);
+        for (x, y) in [(10.0, 10.0), (50.0, 10.0), (50.0, 50.0), (60.0, 60.0)] {
+            poly.on_pointer_down(&mut ctx, at(x, y)).unwrap();
+            poly.on_pointer_up(&mut ctx, at(x, y)).unwrap();
+        }
+        assert!(poly.has_pending_commit(), "an open outline is Enter's");
+        poly.set_setting(LASSO_REMOVE_LAST_POINT, ToolSetting::Bool(true))
+            .unwrap();
+        assert_eq!(
+            poly.path().len(),
+            3,
+            "Backspace did not drop the last point"
+        );
+        poly.on_pointer_down(&mut ctx, at(10.0, 50.0)).unwrap();
+        poly.on_pointer_up(&mut ctx, at(10.0, 50.0)).unwrap();
+        assert!(ctx.selection_edits().is_empty());
+        poly.commit(&mut ctx).unwrap();
+        let edits = ctx.drain_selection();
+        assert_eq!(edits.len(), 1, "Enter did not close the outline");
+        assert!(edits[0].incoming.coverage_at(IVec2::new(30, 30)) > 0.5);
+        assert_eq!(edits[0].incoming.coverage_at(IVec2::new(55, 40)), 0.0);
+        assert!(!poly.has_pending_commit() && !poly.is_active());
+
+        // A double-click: the second press on the first, with no travel.
+        for (x, y) in [(10.0, 10.0), (50.0, 10.0), (50.0, 50.0), (10.0, 50.0)] {
+            poly.on_pointer_down(&mut ctx, at(x, y)).unwrap();
+            poly.on_pointer_up(&mut ctx, at(x, y)).unwrap();
+        }
+        poly.on_pointer_down(&mut ctx, at(10.5, 50.5)).unwrap();
+        assert_eq!(
+            ctx.drain_selection().len(),
+            1,
+            "a double-click did not close"
+        );
+
+        // Travel between the two presses: not a double-click.
+        for (x, y) in [(10.0, 10.0), (50.0, 10.0), (50.0, 50.0)] {
+            poly.on_pointer_down(&mut ctx, at(x, y)).unwrap();
+            poly.on_pointer_up(&mut ctx, at(x, y)).unwrap();
+        }
+        poly.on_pointer_move(&mut ctx, at(30.0, 60.0)).unwrap();
+        poly.on_pointer_move(&mut ctx, at(50.0, 50.0)).unwrap();
+        poly.on_pointer_down(&mut ctx, at(50.0, 50.0)).unwrap();
+        assert!(ctx.selection_edits().is_empty(), "a slow re-click closed");
+        assert_eq!(poly.path().len(), 4);
+    }
+
+    #[test]
+    fn the_magnetic_lasso_lays_edge_snapped_anchors_as_the_pointer_moves() {
+        let mut tiles = MemoryTiles::new();
+        let layer = LayerId::new();
+        banded(&mut tiles, PixelKey::Layer(layer));
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64)).with_layer(layer);
+        let mut mag = LassoTool::new(LassoKind::Magnetic);
+        // Click (press + release) three pixels left of the x = 16 edge.
+        mag.on_pointer_down(&mut ctx, at(13.0, 4.0)).unwrap();
+        mag.on_pointer_up(&mut ctx, at(13.0, 4.0)).unwrap();
+        assert!(mag.has_pending_commit(), "the release closed the outline");
+        // Move with the button up, down the column.
+        for y in [10.0, 18.0, 26.0, 34.0, 42.0] {
+            mag.on_pointer_move(&mut ctx, at(13.0, y)).unwrap();
+        }
+        let path = mag.path().to_vec();
+        assert!(path.len() >= 3, "no anchors were laid: {path:?}");
+        for p in &path {
+            assert!(
+                (p.x - 16.0).abs() <= 1.0,
+                "anchor {p:?} was not pulled onto the x = 16 edge"
+            );
+        }
+        // Contrast 0 turns the pull off: the anchor stays at the pointer.
+        mag.set_setting("edge_weight", ToolSetting::Float(0.0))
+            .unwrap();
+        mag.on_pointer_move(&mut ctx, at(13.0, 60.0)).unwrap();
+        assert_eq!(mag.path().last(), Some(&Vec2::new(13.0, 60.0)));
+        // Frequency: 100 lays anchors two pixels apart, 0 sixty.
+        assert_eq!(mag.anchor_spacing(), MAGNETIC_ANCHOR_SPACING);
+        mag.set_setting("frequency", ToolSetting::Int(100)).unwrap();
+        assert_eq!(mag.anchor_spacing(), 2.0);
+        assert_eq!(magnetic_spacing(0), 60.0);
+        assert!(
+            (magnetic_spacing(MAGNETIC_FREQUENCY_DEFAULT) - MAGNETIC_ANCHOR_SPACING).abs() < 1e-3
+        );
+        assert!(LassoTool::new(LassoKind::Polygonal)
+            .set_setting("frequency", ToolSetting::Int(50))
+            .is_err());
+        // Enter closes.
+        mag.on_pointer_move(&mut ctx, at(30.0, 60.0)).unwrap();
+        mag.commit(&mut ctx).unwrap();
+        assert_eq!(ctx.drain_selection().len(), 1);
+        assert!(!mag.is_active());
+    }
+
+    #[test]
+    fn the_outline_drag_starts_only_inside_in_new_mode_and_shift_takes_45_degrees() {
+        let sel = Selection::Rect {
+            min: IVec2::new(10, 10),
+            max: IVec2::new(30, 30),
+        };
+        let inside = Vec2::new(20.0, 20.0);
+        let replace = BooleanOp::Replace;
+        assert!(OutlineDrag::begins(&sel, inside, Modifiers::NONE, replace));
+        let outside = Vec2::new(40.0, 40.0);
+        assert!(!OutlineDrag::begins(
+            &sel,
+            outside,
+            Modifiers::NONE,
+            replace
+        ));
+        assert!(!OutlineDrag::begins(
+            &sel,
+            inside,
+            Modifiers::shift(),
+            replace
+        ));
+        assert!(!OutlineDrag::begins(
+            &sel,
+            inside,
+            Modifiers::alt(),
+            replace
+        ));
+        assert!(!OutlineDrag::begins(
+            &sel,
+            inside,
+            Modifiers::NONE,
+            BooleanOp::Add
+        ));
+        assert!(!OutlineDrag::begins(
+            &Selection::None,
+            inside,
+            Modifiers::NONE,
+            replace
+        ));
+
+        let mut drag = OutlineDrag::new(inside);
+        assert_eq!(drag.drag_to(Vec2::new(27.4, 24.6), false), IVec2::new(7, 5));
+        assert_eq!(drag.drag_to(Vec2::new(32.0, 23.0), true), IVec2::new(12, 0));
+        assert_eq!(drag.drag_to(Vec2::new(28.0, 30.0), true), IVec2::new(9, 9));
+        assert_eq!(drag.drag_to(Vec2::new(19.0, 6.0), true), IVec2::new(0, -14));
+
+        let canvas = PixelRect::new(0, 0, 64, 64);
+        assert_eq!(
+            translate_selection(&sel, canvas, IVec2::new(3, -2)).unwrap(),
+            Selection::Rect {
+                min: IVec2::new(13, 8),
+                max: IVec2::new(33, 28),
+            }
+        );
+        let mask = Selection::Mask(
+            ellipse_subpixel(Vec2::new(10.0, 10.0), Vec2::new(30.0, 30.0)).unwrap(),
+        );
+        let moved = translate_selection(&mask, canvas, IVec2::new(5, 5)).unwrap();
+        assert_eq!(
+            moved.coverage_at(IVec2::new(25, 25)),
+            mask.coverage_at(IVec2::new(20, 20)),
+            "a moved mask changed coverage"
+        );
+        assert_eq!(moved.coverage_at(IVec2::new(11, 20)), 0.0);
+        assert_eq!(
+            mode_of_settings(&[("mode".to_string(), ToolSetting::Choice(1))]),
+            BooleanOp::Add
+        );
+        assert_eq!(mode_of_settings(&[]), BooleanOp::Replace);
     }
 }

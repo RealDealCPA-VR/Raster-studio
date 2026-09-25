@@ -30,6 +30,12 @@ pub struct MenuItem {
     pub label: String,
     pub action: MenuAction,
     pub resolution: Resolution,
+    /// W16-D: a rule is drawn under this row (Photopea's separators).
+    pub separator_after: bool,
+    /// W16-D: a row with no menu action of its own (Photopea's dialog-free
+    /// Duplicate Layer): a click asks the application through the Layers
+    /// panel instead of emitting `action`, whose gate it shares.
+    pub request: Option<crate::panels::layers::w16::LayersRequest>,
 }
 
 fn items(ctx: &MenuContext, actions: &[MenuAction]) -> Vec<MenuItem> {
@@ -41,6 +47,8 @@ fn items(ctx: &MenuContext, actions: &[MenuAction]) -> Vec<MenuItem> {
             label: action.label_in(ctx),
             action: *action,
             resolution: action.resolve(ctx),
+            separator_after: false,
+            request: None,
         })
         .collect()
 }
@@ -62,36 +70,36 @@ pub fn canvas_items(ctx: &MenuContext) -> Vec<MenuItem> {
     )
 }
 
-/// The layer-row menu: the rows Photopea's Layers panel offers on a row
-/// (W10-I), in Photopea's order — style, duplicate / delete, the smart-object
-/// and rasterize pair, the mask and clipping rows, linking, Select Pixels,
-/// the layer-style clipboard, and the merge family.
+/// The layer-row menu (W16-D): Photopea's Layers-panel row menu, its rows
+/// and its order and separators — Blending Options, Select Pixels | Duplicate
+/// Layer, Duplicate Into…, Delete | Convert to Smart Object, (on a smart
+/// object, its rows), Rasterize, Rasterize Layer Style, Convert to Shape |
+/// (on a text layer, the point / paragraph conversion) | Clipping Mask, the
+/// Layer Style clipboard (Copy, Paste, Clear), Merge Down (Merge Layers over a
+/// multi-selection), Flatten Image | the colour labels.
 ///
-/// Clipping shows the one row that applies: Release on a clipped layer,
-/// Create on any other, as Photopea does; the mask row says which way it
-/// flips (Disable on an enabled mask, Enable otherwise). Two rows are
-/// relabelled for a menu that has no submenu to name them: the Layer ▸
-/// Rasterize ▸ Layer row reads "Rasterize Layer". W11-E: the colour labels
-/// close the menu, flat as in Photoshop's row menu (No Color, Red … Gray),
-/// and Merge Down reads Merge Layers when two or more layers are selected.
+/// Photopea's submenus (Smart Object, Layer Style, Color) are flat here, the
+/// way the colours already were; the smart-object rows appear only when the
+/// active layer is a smart object. Clipping shows the one row that applies
+/// (Release on a clipped layer, Create otherwise). Duplicate Layer copies at
+/// once, as Photopea's does; Duplicate Into… is the dialog with the
+/// destination document.
 pub fn layer_items(ctx: &MenuContext) -> Vec<MenuItem> {
+    use crate::menu::{LayerClass, LayerExtraOp, RasterizeTarget, SmartObjectOp};
     let clipped = ctx.active.is_some_and(|l| l.is_clipping);
-    let mask_on = ctx.active.is_some_and(|l| l.has_mask && l.mask_enabled);
-    let mut rows = items(
-        ctx,
+    let class = ctx.active.map(|l| l.class);
+    let mut rows: Vec<MenuItem> = Vec::new();
+    let group = |rows: &mut Vec<MenuItem>, actions: &[MenuAction]| {
+        let mut part = items(ctx, actions);
+        if let Some(last) = part.last_mut() {
+            last.separator_after = true;
+        }
+        rows.extend(part);
+    };
+    group(
+        &mut rows,
         &[
             MenuAction::BlendingOptions,
-            MenuAction::DuplicateLayer,
-            MenuAction::DeleteLayer,
-            MenuAction::ConvertToSmartObject,
-            MenuAction::Rasterize(crate::menu::RasterizeTarget::Layer),
-            MenuAction::Mask(crate::menu::MaskOp::Toggle),
-            if clipped {
-                MenuAction::ReleaseClippingMask
-            } else {
-                MenuAction::CreateClippingMask
-            },
-            MenuAction::LinkLayers,
             // W9-A: Photopea's "Select Pixels" — the active layer's
             // transparency as a new selection.
             MenuAction::SelectLayerPixels {
@@ -99,11 +107,54 @@ pub fn layer_items(ctx: &MenuContext) -> Vec<MenuItem> {
                 mask: false,
                 op: crate::dialogs::LoadOperation::New,
             },
+        ],
+    );
+    group(
+        &mut rows,
+        &[
+            MenuAction::DuplicateLayer,
+            MenuAction::DuplicateLayer,
+            MenuAction::DeleteLayer,
+        ],
+    );
+    let mut middle = vec![MenuAction::ConvertToSmartObject];
+    if class == Some(LayerClass::SmartObject) {
+        middle.extend([
+            MenuAction::SmartObject(SmartObjectOp::NewViaCopy),
+            MenuAction::EditSmartObjectContents,
+            MenuAction::LayerExtra(LayerExtraOp::ResetTransform),
+            MenuAction::ReplaceContents,
+            MenuAction::SmartObject(SmartObjectOp::ExportContents),
+            MenuAction::SmartObject(SmartObjectOp::ConvertToLayers),
+        ]);
+    }
+    middle.extend([
+        MenuAction::Rasterize(RasterizeTarget::Layer),
+        MenuAction::Rasterize(RasterizeTarget::LayerStyle),
+        MenuAction::ConvertTextToShape,
+    ]);
+    group(&mut rows, &middle);
+    if class == Some(LayerClass::Text) {
+        group(
+            &mut rows,
+            &[
+                MenuAction::ConvertToPointText,
+                MenuAction::ConvertToParagraphText,
+            ],
+        );
+    }
+    group(
+        &mut rows,
+        &[
+            if clipped {
+                MenuAction::ReleaseClippingMask
+            } else {
+                MenuAction::CreateClippingMask
+            },
             MenuAction::CopyLayerStyle,
             MenuAction::PasteLayerStyle,
             MenuAction::ClearLayerStyle,
             MenuAction::MergeDown,
-            MenuAction::MergeVisible,
             MenuAction::FlattenImage,
         ],
     );
@@ -114,18 +165,29 @@ pub fn layer_items(ctx: &MenuContext) -> Vec<MenuItem> {
         .map(MenuAction::SetLayerColor)
         .collect();
     rows.extend(items(ctx, &colors));
+    let mut duplicates = 0;
     for row in &mut rows {
         match row.action {
-            MenuAction::Rasterize(crate::menu::RasterizeTarget::Layer) => {
+            MenuAction::DuplicateLayer => {
+                // The first is Photopea's Duplicate Layer (no dialog); the
+                // second its Duplicate Into…, the dialog with the destination.
+                if duplicates == 0 {
+                    row.label = LAYER_ROW_DUPLICATE.to_string();
+                    row.request = Some(crate::panels::layers::w16::LayersRequest::DuplicateLayer);
+                } else {
+                    row.label = LAYER_ROW_DUPLICATE_INTO.to_string();
+                }
+                duplicates += 1;
+            }
+            MenuAction::DeleteLayer => row.label = LAYER_ROW_DELETE.to_string(),
+            MenuAction::Rasterize(RasterizeTarget::Layer) => {
                 row.label = LAYER_ROW_RASTERIZE.to_string();
             }
-            MenuAction::Mask(crate::menu::MaskOp::Toggle) => {
-                row.label = if mask_on {
-                    LAYER_ROW_DISABLE_MASK
-                } else {
-                    LAYER_ROW_ENABLE_MASK
-                }
-                .to_string();
+            MenuAction::Rasterize(RasterizeTarget::LayerStyle) => {
+                row.label = LAYER_ROW_RASTERIZE_STYLE.to_string();
+            }
+            MenuAction::EditSmartObjectContents => {
+                row.label = LAYER_ROW_EDIT_CONTENTS.to_string();
             }
             _ => {}
         }
@@ -133,11 +195,14 @@ pub fn layer_items(ctx: &MenuContext) -> Vec<MenuItem> {
     rows
 }
 
-/// The layer-row menu's own wording for the rows whose menu-bar label leans
-/// on a submenu's name.
-const LAYER_ROW_RASTERIZE: &str = "Rasterize Layer";
-const LAYER_ROW_DISABLE_MASK: &str = "Disable Layer Mask";
-const LAYER_ROW_ENABLE_MASK: &str = "Enable Layer Mask";
+/// The layer-row menu's own wording (Photopea's) for the rows whose
+/// menu-bar label leans on a submenu's name or asks through a dialog.
+const LAYER_ROW_DUPLICATE: &str = "Duplicate Layer";
+const LAYER_ROW_DUPLICATE_INTO: &str = "Duplicate Into…";
+const LAYER_ROW_DELETE: &str = "Delete";
+const LAYER_ROW_RASTERIZE: &str = "Rasterize";
+const LAYER_ROW_RASTERIZE_STYLE: &str = "Rasterize Layer Style";
+const LAYER_ROW_EDIT_CONTENTS: &str = "Open (Edit Contents)";
 
 /// The document-tab menu: the close family from the File menu.
 pub fn tab_items(ctx: &MenuContext) -> Vec<MenuItem> {
@@ -224,8 +289,33 @@ pub fn draw_open(w: &mut Workspace, ctx: &egui::Context, menu_ctx: &MenuContext)
                         let _ = response.clone().on_hover_text(reason);
                     }
                     if enabled && response.clicked() {
-                        w.emit(crate::Intent::Action(item.action));
+                        match item.request {
+                            // W16-D: a row the application answers through
+                            // the Layers panel's request queue.
+                            Some(request) => {
+                                w.layers.request(request);
+                                ui.ctx().request_repaint();
+                            }
+                            None => w.emit(crate::Intent::Action(item.action)),
+                        }
                         w.context_menu = None;
+                    }
+                    if item.separator_after {
+                        let (rule, _) = ui.allocate_exact_size(
+                            egui::vec2(
+                                ui.available_width(),
+                                design::tokens::spacing::Space::XSmall.pt(),
+                            ),
+                            egui::Sense::hover(),
+                        );
+                        ui.painter().hline(
+                            rule.x_range(),
+                            rule.center().y,
+                            egui::Stroke::new(
+                                tokens.borders.hairline,
+                                design::color32(tokens.palette.color(ColorRole::SeparatorHairline)),
+                            ),
+                        );
                     }
                 }
             });

@@ -1,12 +1,17 @@
-//! W11-H: Krita documents (`.kra`), read only, as their **merged image**.
+//! W11-H: Krita documents (`.kra`), read only.
 //!
 //! A `.kra` is a ZIP archive: a stored `mimetype` entry reading
 //! `application/x-krita`, `maindoc.xml` (the layer tree), one file per layer
 //! in Krita's own tiled, LZF-compressed pixel format, and `mergedimage.png`,
-//! the flattened composite Krita writes on every save. What opens is that
-//! PNG, decoded by the codec facade under the caller's limits. The layers are
-//! **not** read: their pixel data is Krita's tiled format, not PNG, and
-//! decoding it is not done here, so a `.kra` opens flattened.
+//! the flattened composite Krita writes on every save. The flat decode
+//! ([`decode`]) is that PNG, decoded by the codec facade under the caller's
+//! limits.
+//!
+//! W16-L: the **layers** are read too, by [`layers::read`]: the tree from
+//! `maindoc.xml` (name, opacity, visibility, blend mode, groups) and every
+//! 8- or 16-bit RGBA paint layer's tiles, LZF-decompressed (see
+//! [`layers`]). A `.kra` with no `mergedimage.png` now opens as its layers
+//! composited ([`layers::flatten`]) instead of being refused.
 //!
 //! The ZIP reader is this module's own, and small: the end-of-central-
 //! directory record, the central directory, and one local header; entries
@@ -26,6 +31,10 @@ use super::malformed;
 use crate::codec::{CodecError, DecodedSurface, ImageInfo, ImportFormat, ImportLimits};
 
 const NAME: &str = "Krita";
+
+/// W16-L: the layer tree and the paint layers' pixels.
+#[path = "kra_layers.rs"]
+pub mod layers;
 
 const LOCAL: [u8; 4] = *b"PK\x03\x04";
 const CENTRAL: [u8; 4] = *b"PK\x01\x02";
@@ -141,7 +150,7 @@ pub(crate) fn entry(zip: &[u8], wanted: &str, cap: u64) -> Result<Option<Vec<u8>
     Ok(None)
 }
 
-fn merged_png(bytes: &[u8], limits: ImportLimits) -> Result<Vec<u8>, CodecError> {
+fn merged_png(bytes: &[u8], limits: ImportLimits) -> Result<Option<Vec<u8>>, CodecError> {
     let mimetype = entry(bytes, "mimetype", 64)?;
     if mimetype.as_deref() != Some(MIMETYPE) {
         return Err(malformed(
@@ -149,16 +158,26 @@ fn merged_png(bytes: &[u8], limits: ImportLimits) -> Result<Vec<u8>, CodecError>
             "the archive's mimetype is not application/x-krita",
         ));
     }
-    entry(bytes, "mergedimage.png", limits.max_alloc_bytes)?.ok_or_else(|| {
-        CodecError::Unsupported(
-            "this .kra has no mergedimage.png (Krita's layer data itself is not read)".into(),
-        )
+    entry(bytes, "mergedimage.png", limits.max_alloc_bytes)
+}
+
+/// W16-L: a `.kra` with no merged image opens as its layers, composited;
+/// the refusal (when the layers cannot be read either) names both.
+fn from_layers(bytes: &[u8], limits: ImportLimits) -> Result<layers::KraDocument, CodecError> {
+    layers::read(bytes, limits).map_err(|e| match e {
+        CodecError::LimitExceeded(_) => e,
+        other => CodecError::Unsupported(format!(
+            "this .kra has no mergedimage.png, and its layers could not be read: {other}"
+        )),
     })
 }
 
 /// Header facts, from the merged PNG's header.
 pub fn probe(bytes: &[u8], limits: ImportLimits) -> Result<ImageInfo, CodecError> {
-    let png = merged_png(bytes, limits)?;
+    let Some(png) = merged_png(bytes, limits)? else {
+        let doc = from_layers(bytes, limits)?;
+        return Ok(super::info(doc.width, doc.height, ImportFormat::Kra, false));
+    };
     let mut info = crate::codec::probe_bytes_as(&png, limits, ImportFormat::Png)?;
     if info.format != ImportFormat::Png {
         return Err(malformed(NAME, "mergedimage.png is not a PNG"));
@@ -169,7 +188,16 @@ pub fn probe(bytes: &[u8], limits: ImportLimits) -> Result<ImageInfo, CodecError
 
 /// Decode the merged image.
 pub fn decode(bytes: &[u8], limits: ImportLimits) -> Result<DecodedSurface, CodecError> {
-    let png = merged_png(bytes, limits)?;
+    let Some(png) = merged_png(bytes, limits)? else {
+        let doc = from_layers(bytes, limits)?;
+        let rgba = layers::flatten(&doc, limits)?;
+        return Ok(super::rgba8_surface(
+            doc.width,
+            doc.height,
+            rgba,
+            ImportFormat::Kra,
+        ));
+    };
     let mut s = crate::codec::decode_surface_bytes_as(&png, limits, ImportFormat::Png)?;
     if s.source_format != ImportFormat::Png {
         return Err(malformed(NAME, "mergedimage.png is not a PNG"));

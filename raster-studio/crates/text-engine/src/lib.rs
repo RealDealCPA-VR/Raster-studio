@@ -97,6 +97,8 @@ mod raster;
 mod shared;
 mod style;
 pub mod warp;
+/// W16-L: WOFF / WOFF2 fonts, unwrapped to sfnt before they load.
+pub mod webfont;
 
 pub use edit::CaretStop;
 pub use font::{

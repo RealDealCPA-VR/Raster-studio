@@ -621,6 +621,48 @@ pub fn layer_class_name(kind: &LayerKind) -> &'static str {
     }
 }
 
+/// W16-N: every fixed name [`Command::label`] gives a history step, in
+/// English — the keys the UI's language tables translate the History panel's
+/// rows by. The labels themselves stay English (tests and scripts match on
+/// them); a `Transaction`'s name is its caller's.
+pub const HISTORY_LABELS: &[&str] = &[
+    "Create Layer",
+    "Delete Layer",
+    "Restore Layer",
+    "Move Layer",
+    "Change Layer Properties",
+    "Edit Raster",
+    "Edit Group",
+    "Edit Adjustment",
+    "Edit Text",
+    "Edit Shape",
+    "Edit Smart object",
+    "Edit Generator",
+    "Edit Fill",
+    "Transform Layer",
+    "Select",
+    "Change Colour Mode",
+    "Change Bit Depth",
+    "Paint",
+    "Paint Mask",
+    "Paint Filter Mask",
+    "Fill",
+    "Fill Mask",
+    "Fill Filter Mask",
+    "Clear",
+    "Resize Canvas",
+    "Image Size",
+    "Edit Guides",
+    "Record Source Size",
+    "Replace Contents",
+    "Edit Document Records",
+    "Edit Saved Selection",
+    "Edit Slices",
+    "Edit Timeline",
+    "Assign Profile",
+    "Spot Channel",
+];
+
 #[derive(Debug, thiserror::Error)]
 pub enum CommandError {
     #[error("layer {0} not found")]

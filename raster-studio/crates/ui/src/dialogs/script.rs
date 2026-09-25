@@ -52,6 +52,10 @@ pub enum ScriptOutcome {
     Run(String),
     /// Close (or Escape).
     Closed,
+    /// W16-K: Save pressed: keep `source` under `name` in the saved list.
+    Save { name: String, source: String },
+    /// W16-K: a saved script's delete button.
+    Delete(String),
 }
 
 /// File ▸ Script….
@@ -64,6 +68,15 @@ pub struct ScriptDialog {
     note: String,
     /// Where the Run button was last drawn, so a headless test can press it.
     run_rect: Option<egui::Rect>,
+    /// W16-K: the demos listed at the top, `(name, source)`; a click loads
+    /// one into the code box (Photopea: "Several demos are available in the
+    /// top of the Script window").
+    demos: Vec<(String, String)>,
+    /// W16-K: the saved scripts listed at the bottom, `(name, source)`; a
+    /// click loads one, its delete button asks the shell to remove it.
+    saved: Vec<(String, String)>,
+    /// W16-K: the name Save keeps the source under.
+    save_name: String,
 }
 
 impl ScriptDialog {
@@ -108,6 +121,49 @@ impl ScriptDialog {
         self.log.clear();
     }
 
+    /// W16-K: the demos the top row lists, `(name, source)`.
+    pub fn set_demos(&mut self, demos: Vec<(String, String)>) {
+        self.demos = demos;
+    }
+
+    pub fn demos(&self) -> &[(String, String)] {
+        &self.demos
+    }
+
+    /// W16-K: the saved scripts the bottom list shows, `(name, source)`.
+    pub fn set_saved(&mut self, saved: Vec<(String, String)>) {
+        self.saved = saved;
+    }
+
+    pub fn saved(&self) -> &[(String, String)] {
+        &self.saved
+    }
+
+    /// W16-K: the name Save will use.
+    pub fn set_save_name(&mut self, name: impl Into<String>) {
+        self.save_name = name.into();
+    }
+
+    /// W16-K: the id of demo `index`'s button.
+    pub fn demo_id(index: usize) -> egui::Id {
+        egui::Id::new(("raster-script-demo", index))
+    }
+
+    /// W16-K: the id of saved script `index`'s load button.
+    pub fn saved_id(index: usize) -> egui::Id {
+        egui::Id::new(("raster-script-saved", index))
+    }
+
+    /// W16-K: the id of saved script `index`'s delete button.
+    pub fn delete_id(index: usize) -> egui::Id {
+        egui::Id::new(("raster-script-delete", index))
+    }
+
+    /// W16-K: the id of the Save button.
+    pub fn save_id() -> egui::Id {
+        egui::Id::new("raster-script-save")
+    }
+
     /// The egui id of the code box.
     pub fn source_id() -> egui::Id {
         egui::Id::new("raster-script-source")
@@ -148,11 +204,75 @@ impl ScriptDialog {
                 self.clear_log();
                 ScriptOutcome::Open
             }
+            Some(Pressed::Save) => ScriptOutcome::Save {
+                name: self.save_name.trim().to_string(),
+                source: self.source.clone(),
+            },
+            Some(Pressed::Delete(i)) => match self.saved.get(i) {
+                Some((name, _)) => ScriptOutcome::Delete(name.clone()),
+                None => ScriptOutcome::Open,
+            },
             _ => ScriptOutcome::Open,
         }
     }
 
+    /// W16-K: the demos row: each loads its source into the code box.
+    fn demos_row(&mut self, ui: &mut egui::Ui) {
+        if self.demos.is_empty() {
+            return;
+        }
+        let mut load = None;
+        ui.horizontal_wrapped(|ui| {
+            let _ = caption(ui, "Demos");
+            for (i, (name, _)) in self.demos.iter().enumerate() {
+                if crate::view::labelled_button(ui, name, true, Self::demo_id(i)).clicked() {
+                    load = Some(i);
+                }
+            }
+        });
+        if let Some(i) = load {
+            self.source = self.demos[i].1.clone();
+            self.save_name = self.demos[i].0.clone();
+        }
+        hairline(ui);
+    }
+
+    /// W16-K: the saved scripts (load, delete) and the Save row.
+    fn saved_rows(&mut self, ui: &mut egui::Ui) -> Option<Pressed> {
+        let mut pressed = None;
+        let mut load = None;
+        hairline(ui);
+        let _ = caption(ui, "Saved");
+        for (i, (name, _)) in self.saved.iter().enumerate() {
+            ui.horizontal(|ui| {
+                if crate::view::labelled_button(ui, name, true, Self::saved_id(i)).clicked() {
+                    load = Some(i);
+                }
+                if crate::view::icon_button_id(ui, "trash", true, Self::delete_id(i)).clicked() {
+                    pressed = Some(Pressed::Delete(i));
+                }
+            });
+        }
+        if let Some(i) = load {
+            self.source = self.saved[i].1.clone();
+            self.save_name = self.saved[i].0.clone();
+        }
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.save_name)
+                    .id(egui::Id::new("raster-script-save-name"))
+                    .desired_width(sizes::text_field_wide()),
+            );
+            let can_save = !self.save_name.trim().is_empty() && !self.source.trim().is_empty();
+            if crate::view::labelled_button(ui, "Save", can_save, Self::save_id()).clicked() {
+                pressed = Some(Pressed::Save);
+            }
+        });
+        pressed
+    }
+
     fn body(&mut self, ui: &mut egui::Ui) -> Option<Pressed> {
+        self.demos_row(ui);
         let editor = egui::TextEdit::multiline(&mut self.source)
             .id(Self::source_id())
             .code_editor()
@@ -212,6 +332,10 @@ impl ScriptDialog {
                 pressed = Some(Pressed::Clear);
             }
         });
+        // W16-K: the saved scripts sit at the bottom, as in Photopea.
+        if let Some(saved) = self.saved_rows(ui) {
+            pressed = Some(saved);
+        }
         pressed
     }
 }
@@ -221,6 +345,9 @@ enum Pressed {
     Run,
     Close,
     Clear,
+    // W16-K.
+    Save,
+    Delete(usize),
 }
 
 #[cfg(test)]

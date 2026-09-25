@@ -1,0 +1,1609 @@
+# Raster Studio interface strings, ko. One row per line: the English source, a TAB,
+# the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
+# Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
+@name	한국어
+ fps	 fps
+ frames	 프레임
+ ms	 ms
+ px	 px
+0 bytes	0바이트
+16 Bits/Channel	16비트/채널
+16 bit	16비트
+32 Bits/Channel	32비트/채널
+3D	3D
+50% Grey	50% 회색
+50% Threshold	50% 한계값
+8 Bits/Channel	8비트/채널
+8 bit	8비트
+90° Clockwise	90° 시계 방향
+90° Counter Clockwise	90° 시계 반대 방향
+A CSV row has the wrong number of fields, at line	CSV 행의 필드 수가 잘못되었습니다. 행
+A blank canvas at any size	원하는 크기의 빈 캔버스
+A colour channel cannot be deleted	색상 채널은 삭제할 수 없습니다
+A layered raster editor	레이어를 지원하는 래스터 편집기
+A palette holds 2 to 256 colours	팔레트에는 2~256가지 색상이 들어갑니다
+A saved selection already has that name	같은 이름의 저장된 선택 영역이 이미 있습니다
+A saved selection: click to open Select > Load Selection, then choose it by name there	저장된 선택 영역: 클릭하면 선택 > 선택 영역 불러오기가 열리며, 거기서 이름으로 선택합니다
+A slice needs a name	분할 영역에는 이름이 필요합니다
+AV1 (smaller, newer players)	AV1(더 작음, 최신 플레이어 필요)
+About Raster Studio	Raster Studio 정보
+Absolute Colorimetric	절대 색도계
+Action sets	액션 세트
+Actions	액션
+Adaptive (median cut)	적응(중간값 분할)
+Add "copy" to copied layers	복사한 레이어에 "복사" 추가
+Add Artboard Above	위에 대지 추가
+Add Artboard Below	아래에 대지 추가
+Add Artboard Left	왼쪽에 대지 추가
+Add Artboard Right	오른쪽에 대지 추가
+Add Filter Mask	필터 마스크 추가
+Add Media	미디어 추가
+Add Noise…	노이즈 추가…
+Add a layer mask	레이어 마스크 추가
+Add a smart filter mask	고급 필터 마스크 추가
+Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read	재생 헤드 위치에 비디오 파일(MP4: H.264 또는 AV1)을 비디오 레이어로 추가합니다. 오디오는 읽지 않습니다
+Add an adjustment layer	조정 레이어 추가
+Add another instance of this effect	이 효과의 인스턴스를 하나 더 추가
+Add current colour	현재 색상 추가
+Add export	내보내기 추가
+Add frame	프레임 추가
+Add or remove room around the image. Pixels are not resampled.	이미지 주위에 공간을 추가하거나 제거합니다. 픽셀은 리샘플링되지 않습니다.
+Add shortcut	바로 가기 추가
+Add to Selection	선택 영역에 추가
+Adds one guide at a document coordinate, in pixels.	문서 좌표(픽셀)에 안내선 하나를 추가합니다.
+Adjustments	조정
+Advanced	고급
+Again	다시
+Again with Copy	복사하여 다시
+Aliased (pencil)	앨리어스(연필)
+Align	정렬
+Align the bottom edge to the canvas	아래쪽 가장자리를 캔버스에 맞춤
+Align the left edge to the canvas	왼쪽 가장자리를 캔버스에 맞춤
+Align the right edge to the canvas	오른쪽 가장자리를 캔버스에 맞춤
+Align the top edge to the canvas	위쪽 가장자리를 캔버스에 맞춤
+Align with layer	레이어에 맞춤
+All	모두
+All Caps	모두 대문자
+All Caps shapes every lowercase letter as its capital; Small Caps shapes it as a capital at 70 % size. The stored text keeps the case you typed.	모두 대문자는 모든 소문자를 대문자 모양으로, 작은 대문자는 70 % 크기의 대문자 모양으로 표시합니다. 저장된 텍스트는 입력한 대소문자를 유지합니다.
+All Layers	모든 레이어
+Alpha	알파
+Already used by	이미 사용 중:
+Alt Tag	Alt 태그
+Amount	양
+An export needs at least one output	내보내기에는 출력이 하나 이상 필요합니다
+An image or project from this computer	이 컴퓨터의 이미지 또는 프로젝트
+Angle	각도
+Angle (degrees)	각도(도)
+Angle jitter	각도 지터
+Animation	애니메이션
+Another slice already has this name	다른 분할 영역이 이미 이 이름을 사용합니다
+Appearance	모양
+Applied	적용됨
+Apply	적용
+Apply Guides	안내선 적용
+Apply Image	이미지 적용
+Apply Image…	이미지 적용…
+Apply Mask	마스크 적용
+Apply Style	스타일 적용
+Apply Style 1	스타일 1 적용
+Apply Style Preset…	스타일 사전 설정 적용…
+Apply the next comp	다음 컴프 적용
+Apply the previous comp	이전 컴프 적용
+Apply this mask	이 마스크 적용
+Approximate. The composited result is what the canvas shows.	근사값입니다. 합성 결과는 캔버스에 보이는 그대로입니다.
+Arbitrary…	임의 각도…
+Arc	부채꼴
+Arc Lower	아래 부채꼴
+Arc Upper	위 부채꼴
+Arch	아치
+Arrange	정돈
+Artboard	대지
+Artboard from Layers	레이어에서 대지 만들기
+Artboards in one document	한 문서의 대지
+Artboards to Files…	대지를 파일로…
+Assign Profile	프로필 지정
+Assigned {name}: the pixel numbers are unchanged, so the colours look different	{name} 지정됨: 픽셀 값은 그대로이므로 색상이 다르게 보입니다
+Author	작성자
+Auto Color	자동 색상
+Auto Contrast	자동 대비
+Auto Tone	자동 톤
+Auto leading	자동 행간
+Auto-Align Layers…	레이어 자동 정렬…
+Auto-Blend Layers…	레이어 자동 혼합…
+Automate	자동화
+Autosaves of never-saved documents go here; empty uses the default	한 번도 저장하지 않은 문서의 자동 저장 파일이 여기에 저장됩니다. 비워 두면 기본 위치를 사용합니다
+Average	평균
+BMP…	BMP…
+Back to the colour this opened on	열 때의 색상으로 되돌리기
+Background — double-click for the picker	배경 — 두 번 클릭하면 색상 피커
+Based On	기준
+Baseline shift	기준선 이동
+Baseline to baseline. Auto leading follows the type size.	기준선에서 기준선까지. 자동 행간은 글자 크기를 따릅니다.
+Batch	일괄 처리
+Batch…	일괄 처리…
+Bend	구부리기
+Bevel	경사
+Bevel & Emboss	경사와 엠보스
+Bevel & Emboss…	경사와 엠보스…
+Bind a text replacement variable to a text layer, or a visibility variable to any layer.	텍스트 대체 변수를 텍스트 레이어에, 가시성 변수를 아무 레이어에나 연결합니다.
+Bitmap	비트맵
+Bitmap…	비트맵…
+Black	검정
+Black & White	흑백
+Black & White…	흑백…
+Black to Transparent	검정에서 투명으로
+Black to White	검정에서 흰색으로
+Black to white through the inks	잉크를 거쳐 검정에서 흰색으로
+Blacks	검정 계열
+Blend If	혼합 조건
+Blend Mode: Color	혼합 모드: 색상
+Blend Mode: Color Burn	혼합 모드: 색상 번
+Blend Mode: Color Dodge	혼합 모드: 색상 닷지
+Blend Mode: Darken	혼합 모드: 어둡게 하기
+Blend Mode: Difference	혼합 모드: 차이
+Blend Mode: Dissolve	혼합 모드: 디졸브
+Blend Mode: Exclusion	혼합 모드: 제외
+Blend Mode: Hard Light	혼합 모드: 하드 라이트
+Blend Mode: Hard Mix	혼합 모드: 하드 혼합
+Blend Mode: Hue	혼합 모드: 색조
+Blend Mode: Lighten	혼합 모드: 밝게 하기
+Blend Mode: Linear Burn	혼합 모드: 선형 번
+Blend Mode: Linear Dodge (Add)	혼합 모드: 선형 닷지(추가)
+Blend Mode: Linear Light	혼합 모드: 선형 라이트
+Blend Mode: Luminosity	혼합 모드: 광도
+Blend Mode: Multiply	혼합 모드: 곱하기
+Blend Mode: Normal	혼합 모드: 표준
+Blend Mode: Overlay	혼합 모드: 오버레이
+Blend Mode: Pin Light	혼합 모드: 핀 라이트
+Blend Mode: Saturation	혼합 모드: 채도
+Blend Mode: Screen	혼합 모드: 스크린
+Blend Mode: Soft Light	혼합 모드: 소프트 라이트
+Blend Mode: Vivid Light	혼합 모드: 선명한 라이트
+Blending	혼합
+Blending Options	혼합 옵션
+Blending Options…	혼합 옵션…
+Blending options	혼합 옵션
+Blends a source document, layer or channel into the active layer as one step.	소스 문서, 레이어 또는 채널을 한 단계로 활성 레이어에 혼합합니다.
+Blends one channel of each of two sources into a new channel, a selection or a new document.	두 소스에서 각각 한 채널을 혼합하여 새 채널, 선택 영역 또는 새 문서로 만듭니다.
+Blue	파랑
+Blues	파랑 계열
+Blur	흐림 효과
+Blur Gallery	흐림 효과 갤러리
+Blur More	더 흐리게
+Bold	굵게
+Border Selection	테두리 선택
+Border…	테두리…
+Both axes	두 축 모두
+Bottom	아래쪽
+Bottom Edges	아래쪽 가장자리
+Bottom Left	왼쪽 아래
+Bottom Right	오른쪽 아래
+Bottom Right Pixel Color	오른쪽 아래 픽셀 색상
+Bottom left	왼쪽 아래
+Bottom right	오른쪽 아래
+Box Blur…	상자 흐림 효과…
+Box height	상자 높이
+Brightness	명도
+Brightness jitter	명도 지터
+Brightness/Contrast	명도/대비
+Brightness/Contrast…	명도/대비…
+Bring Forward	앞으로 가져오기
+Bring to Front	맨 앞으로 가져오기
+Brush Editor	브러시 편집기
+Brush: Background	브러시: 배경
+Brush: Foreground	브러시: 전경
+Brushes	브러시
+Bulge	돌출
+Butt	버트
+CMYK Color	CMYK 색상
+Calculations	연산
+Calculations…	연산…
+Camera Raw…	Camera Raw…
+Canvas Size	캔버스 크기
+Canvas Size…	캔버스 크기…
+Canvas extension	캔버스 확장
+Caps	대문자
+Carries the XMP; the source's EXIF goes into JPEG only	XMP를 담습니다. 소스의 EXIF는 JPEG에만 들어갑니다
+Cell size (pixels)	셀 크기(픽셀)
+Center	가운데
+Center horizontally on the canvas	캔버스에서 가로 가운데 맞춤
+Center vertically on the canvas	캔버스에서 세로 가운데 맞춤
+Centimeters	센티미터
+Centre	가운데
+Centre the view on this note	이 메모를 보기 가운데로
+Change Bit Depth	비트 수 변경
+Change Colour Mode	색상 모드 변경
+Change Layer Properties	레이어 속성 변경
+Change how many pixels the document has, or how large it prints.	문서의 픽셀 수 또는 인쇄 크기를 변경합니다.
+Channel	채널
+Channel Mixer	채널 혼합
+Channel Mixer…	채널 혼합…
+Channel thumbnail	채널 축소판
+Channels	채널
+Character	문자
+Character Style	문자 스타일
+Character Styles	문자 스타일
+Checkerboard	바둑판
+Choose 2 to 256 colours	2~256가지 색상을 선택하세요
+Choose a colour profile	색상 프로필 선택
+Choose a destination folder	대상 폴더 선택
+Choose a source folder	소스 폴더 선택
+Choose at least one page to open	열 페이지를 하나 이상 선택하세요
+Choose at least one side to trim	자를 면을 하나 이상 선택하세요
+Choose the Action to play	재생할 액션 선택
+Choose the open grayscale document each channel of the new RGB document comes from.	새 RGB 문서의 각 채널을 가져올 열려 있는 회색 음영 문서를 선택합니다.
+Choose the pages to open, their resolution and how they open.	열 페이지, 해상도 및 여는 방식을 선택합니다.
+Choose the source and the destination folders.	소스 폴더와 대상 폴더를 선택합니다.
+Choose…	선택…
+Clear	지우기
+Clear All	모두 지우기
+Clear Guides	안내선 지우기
+Clear History	작업 내역 지우기
+Clear Layer Style	레이어 스타일 지우기
+Clear Slices	분할 영역 지우기
+Clear Strokes	획 지우기
+Clear existing guides	기존 안내선 지우기
+Clear the {noun} from the active text layer	활성 텍스트 레이어에서 {noun} 지우기
+Cleared {n} slice(s)	분할 영역 {n}개를 지웠습니다
+Click an item in the panel first	먼저 패널에서 항목을 클릭하세요
+Click anywhere to sample a colour	아무 곳이나 클릭하여 색상 샘플링
+Click anywhere to sample a colour, or press Escape.	아무 곳이나 클릭하여 색상을 샘플링하거나 Esc 키를 누르세요.
+Click the graph to add a point, drag a point to bend the curve, drag it off the graph to remove it	그래프를 클릭하여 점을 추가하고, 점을 드래그하여 곡선을 구부리고, 그래프 밖으로 드래그하여 제거합니다
+Click the preview to sample a colour from it	미리 보기를 클릭하여 색상 샘플링
+Click the preview to sample the colour to replace	미리 보기를 클릭하여 바꿀 색상 샘플링
+Click the ramp to edit its stops.	그레이디언트 막대를 클릭하여 정지점을 편집합니다.
+Clip to layer below	아래 레이어에 클리핑
+Clipboard	클립보드
+Clipping	클리핑
+Close	닫기
+Close All	모두 닫기
+Close Alpha Channel	알파 채널 닫기
+Close Others	나머지 닫기
+Close panel	패널 닫기
+Clouds	구름 효과
+Codec	코덱
+Color	색상
+Color Balance	색상 균형
+Color Balance…	색상 균형…
+Color Burn	색상 번
+Color Dodge	색상 닷지
+Color Dynamics	색상 역학
+Color Halftone…	색상 하프톤…
+Color Intensity	색상 강도
+Color Label	색상 레이블
+Color Lookup	색상 검색
+Color Lookup Tables…	색상 검색 표…
+Color Lookup…	색상 검색…
+Color Overlay	색상 오버레이
+Color Overlay…	색상 오버레이…
+Color Picker	색상 피커
+Color Range	색상 범위
+Color Range…	색상 범위…
+Color fringe cleanup: pulls the boundary pixels' color toward the nearby interior ink — a separate edit from mask refinement.	색상 가장자리 정리: 경계 픽셀의 색상을 가까운 내부 잉크 쪽으로 당깁니다. 마스크 다듬기와는 별개의 편집입니다.
+Color to Alpha…	색상을 알파로…
+Colors	색상
+Colour	색상
+Colour varies once per stroke.	색상은 획마다 한 번 바뀝니다.
+Colours	색상
+Colours must be 1 to 64, the tolerance above 0 and the corner length at least 1	색상은 1~64, 허용치는 0보다 크고 모퉁이 길이는 1 이상이어야 합니다
+Columns	열
+Columns and rows with gutters between them, inside optional margins, in pixels.	간격을 둔 열과 행(픽셀 단위, 선택적 여백 안).
+Combine Shapes	모양 결합
+Commit (Enter)	확정(Enter)
+Commit Contents	내용 확정
+Composite	합성
+Condensed	좁게
+Cone	원뿔
+Constant	일정
+Constrain proportions	비율 유지
+Content-Aware	내용 인식
+Content-Aware Scale	내용 인식 비율
+Contour	윤곽선
+Contract Selection	선택 영역 축소
+Contract by	축소량
+Contract…	축소…
+Contrast	대비
+Conversion Options	변환 옵션
+Convert Formats	형식 변환
+Convert Formats…	형식 변환…
+Convert for Smart Filters	고급 필터용으로 변환
+Convert to Layers	레이어로 변환
+Convert to Linked…	연결됨으로 변환…
+Convert to Paragraph Text	단락 텍스트로 변환
+Convert to Point Text	포인트 텍스트로 변환
+Convert to Profile	프로필로 변환
+Convert to Profile works on 8- and 16-bit documents	프로필로 변환은 8비트 및 16비트 문서에서 작동합니다
+Convert to Profile…	프로필로 변환…
+Convert to Shape	모양으로 변환
+Convert to Smart Object	고급 개체로 변환
+Converted to {name} ({intent}): the numbers changed so the colours look the same	{name}(으)로 변환됨({intent}): 색상이 같게 보이도록 값이 바뀌었습니다
+Cool	차갑게
+Copper	구리
+Copy	복사
+Copy Layer Style	레이어 스타일 복사
+Copy Merged	병합하여 복사
+Copyright Notice	저작권 고지
+Corner length	모퉁이 길이
+Corner radius	모퉁이 반경
+Corner radius applies to rectangles; this path has no corners to round	모퉁이 반경은 사각형에 적용됩니다. 이 패스에는 둥글게 할 모퉁이가 없습니다
+Corners	모퉁이
+Count jitter	개수 지터
+Create Clipping Mask	클리핑 마스크 만들기
+Create Layer	레이어 만들기
+Create Layers	레이어 만들기
+Crop	자르기
+Crop and Straighten Photos	사진 자르기 및 똑바르게 하기
+Crops the canvas to the content, judged by the basis below.	아래 기준으로 판단하여 캔버스를 내용에 맞게 자릅니다.
+Crystallize…	수정화…
+Current Layer	현재 레이어
+Current Path	현재 패스
+Curve tolerance	곡선 허용치
+Curves	곡선
+Curves…	곡선…
+Custom	사용자 정의
+Custom Brush	사용자 정의 브러시
+Custom: with the Move tool, drag the 16 mesh handles on the canvas	사용자 정의: 이동 도구로 캔버스의 메시 핸들 16개를 드래그합니다
+Custom…	사용자 정의…
+Cut	잘라내기
+Cyan	녹청
+Cyan / Red	녹청 / 빨강
+Cyans	녹청 계열
+DDS…	DDS…
+DXF…	DXF…
+Dark	어둡게
+Dark Blue	진한 파랑
+Dark Grey	진한 회색
+Darken	어둡게 하기
+Darker Color	어두운 색상
+Dash	대시
+Data Set	데이터 세트
+Data Sets	데이터 세트
+Data Sets…	데이터 세트…
+Default	기본값
+Default colours  (D)	기본 색상  (D)
+Default colours (D)	기본 색상 (D)
+Define	정의
+Define Brush Preset…	브러시 사전 설정 정의…
+Define Custom Shape…	사용자 정의 모양 정의…
+Define New	새로 정의
+Define Pattern…	패턴 정의…
+Define…	정의…
+Delete	삭제
+Delete Filter Mask	필터 마스크 삭제
+Delete Layer	레이어 삭제
+Delete Mask	마스크 삭제
+Delete Vector Mask	벡터 마스크 삭제
+Delete action	액션 삭제
+Delete channel	채널 삭제
+Delete frame	프레임 삭제
+Delete path	패스 삭제
+Delete selected layers	선택한 레이어 삭제
+Delete set and its actions	세트와 해당 액션 삭제
+Delete stop	정지점 삭제
+Delete the applied comp	적용된 컴프 삭제
+Delete the selected keyframe	선택한 키프레임 삭제
+Delete the selected tool preset	선택한 도구 사전 설정 삭제
+Delete the selected {noun}	선택한 {noun} 삭제
+Delete the smart filter mask	고급 필터 마스크 삭제
+Delete this note	이 메모 삭제
+Delete this smart filter	이 고급 필터 삭제
+Delete this spot channel	이 별색 채널 삭제
+Density	밀도
+Dents…	움푹 들어감…
+Desaturate	채도 감소
+Description	설명
+Deselect	선택 해제
+Deselect Layers	레이어 선택 해제
+Despeckle	반점 제거
+Destination	대상
+Destination Space	대상 공간
+Detail	세부
+Detail scales	세부 스케일
+Diamond	다이아몬드
+Difference	차이
+Difference Clouds	차이 구름 효과
+Diffuse…	확산…
+Diffusion	확산
+Diffusion Dither	확산 디더
+Disable / Enable Filter Mask	필터 마스크 사용 안 함 / 사용
+Disable / Enable Mask	마스크 사용 안 함 / 사용
+Disable / Enable Vector Mask	벡터 마스크 사용 안 함 / 사용
+Disable Mask	마스크 사용 안 함
+Disable Vector Mask	벡터 마스크 사용 안 함
+Displace…	변위…
+Dissolve	디졸브
+Distance	거리
+Distort	왜곡
+Distribute	분포
+Dither	디더
+Dither…	디더…
+Divide	나누기
+Dock this panel here	이 패널을 여기에 고정
+Document	문서
+Document Bounds	문서 경계
+Document Info	문서 정보
+Document Title	문서 제목
+Document size	문서 크기
+Double-click to edit in Layer Style; drag to the trash to delete	두 번 클릭하여 레이어 스타일에서 편집, 휴지통으로 드래그하여 삭제
+Double-click to edit this filter's settings	두 번 클릭하여 이 필터의 설정 편집
+Double-click to rename	두 번 클릭하여 이름 바꾸기
+Drag a line with the Ruler first	먼저 눈금자로 선을 드래그하세요
+Drag to zoom the view	드래그하여 보기 확대/축소
+Drop Shadow	그림자 효과
+Drop Shadow…	그림자 효과…
+Duotone	이중톤
+Duotone Options	이중톤 옵션
+Duotone…	이중톤…
+Duplicate	복제
+Duplicate Layer	레이어 복제
+Duplicate Layer…	레이어 복제…
+Duplicate frame	프레임 복제
+Dust & Scratches…	먼지와 스크래치…
+EMF…	EMF…
+EXIF and XMP writing is not implemented — only ICC is embedded	EXIF 및 XMP 쓰기는 구현되지 않았습니다. ICC만 포함됩니다
+EXR…	EXR…
+Ease In	천천히 시작
+Ease Out	천천히 끝
+Edge Glow	가장자리 광선 효과
+Edge refinement: feather, shift, smooth, and contrast over the mask's existing coverage — not subject recognition.	가장자리 다듬기: 마스크의 기존 적용 범위에 대한 페더, 이동, 매끄럽게, 대비입니다. 피사체 인식이 아닙니다.
+Edges	가장자리
+Edit	편집
+Edit Adjustment	조정 편집
+Edit Adjustment…	조정 편집…
+Edit Alpha Channel	알파 채널 편집
+Edit Contents…	내용 편집…
+Edit Document Records	문서 기록 편집
+Edit Fill	칠 편집
+Edit Filter Mask	필터 마스크 편집
+Edit Generator	생성기 편집
+Edit Group	그룹 편집
+Edit Guides	안내선 편집
+Edit Raster	래스터 편집
+Edit Saved Selection	저장된 선택 영역 편집
+Edit Shape	모양 편집
+Edit Slices	분할 영역 편집
+Edit Smart object	고급 개체 편집
+Edit Text	텍스트 편집
+Edit Timeline	타임라인 편집
+Edit brush…	브러시 편집…
+Edit fill	칠 편집
+Edit gradient stops — click to open the editor	그레이디언트 정지점 편집 — 클릭하면 편집기가 열립니다
+Edit in Quick Mask Mode	빠른 마스크 모드로 편집
+Edit this ramp	이 그레이디언트 편집
+Effects	효과
+Effects apply to the whole layer and undo as one step.	효과는 레이어 전체에 적용되며 한 단계로 실행 취소됩니다.
+Embed EXIF and XMP	EXIF 및 XMP 포함
+Embed Linked	연결된 항목 포함
+Embed colour profile	색상 프로필 포함
+Embedded source	포함된 소스
+Emboss…	엠보스…
+Enable / disable the smart filter mask	고급 필터 마스크 사용 / 사용 안 함
+Enable Mask	마스크 사용
+Enable Vector Mask	벡터 마스크 사용
+Enable at least one export	내보내기를 하나 이상 사용하세요
+Enabled	사용
+Enlarge smaller images	작은 이미지 확대
+Enter a colour like #3366CC	#3366CC 같은 색상을 입력하세요
+Entropy	엔트로피
+Equalize	평균화
+Essentials	필수
+Every enabled row is written when you export.	내보낼 때 사용하는 모든 행이 기록됩니다.
+Every image in the source folder is fitted into the box and written to the destination folder in its own format.	소스 폴더의 각 이미지를 상자에 맞추고 원래 형식으로 대상 폴더에 기록합니다.
+Every parameter is at its neutral value — there is nothing to clean	모든 매개변수가 중립 값입니다. 정리할 것이 없습니다
+Every parameter is at its neutral value — there is nothing to refine	모든 매개변수가 중립 값입니다. 다듬을 것이 없습니다
+Every variable needs a name	모든 변수에는 이름이 필요합니다
+Exact	정확히
+Exclude Overlapping Shapes	모양 오버랩 제외
+Exclusion	제외
+Expand Selection	선택 영역 확대
+Expand by	확대량
+Expand the dock	도크 펼치기
+Expanded	넓게
+Expand…	확대…
+Export	내보내기
+Export As	내보내기 형식
+Export Color Lookup	색상 검색 내보내기
+Export Contents…	내용 내보내기…
+Export Diagnostics…	진단 정보 내보내기…
+Export Layers…	레이어 내보내기…
+Export PDF	PDF 내보내기
+Export as .ABR…	.ABR로 내보내기…
+Export as .ACO…	.ACO로 내보내기…
+Export as .ASL…	.ASL로 내보내기…
+Export set as .atn	세트를 .atn으로 내보내기
+Export…	내보내기…
+Exposure	노출
+Exposure…	노출…
+Extra Bold	특별히 굵게
+Extra Condensed	특별히 좁게
+Extra Expanded	특별히 넓게
+Extra Light	특별히 가늘게
+Extras	표시자
+Extrude…	돌출…
+Eyedropper	스포이드
+Face	서체
+Facet	단면화
+Fade	희미하게 하기
+Fade…	희미하게 하기…
+Family	패밀리
+Feather	페더
+Feather Selection	선택 영역 페더
+Feather radius	페더 반경
+Feather…	페더…
+Fibers…	섬유…
+Field Blur…	필드 흐림 효과…
+File	파일
+File Info	파일 정보
+File Info…	파일 정보…
+File name	파일 이름
+Files that fail are listed in batch-errors.txt in the destination.	실패한 파일은 대상 위치의 batch-errors.txt에 나열됩니다.
+Fill	칠
+Fill Filter Mask	필터 마스크 칠하기
+Fill Mask	마스크 칠하기
+Fill Screen	화면 채우기
+Fill in File Info, or open a file that has EXIF, to embed metadata	메타데이터를 포함하려면 파일 정보를 채우거나 EXIF가 있는 파일을 여세요
+Fill path with the foreground colour, on a new shape layer	새 모양 레이어에서 전경색으로 패스 칠하기
+Fill type	칠 유형
+Fills the active selection with the chosen contents.	활성 선택 영역을 선택한 내용으로 칠합니다.
+Fill…	칠…
+Filter	필터
+Filter Gallery	필터 갤러리
+Filter Gallery…	필터 갤러리…
+Find Edges	가장자리 찾기
+First line	첫 줄
+Fish	물고기
+Fisheye	어안
+Fit on Screen	화면 크기에 맞추기
+Fit the whole image in the window	전체 이미지를 창에 맞추기
+Fixed height	고정 높이
+Flag	깃발
+Flame…	불꽃…
+Flat Angled 40	평평한 각진 40
+Flatten Image	이미지 병합
+Flip Canvas Horizontal	캔버스 가로로 뒤집기
+Flip Canvas Vertical	캔버스 세로로 뒤집기
+Flip Horizontal	가로로 뒤집기
+Flip Vertical	세로로 뒤집기
+Flip View Horizontal	보기 가로로 뒤집기
+Flip View Vertical	보기 세로로 뒤집기
+Flow jitter	흐름 지터
+Folders	폴더
+Font: 	글꼴: 
+Foreground strokes mark what to keep, background strokes what to drop; Preview shows the cut.	전경 획은 남길 부분을, 배경 획은 버릴 부분을 표시합니다. 미리 보기에 잘라낸 결과가 표시됩니다.
+Foreground — double-click for the picker	전경 — 두 번 클릭하면 색상 피커
+Foreground/background jitter	전경/배경 지터
+Format	형식
+Fourier	푸리에
+Fourier Transform	푸리에 변환
+Fragment	분열
+Frame	프레임
+Frames	프레임
+Free Transform	자유 변형
+Free Transform a Copy	사본 자유 변형
+From Transparency	투명도에서
+Fullscreen	전체 화면
+Fuzziness	허용량
+GIF…	GIF…
+Gamma	감마
+Gamut Warning	색상 영역 경고
+Gaussian	가우시안
+Gaussian Blur…	가우시안 흐림 효과…
+Generate Mockups	목업 생성
+Generate Mockups…	목업 생성…
+Give the brush a name	브러시 이름을 지정하세요
+Give the export a file name	내보내기 파일 이름을 지정하세요
+Glass Menus	유리 메뉴
+Global light	전체 조명
+Glyphs	글리프
+Gradient	그레이디언트
+Gradient Editor	그레이디언트 편집기
+Gradient Map	그레이디언트 맵
+Gradient Map…	그레이디언트 맵…
+Gradient Overlay	그레이디언트 오버레이
+Gradient Overlay…	그레이디언트 오버레이…
+Gradient…	그레이디언트…
+Gray	회색
+Grayscale	회색 음영
+Green	녹색
+Greens	녹색 계열
+Grid	격자
+Grid points	격자 점
+Group	그룹
+Group Layers	레이어 그룹화
+Grow	선택 영역 확장
+Guide Guy	Guide Guy
+Guides	안내선
+Gutter	간격
+H	H
+H.264 (plays everywhere)	H.264(어디서나 재생)
+HDR Toning	HDR 토닝
+HDR Toning…	HDR 토닝…
+HSB/HSL…	HSB/HSL…
+Halftone Screen	하프톤 스크린
+Hard Light	하드 라이트
+Hard Mix	하드 혼합
+Hard Round 24	선명한 원 24
+Hard Round 4	선명한 원 4
+Hard edges, no blending. Pixel art only — it aliases on downscale.	가장자리가 선명하고 혼합하지 않습니다. 픽셀 아트 전용이며 축소하면 계단 현상이 생깁니다.
+Harder Brush	더 단단한 브러시
+Height	높이
+Height to 110%	높이를 110%로
+Height to 125%	높이를 125%로
+Height to 80%	높이를 80%로
+Height to 90%	높이를 90%로
+Help	도움말
+Hide All	모두 숨기기
+Hide Layers	레이어 숨기기
+Hide Selection	선택 영역 숨기기
+Hide the source layer	소스 레이어 숨기기
+High Contrast	고대비
+High Pass…	하이 패스…
+Highlights	밝은 영역
+Histogram	히스토그램
+Histories	작업 내역
+History	작업 내역
+Hold	고정
+Horizontal Centers	가로 중앙
+Horizontal Distortion	가로 왜곡
+Horizontal center guide	가로 중앙 안내선
+Horizontal scale, in percent: widens or narrows the glyphs and their spacing	가로 비율(%): 글리프와 그 간격을 넓히거나 좁힙니다
+Horizontally	가로로
+Hue	색조
+Hue jitter	색조 지터
+Hue/Saturation	색조/채도
+Hue/Saturation…	색조/채도…
+ICC profile	ICC 프로필
+ICO…	ICO…
+Image	이미지
+Image Options	이미지 옵션
+Image Rotation	이미지 회전
+Image Size	이미지 크기
+Image Size…	이미지 크기…
+Image size	이미지 크기
+Import CSV…	CSV 가져오기…
+Import PDF	PDF 가져오기
+Import a CSV of data sets first	먼저 데이터 세트 CSV를 가져오세요
+Import a CSV: the first row names the variables, every further row is one data set.	CSV 가져오기: 첫 행은 변수 이름이고 이후 각 행이 하나의 데이터 세트입니다.
+In use	사용 중
+Inches	인치
+Indexed Color	인덱스 색상
+Indexed Color…	인덱스 색상…
+Inflate	부풀리기
+Info	정보
+Ink	잉크
+Ink Color	잉크 색상
+Ink printed at 0, 25, 50, 75 and 100% tint	0, 25, 50, 75, 100% 색조로 인쇄한 잉크
+Inner Glow	내부 광선
+Inner Glow…	내부 광선…
+Inner Radius	안쪽 반경
+Inner Shadow	내부 그림자
+Inner Shadow…	내부 그림자…
+Inside	안쪽
+Intent	의도
+Intersect Shape Areas	모양 영역 교차
+Intersect with Selection	선택 영역과 교차
+Inverse	반전
+Inverse Fourier Transform	역 푸리에 변환
+Invert	반전
+Invert coverage	적용 범위 반전
+Invert has no parameters	반전에는 매개변수가 없습니다
+Iris Blur…	조리개 흐림 효과…
+Italic	기울임꼴
+JPEG carries the XMP and the source's EXIF	JPEG에는 XMP와 소스의 EXIF가 들어갑니다
+JPG…	JPG…
+Justify	양쪽 정렬
+Kaleidoscope…	만화경…
+Keep as it was	그대로 두기
+Kept when a comp is first applied	컴프를 처음 적용할 때 유지
+Kerning	커닝
+Keyboard Shortcut Sheet…	키보드 바로 가기 요약…
+Keyboard Shortcuts…	키보드 바로 가기…
+Keywords	키워드
+Kind	종류
+Kurtosis	첨도
+Lab Color	Lab 색상
+Landscape	가로
+Language	언어
+Large	크게
+Last Document State	마지막 문서 상태
+Last Filter	마지막 필터
+Last line	마지막 줄
+Layer	레이어
+Layer Comps	레이어 컴프
+Layer Edges	레이어 가장자리
+Layer Mask	레이어 마스크
+Layer Style	레이어 스타일
+Layer knocks out drop shadow	레이어가 그림자 효과를 녹아웃
+Layer via Copy	복사한 레이어
+Layer via Cut	잘라낸 레이어
+Layers	레이어
+Layers panel options	레이어 패널 옵션
+Left	왼쪽
+Left Edges	왼쪽 가장자리
+Left indent	왼쪽 들여쓰기
+Length	길이
+Lens Blur…	렌즈 흐림 효과…
+Lens Correction…	렌즈 교정…
+Lens Flare…	렌즈 플레어…
+Level	레벨
+Levels	레벨
+Levels…	레벨…
+Light	가늘게
+Light Grey	밝은 회색
+Lighten	밝게 하기
+Lighter Color	밝은 색상
+Lighting Effects…	조명 효과…
+Lightness	밝기
+Line	선
+Linear	선형
+Linear Burn	선형 번
+Linear Dodge (Add)	선형 닷지(추가)
+Linear Light	선형 라이트
+Link / Unlink Mask	마스크 연결 / 연결 해제
+Link Layers	레이어 연결
+Link selected layers	선택한 레이어 연결
+Link with layer	레이어와 연결
+Linked	연결됨
+Linked file	연결된 파일
+Liquify…	픽셀 유동화…
+Live Shape	라이브 모양
+Live preview	실시간 미리 보기
+Live preview is off.	실시간 미리 보기가 꺼져 있습니다.
+Load	불러오기
+Load .atn	.atn 불러오기
+Load .cube file…	.cube 파일 불러오기…
+Load Selection	선택 영역 불러오기
+Load Selection…	선택 영역 불러오기…
+Load actions	액션 불러오기
+Load channel as selection	채널을 선택 영역으로 불러오기
+Load path as a selection	패스를 선택 영역으로 불러오기
+Loaded file	불러온 파일
+Lock	잠그기
+Lock All	모두 잠그기
+Lock Guides	안내선 잠그기
+Lock Image Pixels	이미지 픽셀 잠그기
+Lock Position	위치 잠그기
+Lock Transparent Pixels	투명 픽셀 잠그기
+Lock all	모두 잠그기
+Lock pixels	픽셀 잠그기
+Lock position	위치 잠그기
+Lock transparent pixels	투명 픽셀 잠그기
+Lookup table	검색 표
+Luminance	휘도
+Luminance of the preview source; the markers are the black and white points.	미리 보기 소스의 휘도입니다. 표시자는 검정점과 흰색점입니다.
+Luminosity	광도
+MP4…	MP4…
+Magenta	마젠타
+Magenta / Green	마젠타 / 녹색
+Magentas	마젠타 계열
+Magic Cut	매직 컷
+Magic Cut…	매직 컷…
+Make Frames	프레임 만들기
+Make a selection first	먼저 선택 영역을 만드세요
+Make work path from selection	선택 영역에서 작업 패스 만들기
+Manual	수동
+Maps every colour onto one palette. The document keeps RGBA pixels; GIF and PNG export write this palette.	모든 색상을 하나의 팔레트에 대응시킵니다. 문서는 RGBA 픽셀을 유지하며 GIF와 PNG 내보내기가 이 팔레트를 기록합니다.
+Maps the active layer onto a palette as one undo step; the document stays RGB.	활성 레이어를 한 번의 실행 취소 단계로 팔레트에 대응시킵니다. 문서는 RGB로 유지됩니다.
+Margins	여백
+Mark this state so you can come back to it	이 상태로 돌아올 수 있도록 표시
+Mask	마스크
+Mask source	마스크 소스
+Match Color	색상 일치
+Match Color…	색상 일치…
+Matting	매트
+Maximum	최대
+Maximum…	최대값…
+Mean	평균
+Median	중간값
+Median…	중간값…
+Medium	중간
+Memory	메모리
+Menu Bar and Canvas	메뉴 막대와 캔버스
+Merge	병합
+Merge Channels	채널 병합
+Merge Channels…	채널 병합…
+Merge Down	아래로 병합
+Merge Layers	레이어 병합
+Merge Visible	보이는 레이어 병합
+Merged	병합됨
+Method	방법
+Metrics	메트릭
+Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.	메트릭은 글꼴 자체의 쌍 커닝을 사용합니다. 0은 커닝을 끕니다. 수동은 현재 텍스트의 모든 문자 쌍 사이에 한 값(1/1000 em)을 넣으며, 나중에 입력한 문자는 커닝 없이 시작합니다. 문자가 두 개 이상 필요하므로 더 짧은 텍스트와 문자 도구 기본값에서는 제공되지 않습니다. 셰이퍼에 광학 커닝이 없어 해당 모드는 제공되지 않습니다.
+Mezzotint…	메조틴트…
+Midtones	중간 영역
+Millimeters	밀리미터
+Min diameter	최소 직경
+Min roundness	최소 원형률
+Min size	최소 크기
+Minimal	최소
+Minimum	최소
+Minimum size only applies when pressure controls size.	최소 크기는 압력이 크기를 제어할 때만 적용됩니다.
+Minimum…	최소값…
+Miter	마이터
+Mode	모드
+Modify	수정
+Monochrome	단색
+Monotone	모노톤
+More readouts	추가 판독값
+More tabs	추가 탭
+Mosaic…	모자이크…
+Motion Blur…	동작 흐림 효과…
+Move Layer	레이어 이동
+Move a control first: these settings would change nothing	먼저 컨트롤을 움직이세요. 이 설정으로는 아무것도 바뀌지 않습니다
+Move this panel	이 패널 이동
+Move this panel within its dock	이 패널을 도크 안에서 이동
+Move to	이동할 위치
+Move with the layer	레이어와 함께 이동
+Multiply	곱하기
+Name	이름
+Name Change	이름 변경
+Name the channel first.	먼저 채널 이름을 지정하세요.
+Navigator	내비게이터
+Nearest Neighbour	최단입점
+Neutralize	중화
+Neutrals	중간색 계열
+New	새로 만들기
+New Adjustment Layer	새 조정 레이어
+New Channel	새 채널
+New Document	새 문서
+New Fill Layer	새 칠 레이어
+New Guide	새 안내선
+New Guide Layout	새 안내선 레이아웃
+New Guide Layout…	새 안내선 레이아웃…
+New Guides from Shape	모양에서 새 안내선
+New Guide…	새 안내선…
+New Layer	새 레이어
+New Layer Based Slice	새 레이어 기반 분할 영역
+New Selection	새 선택 영역
+New Smart Object via Copy	복사를 통한 새 고급 개체
+New Snapshot	새 스냅숏
+New Spot Channel	새 별색 채널
+New Spot Channel…	새 별색 채널…
+New Style Preset	새 스타일 사전 설정
+New channel	새 채널
+New group	새 그룹
+New layer	새 레이어
+New layer comp	새 레이어 컴프
+New note at the centre of the view	보기 가운데에 새 메모
+New path (saves the Work Path when it is selected)	새 패스(작업 패스가 선택되어 있으면 저장)
+New set	새 세트
+New size	새 크기
+New style from the active layer	활성 레이어에서 새 스타일
+New tool preset from the active tool	활성 도구에서 새 도구 사전 설정
+New {noun} from the active text layer	활성 텍스트 레이어에서 새 {noun}
+New…	새로 만들기…
+Next Blend Mode	다음 혼합 모드
+No Color	색상 없음
+No character styles yet. New records the active text layer's font, size and look.	아직 문자 스타일이 없습니다. 새로 만들기는 활성 텍스트 레이어의 글꼴, 크기, 모양을 기록합니다.
+No command loads a channel as the selection in this build; the Select menu's Load Selection restores a saved selection instead	이 빌드에는 채널을 선택 영역으로 불러오는 명령이 없습니다. 대신 선택 메뉴의 선택 영역 불러오기가 저장된 선택 영역을 복원합니다
+No commands to bind	연결할 명령이 없습니다
+No document	문서 없음
+No document is open	열려 있는 문서가 없습니다
+No export selected	선택한 내보내기가 없습니다
+No faces listed for this family name	이 패밀리 이름에 나열된 서체가 없습니다
+No frames yet. Add frame makes an _a_ layer: each one is a frame, bottom first.	아직 프레임이 없습니다. 프레임 추가는 _a_ 레이어를 만듭니다. 각 레이어가 하나의 프레임이며 맨 아래부터 시작합니다.
+No guide crosses the canvas	캔버스를 지나는 안내선이 없습니다
+No installed family matches	일치하는 설치된 패밀리가 없습니다
+No layer comps yet. New Layer Comp records every layer's visibility, position and appearance.	아직 레이어 컴프가 없습니다. 새 레이어 컴프는 모든 레이어의 가시성, 위치, 모양을 기록합니다.
+No layers yet. Add one with the + button below.	아직 레이어가 없습니다. 아래 + 버튼으로 추가하세요.
+No layers yet: each top-level layer gets a bar on the timeline.	아직 레이어가 없습니다. 최상위 레이어마다 타임라인에 막대가 생깁니다.
+No notes yet. Click the canvas with the Note tool (I), or New Note pins one at the centre of the view; notes are saved with the document and never exported.	아직 메모가 없습니다. 메모 도구(I)로 캔버스를 클릭하거나 새 메모로 보기 가운데에 고정하세요. 메모는 문서와 함께 저장되며 내보내지 않습니다.
+No open document is the same size as this one	이 문서와 크기가 같은 열린 문서가 없습니다
+No paragraph styles yet. New records the active text layer's alignment, indents and spacing.	아직 단락 스타일이 없습니다. 새로 만들기는 활성 텍스트 레이어의 정렬, 들여쓰기, 간격을 기록합니다.
+No pattern chosen — the overlay paints nothing.	패턴을 선택하지 않았습니다. 오버레이는 아무것도 칠하지 않습니다.
+No patterns are defined yet	아직 정의된 패턴이 없습니다
+No profile file was chosen	프로필 파일을 선택하지 않았습니다
+No recent files yet	아직 최근 파일이 없습니다
+No selection has been saved	저장된 선택 영역이 없습니다
+No source recorded for this object	이 개체에 기록된 소스가 없습니다
+No stop selected	선택한 정지점이 없습니다
+No style presets yet. Define one with Layer > Layer Style > Define Style Preset, or add a Photoshop library with File > Open (.asl).	아직 스타일 사전 설정이 없습니다. 레이어 > 레이어 스타일 > 스타일 사전 설정 정의로 만들거나 파일 > 열기(.asl)로 Photoshop 라이브러리를 추가하세요.
+No styles yet. The + button saves the active layer's style; File > Open loads an .asl style library.	아직 스타일이 없습니다. + 버튼은 활성 레이어의 스타일을 저장하고, 파일 > 열기는 .asl 스타일 라이브러리를 불러옵니다.
+No such command	그런 명령이 없습니다
+No tool presets yet. New Tool Preset saves the active tool with its current options.	아직 도구 사전 설정이 없습니다. 새 도구 사전 설정은 활성 도구를 현재 옵션과 함께 저장합니다.
+Noise	노이즈
+None	없음
+Normal	표준
+Normal Map…	노멀 맵…
+Not a hex colour	16진수 색상이 아닙니다
+Not installed — shaping with	설치되지 않음 — 다음 글꼴로 조판:
+Not saved yet	아직 저장되지 않음
+Notes	메모
+Nothing has changed	변경된 것이 없습니다
+Nothing in this submenu is available right now	지금은 이 하위 메뉴에서 사용할 수 있는 항목이 없습니다
+Nothing is left to learn the background from: paint over it with the background brush.	배경을 학습할 것이 남아 있지 않습니다. 배경 브러시로 칠하세요.
+Nothing to measure yet — paint or place something on this layer first	아직 측정할 것이 없습니다. 먼저 이 레이어에 칠하거나 무언가를 배치하세요
+Nothing to preview.	미리 볼 것이 없습니다.
+OK	확인
+Oblique	비스듬히
+Off: the wheel pans the view and Ctrl+wheel zooms	끔: 휠은 보기를 이동하고 Ctrl+휠은 확대/축소합니다
+Offset…	오프셋…
+Oil Paint…	유화…
+One page holding the flattened image; no vector content.	병합된 이미지가 담긴 한 페이지이며 벡터 내용은 없습니다.
+Onion skin	어니언 스킨
+Only English is available in this build	이 빌드에서는 영어만 사용할 수 있습니다
+Only a mask channel can be loaded as a selection here	여기서는 마스크 채널만 선택 영역으로 불러올 수 있습니다
+Only web-safe colours	웹 색상만
+Opacity	불투명도
+Opacity 10%	불투명도 10%
+Opacity 100%	불투명도 100%
+Opacity 20%	불투명도 20%
+Opacity 30%	불투명도 30%
+Opacity 40%	불투명도 40%
+Opacity 50%	불투명도 50%
+Opacity 60%	불투명도 60%
+Opacity 70%	불투명도 70%
+Opacity 80%	불투명도 80%
+Opacity 90%	불투명도 90%
+Opacity jitter	불투명도 지터
+Opacity key	불투명도 키
+Opacity must be between 0% and 100%	불투명도는 0%에서 100% 사이여야 합니다
+Opacity scales the layer and its effects; Fill scales the layer's own pixels only.	불투명도는 레이어와 효과에, 칠은 레이어 자체 픽셀에만 적용됩니다.
+Opacity stops sit above the bar, colour stops below it.	불투명도 정지점은 막대 위에, 색상 정지점은 아래에 있습니다.
+Open	열기
+Open .ABR…	.ABR 열기…
+Open .ACO…	.ACO 열기…
+Open .ASL…	.ASL 열기…
+Open Recent	최근 파일 열기
+Open a document first	먼저 문서를 여세요
+Open a document to animate it.	애니메이션을 만들 문서를 여세요.
+Open a document to apply styles to its layers.	레이어에 스타일을 적용할 문서를 여세요.
+Open a document to insert glyphs into its text.	텍스트에 글리프를 삽입할 문서를 여세요.
+Open a document to keep text styles in it.	텍스트 스타일을 보관할 문서를 여세요.
+Open a document to lay guides out on it.	안내선을 배치할 문서를 여세요.
+Open a document to pin notes on it.	메모를 고정할 문서를 여세요.
+Open a document to record layer comps.	레이어 컴프를 기록할 문서를 여세요.
+Open a document to see its CSS	CSS를 보려면 문서를 여세요
+Open a document to see its facts.	정보를 보려면 문서를 여세요.
+Open a document to see its histogram	히스토그램을 보려면 문서를 여세요
+Open a document to see its history	작업 내역을 보려면 문서를 여세요
+Open a document to see its properties	속성을 보려면 문서를 여세요
+Open another document, or add another pixel layer, to match its colours.	색상을 일치시키려면 다른 문서를 열거나 픽셀 레이어를 하나 더 추가하세요.
+Open as	열기 형식
+Open editor…	편집기 열기…
+Open the Adjustments panel	조정 패널 열기
+Open…	열기…
+Operation	작업
+Orange	주황
+Other	기타
+Out of gamut	색상 영역 밖
+Outer Glow	외부 광선
+Outer Glow…	외부 광선…
+Outline the path	패스 윤곽선 그리기
+Output	출력
+Output channel	출력 채널
+Outside	바깥쪽
+Overlay	오버레이
+PBM…	PBM…
+PDF Presentation…	PDF 프레젠테이션…
+PDF…	PDF…
+PGM…	PGM…
+PNG…	PNG…
+PPM…	PPM…
+Page	페이지
+Page {n}	{n}페이지
+Page {page} opens at {w} x {h} px	{page}페이지는 {w} x {h} px로 열립니다
+Pages	페이지
+Paint	페인트
+Paint Filter Mask	필터 마스크 칠하기
+Paint Mask	마스크 칠하기
+Paint over the part to keep with the foreground brush first.	먼저 전경 브러시로 남길 부분을 칠하세요.
+Paint over what to keep and over what to drop	남길 부분과 버릴 부분을 칠하세요
+Paint the inside of the path	패스 안쪽 칠하기
+Painting	페인팅
+Paints a band along the active selection's border.	활성 선택 영역의 테두리를 따라 띠를 칠합니다.
+Pair kerning	쌍 커닝
+Palette	팔레트
+Paragraph	단락
+Paragraph Style	단락 스타일
+Paragraph Styles	단락 스타일
+Particles…	파티클…
+Paste	붙여넣기
+Paste Into	안쪽에 붙여넣기
+Paste Layer Style	레이어 스타일 붙여넣기
+Paste Outside	바깥쪽에 붙여넣기
+Paste Special	특수 붙여넣기
+Paste in Place	제자리에 붙여넣기
+Path	패스
+Path Blur…	패스 흐림 효과…
+Path editing lives in the Paths panel	패스 편집은 패스 패널에서 합니다
+Paths	패스
+Pattern	패턴
+Pattern Dither	패턴 디더
+Pattern Overlay	패턴 오버레이
+Pattern Overlay…	패턴 오버레이…
+Pattern Preview	패턴 미리 보기
+Pattern…	패턴…
+Pencil 1px	연필 1px
+Percent	백분율
+Perceptual	지각
+Perspective	원근
+Perspective Warp	원근 뒤틀기
+Photo Filter	포토 필터
+Photo Filter…	포토 필터…
+Photography	사진
+Picas	파이카
+Pick a filter; it applies at its default settings.	필터를 고르세요. 기본 설정으로 적용됩니다.
+Pin Light	핀 라이트
+Pinch…	핀치…
+Pixel Grid	픽셀 격자
+Pixel dimensions	픽셀 크기
+Pixel mask	픽셀 마스크
+Pixelate	픽셀화
+Pixels	픽셀
+Place Embedded…	포함 가져오기…
+Place Linked…	연결 가져오기…
+Play	재생
+Play from step	이 단계부터 재생
+Play selection	선택 항목 재생
+Play this step (unchecked steps are passed over)	이 단계 재생(선택하지 않은 단계는 건너뜀)
+Plays a recorded Action on every image in the source folder and saves each result to the destination.	소스 폴더의 모든 이미지에 기록된 액션을 재생하고 각 결과를 대상 위치에 저장합니다.
+Pointer	포인터
+Pointillize…	점묘화…
+Points	포인트
+Polar Coordinates…	극좌표…
+Position	위치
+Position is locked — unlock it in the Layers panel to move or resize	위치가 잠겨 있습니다. 이동하거나 크기를 조정하려면 레이어 패널에서 잠금을 해제하세요
+Position key	위치 키
+Posterize	포스터화
+Posterize…	포스터화…
+Precise Cursor	정밀 커서
+Preferences…	환경 설정…
+Preserve Transparency	투명도 유지
+Preserve luminosity	광도 유지
+Preset Manager…	사전 설정 관리자…
+Press a key…	키를 누르세요…
+Pressure controls flow	압력으로 흐름 제어
+Pressure controls size	압력으로 크기 제어
+Preview	미리 보기
+Preview against	미리 보기 배경
+Preview is off.	미리 보기가 꺼져 있습니다.
+Previewed on the active layer; applied to its pixels as one undoable step.	활성 레이어에서 미리 보고, 실행 취소할 수 있는 한 단계로 픽셀에 적용합니다.
+Previous Blend Mode	이전 혼합 모드
+Print Size	인쇄 크기
+Print as PDF…	PDF로 인쇄…
+Print size	인쇄 크기
+Prints the grayscale image through one to four inks, each through its own curve. The inks are applied to the pixels when the mode changes.	회색 음영 이미지를 각각 고유한 곡선을 거치는 1~4개의 잉크로 인쇄합니다. 모드를 바꾸면 잉크가 픽셀에 적용됩니다.
+Print…	인쇄…
+Profile	프로필
+Profile from File…	파일에서 프로필…
+Profiles are assigned to RGB documents	프로필은 RGB 문서에 지정합니다
+Profiles are converted between in RGB documents	프로필 간 변환은 RGB 문서에서 합니다
+Profiles belong to RGB documents; convert to RGB first	프로필은 RGB 문서에 속합니다. 먼저 RGB로 변환하세요
+Proof Colors	색상 교정
+Properties	속성
+Puppet Warp	퍼펫 뒤틀기
+Purge	제거
+Purple	보라
+Quadtone	4도
+Quality	품질
+Quick Export Layer as PNG…	레이어를 PNG로 빠른 내보내기…
+Quit	종료
+RGB Color	RGB 색상
+Radial Blur…	방사형 흐림 효과…
+Radius	반경
+Radius (px)	반경(px)
+Range	범위
+Raster Studio Help	Raster Studio 도움말
+Rasterize	래스터화
+Reassign anyway	그래도 다시 지정
+Recent	최근
+Record	기록
+Record Source Size	소스 크기 기록
+Record an Action in the Actions panel first	먼저 액션 패널에서 액션을 기록하세요
+Record an edit, then replay the whole sequence on any document with at least as many layers.	편집을 기록한 다음 레이어가 그만큼 이상 있는 문서에서 전체 순서를 재생하세요.
+Record into set	세트에 기록
+Recording: every edit is captured until Stop	기록 중: 중지할 때까지 모든 편집이 기록됩니다
+Red	빨강
+Redefine the selected {noun} from the active text layer, restyling every layer that uses it	활성 텍스트 레이어에서 선택한 {noun}을(를) 다시 정의하고 이를 사용하는 모든 레이어의 스타일을 갱신합니다
+Redo	다시 실행
+Reds	빨강 계열
+Reduce Colors	색상 수 줄이기
+Reduce Colors changed nothing: the layer already uses only colours of that palette	색상 수 줄이기로 바뀐 것이 없습니다. 레이어가 이미 해당 팔레트의 색상만 사용합니다
+Reduce Colors: the layer now uses at most {n} colours	색상 수 줄이기: 이제 레이어는 최대 {n}가지 색상을 사용합니다
+Reduce Colors…	색상 수 줄이기…
+Reduce Noise…	노이즈 감소…
+Reduces the grayscale image to pure black and white. The layers are flattened into one, over white.	회색 음영 이미지를 순수한 흑백으로 줄입니다. 레이어는 흰색 위에서 하나로 병합됩니다.
+Reference point: Bottom	기준점: 아래
+Reference point: Bottom Left	기준점: 왼쪽 아래
+Reference point: Bottom Right	기준점: 오른쪽 아래
+Reference point: Centre	기준점: 가운데
+Reference point: Left	기준점: 왼쪽
+Reference point: Right	기준점: 오른쪽
+Reference point: Top	기준점: 위
+Reference point: Top Left	기준점: 왼쪽 위
+Reference point: Top Right	기준점: 오른쪽 위
+Refine	다듬기
+Refine Edge…	가장자리 다듬기…
+Refine Mask	마스크 다듬기
+Refine Mask…	마스크 다듬기…
+Regular	보통
+Relative	상대
+Relative Colorimetric	상대 색도계
+Release Clipping Mask	클리핑 마스크 해제
+Release Notes	릴리스 정보
+Relink to File…	파일에 다시 연결…
+Remove Black Matte	검정 매트 제거
+Remove Color Fringe	색상 가장자리 제거
+Remove Color Fringe…	색상 가장자리 제거…
+Remove Fringe	가장자리 제거
+Remove White Matte	흰색 매트 제거
+Remove export	내보내기 제거
+Remove this instance of the effect	이 효과 인스턴스 제거
+Remove this shortcut	이 바로 가기 제거
+Rename Layer	레이어 이름 바꾸기
+Rename Layer…	레이어 이름 바꾸기…
+Rename set	세트 이름 바꾸기
+Render	렌더
+Rendering the preview…	미리 보기 렌더링 중…
+Repeat…	반복…
+Replace Color	색상 대체
+Replace Color…	색상 대체…
+Replace Contents	내용 바꾸기
+Replace Contents…	내용 바꾸기…
+Replace existing guides	기존 안내선 바꾸기
+Replay	다시 재생
+Report an Issue	문제 보고
+Reselect	다시 선택
+Reset	재설정
+Reset Transform	변형 재설정
+Reset View Rotation	보기 회전 재설정
+Reset all shortcuts	모든 바로 가기 재설정
+Resize Canvas	캔버스 크기 조정
+Resize Images	이미지 크기 조정
+Resize Images…	이미지 크기 조정…
+Resolution	해상도
+Resolution must be greater than zero	해상도는 0보다 커야 합니다
+Restore Layer	레이어 복원
+Result	결과
+Return this tool to its defaults	이 도구를 기본값으로 되돌리기
+Reveal All	모두 나타내기
+Reveal Selection	선택 영역 나타내기
+Reverse	반전
+Revert	되돌리기
+Rewrites every pixel layer's numbers so the picture looks the same under the destination profile, as one undo step.	대상 프로필에서 그림이 같게 보이도록 모든 픽셀 레이어의 값을 한 번의 실행 취소 단계로 다시 씁니다.
+Right	오른쪽
+Right (narrow)	오른쪽(좁게)
+Right (wide)	오른쪽(넓게)
+Right Edges	오른쪽 가장자리
+Right indent	오른쪽 들여쓰기
+Right-click a swatch to remove it	견본을 마우스 오른쪽 버튼으로 클릭하여 제거
+Ring	고리
+Ripple…	잔물결…
+Rise	상승
+Rotate	회전
+Rotate 180°	180° 회전
+Rotate 90° Clockwise	시계 방향으로 90° 회전
+Rotate 90° Counter Clockwise	시계 반대 방향으로 90° 회전
+Rotate Canvas	캔버스 회전
+Rotate the active layer so the measured line is level (Enter)	측정한 선이 수평이 되도록 활성 레이어 회전(Enter)
+Rotates the canvas and every layer. Right angles are pixel-exact; other angles resample.	캔버스와 모든 레이어를 회전합니다. 직각은 픽셀 단위로 정확하며 다른 각도는 리샘플링됩니다.
+Rotation key	회전 키
+Round	원형
+Round (computed)	원형(계산됨)
+Rounded Steps	둥근 단계
+Roundness jitter	원형률 지터
+Rows	행
+Rulers	눈금자
+Run	실행
+SVG…	SVG…
+Same Radii	같은 반경
+Sample a colour from the canvas	캔버스에서 색상 샘플링
+Sample radius	샘플 반경
+Sampled	샘플링됨
+Sampled colour	샘플링한 색상
+Sampled tip not loaded; painting round	샘플링한 브러시 모양을 불러오지 않아 원형으로 칠합니다
+Satin…	새틴…
+Saturation	채도
+Saturation jitter	채도 지터
+Save	저장
+Save As	다른 이름으로 저장
+Save As…	다른 이름으로 저장…
+Save Brush	브러시 저장
+Save Selection	선택 영역 저장
+Save Selection…	선택 영역 저장…
+Save actions	액션 저장
+Save as PSD…	PSD로 저장…
+Save current brush	현재 브러시 저장
+Save selection as channel	선택 영역을 채널로 저장
+Saves every image in the source folder to the destination in another format, quality or size.	소스 폴더의 모든 이미지를 다른 형식, 품질 또는 크기로 대상 위치에 저장합니다.
+Scale	비율
+Scale %	비율 %
+Scale Effects	효과 비율 조정
+Scale Effects…	효과 비율 조정…
+Scale H	가로 비율
+Scale V	세로 비율
+Scale key	비율 키
+Scale:	비율:
+Scales every size and distance of the active layer's style as one undo step.	활성 레이어 스타일의 모든 크기와 거리를 한 번의 실행 취소 단계로 비율 조정합니다.
+Scaling by 100% changes nothing	100%로 비율 조정해도 바뀌는 것이 없습니다
+Scratch directory	스크래치 디렉터리
+Screen	스크린
+Screen, print and social presets	화면, 인쇄, 소셜용 사전 설정
+Script…	스크립트…
+Scroll wheel zooms instead of scrolling	휠로 스크롤 대신 확대/축소
+Search Commands…	명령 검색…
+Search layers	레이어 검색
+Search layers by name	이름으로 레이어 검색
+Select	선택
+Select All	모두 선택
+Select Bottom Layer	맨 아래 레이어 선택
+Select Layer Above	위 레이어 선택
+Select Layer Below	아래 레이어 선택
+Select Linked Layers	연결된 레이어 선택
+Select None	선택 안 함
+Select Top Layer	맨 위 레이어 선택
+Select a layer first	먼저 레이어를 선택하세요
+Select a layer to see its CSS	CSS를 보려면 레이어를 선택하세요
+Select a layer to see its properties	속성을 보려면 레이어를 선택하세요
+Select a layer: a click on a style applies it to the active layer.	레이어를 선택하세요. 스타일을 클릭하면 활성 레이어에 적용됩니다.
+Select a path first	먼저 패스를 선택하세요
+Select a text layer, or type into one: a click inserts the glyph at the caret.	텍스트 레이어를 선택하거나 입력하세요. 클릭하면 캐럿 위치에 글리프가 삽입됩니다.
+Select every pixel near one colour	한 색상에 가까운 모든 픽셀 선택
+Selection	선택 영역
+Selection Edges	선택 영역 가장자리
+Selection: white is replaced, black is kept.	선택 영역: 흰색은 대체되고 검정은 유지됩니다.
+Selective Color	선택 색상
+Selective Color…	선택 색상…
+Selects a band of this width along the selection's edge	선택 영역 가장자리를 따라 이 너비의 띠를 선택합니다
+Semi Condensed	약간 좁게
+Semi Expanded	약간 넓게
+Semibold	세미볼드
+Send Backward	뒤로 보내기
+Send to Back	맨 뒤로 보내기
+Separate documents	별도의 문서
+Separate keywords with commas or semicolons.	키워드는 쉼표나 세미콜론으로 구분하세요.
+Sepia	세피아
+Set	세트
+Set the History Brush to paint from this state (the marked row)	작업 내역 브러시가 이 상태에서 칠하도록 설정(표시된 행)
+Shadows	어두운 영역
+Shadows/Highlights	어두운 영역/밝은 영역
+Shadows/Highlights…	어두운 영역/밝은 영역…
+Shape	모양
+Shape Dynamics	모양 역학
+Shape Mosaic…	모양 모자이크…
+Sharpen	선명하게
+Sharpen Edges	가장자리 선명하게
+Sharpen More	더 선명하게
+Sharpest, with a little ringing on hard edges.	가장 선명하며 딱딱한 가장자리에 약간의 링잉이 생깁니다.
+Shear…	기울임…
+Shift Edge	가장자리 이동
+Show	표시
+Show / Hide Layer	레이어 표시 / 숨기기
+Show / hide layer	레이어 표시 / 숨기기
+Show / hide the effects list	효과 목록 표시 / 숨기기
+Show / hide the layer style	레이어 스타일 표시 / 숨기기
+Show / hide this channel	이 채널 표시 / 숨기기
+Show / hide this effect	이 효과 표시 / 숨기기
+Show / hide this path	이 패스 표시 / 숨기기
+Show / hide this smart filter	이 고급 필터 표시 / 숨기기
+Show Layers	레이어 표시
+Show every layer	모든 레이어 표시
+Show or hide the position, size and alignment fields	위치, 크기, 정렬 필드 표시 또는 숨기기
+Show or hide the recorded steps	기록된 단계 표시 또는 숨기기
+Show or hide the set's actions	세트의 액션 표시 또는 숨기기
+Show this alpha channel alone in grayscale and paint into it; click again to store it	이 알파 채널만 회색 음영으로 표시하고 그 안에 칠합니다. 다시 클릭하면 저장합니다
+Sides	면
+Similar	유사 영역 선택
+Size	크기
+Size jitter	크기 지터
+Skew	기울이기
+Skewness	왜도
+Slice Options	분할 영역 옵션
+Slice Options…	분할 영역 옵션…
+Slices	분할 영역
+Slices from Guides	안내선에서 분할 영역
+Slices…	분할 영역…
+Small	작게
+Small Caps	작은 대문자
+Smart Blur…	고급 흐림 효과…
+Smart Filter	고급 필터
+Smart Filters	고급 필터
+Smart Guides	고급 안내선
+Smart Object	고급 개체
+Smart Sharpen…	고급 선명 효과…
+Smart filter mask: click to paint on it	고급 필터 마스크: 클릭하여 칠하기
+Smooth	매끄럽게
+Smooth Selection	선택 영역 매끄럽게
+Smooth draws grey-scale edges; None draws hard, aliased edges. The glyph scaler has one smooth mode, so Sharp, Crisp and Strong are not offered.	매끄럽게는 회색 음영 가장자리를, 없음은 딱딱한 계단 모양 가장자리를 그립니다. 글리프 스케일러에는 매끄러운 모드가 하나뿐이므로 선명하게, 뚜렷하게, 강하게는 제공되지 않습니다.
+Smooth…	매끄럽게…
+Snap	스냅
+Snap To	스냅 대상
+Soft Light	소프트 라이트
+Soft Round 100	부드러운 원 100
+Soft Round 24	부드러운 원 24
+Soft and cheap. Good for a small enlargement.	부드럽고 가볍습니다. 약간 확대할 때 좋습니다.
+Softer Brush	더 부드러운 브러시
+Solarize	과대 노출
+Solid Color…	단색…
+Solidity	견고함
+Source	소스
+Source 1	소스 1
+Source 2	소스 2
+Source Space	소스 공간
+Spectrum	스펙트럼
+Spherize…	구형화…
+Spin Blur…	회전 흐림 효과…
+Splits the active layer into Linear Light detail layers over a residual, finest on top; together they recomposite to the layer.	활성 레이어를 잔여물 위의 선형 라이트 세부 레이어로 나눕니다(가장 세밀한 것이 맨 위). 합치면 원래 레이어가 됩니다.
+Spot Channel	별색 채널
+Spot Channel Options…	별색 채널 옵션…
+Spot channel: composited over the image as its ink	별색 채널: 잉크로서 이미지 위에 합성됩니다
+Square	정사각형
+Squeeze	압착
+Stack Mode	스택 모드
+Stamp Visible	보이는 레이어 도장
+Standard	표준
+Standard Deviation	표준 편차
+Standard ligatures	표준 합자
+Step Backward	한 단계 뒤로
+Step Forward	한 단계 앞으로
+Stop	중지
+Straighten Layer	레이어 똑바르게 하기
+Strength	강도
+Stroke	획
+Stroke path with the foreground colour at the brush size, on a new shape layer	새 모양 레이어에서 전경색과 브러시 크기로 패스에 획 긋기
+Stroke…	획…
+Style	스타일
+Styles	스타일
+Styles enabled	스타일 사용
+Stylize	스타일화
+Sub	아래 첨자
+Subject	피사체
+Subtract	빼기
+Subtract Front Shape	전면 모양 빼기
+Subtract from Selection	선택 영역에서 빼기
+Summation	합계
+Sunset	일몰
+Super	위 첨자
+Superscript raises and shrinks the text; subscript lowers and shrinks it.	위 첨자는 텍스트를 올리고 줄이며, 아래 첨자는 내리고 줄입니다.
+Surface Blur…	표면 흐림 효과…
+Swap colours  (X)	색상 교체  (X)
+Swap foreground and background (X)	전경색과 배경색 교체(X)
+Swatches	견본
+TGA…	TGA…
+TIF…	TIF…
+Templates	템플릿
+Text	텍스트
+Text overflows the box	텍스트가 상자를 넘칩니다
+Text replacement	텍스트 대체
+Texture Dilation…	텍스처 확장…
+That channel is no longer in the document	해당 채널은 더 이상 문서에 없습니다
+That file could not be used:	해당 파일을 사용할 수 없습니다:
+The CSV ends inside a quoted field	CSV가 따옴표로 묶인 필드 안에서 끝납니다
+The CSV has a header but no data sets	CSV에 머리글은 있지만 데이터 세트가 없습니다
+The CSV is empty	CSV가 비어 있습니다
+The CSV names a variable that is not defined:	CSV에 정의되지 않은 변수 이름이 있습니다:
+The active layer has no layer style to save	활성 레이어에 저장할 레이어 스타일이 없습니다
+The active layer is not in the document	활성 레이어가 문서에 없습니다
+The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	활성 고급 개체에 소스 폴더의 각 이미지를 차례로 표시하고, 각 결과를 PNG로 대상 폴더에 내보냅니다.
+The amount must be within	값은 다음 범위 안이어야 합니다
+The angle must be a finite number of degrees	각도는 유한한 도 수여야 합니다
+The balanced default for photographs.	사진에 맞는 균형 잡힌 기본값입니다.
+The canvas grows to fit the rotated image.	회전한 이미지가 들어가도록 캔버스가 커집니다.
+The canvas must be at least 1 x 1 pixel	캔버스는 1 x 1픽셀 이상이어야 합니다
+The cell size must be 2 to 200 pixels	셀 크기는 2~200픽셀이어야 합니다
+The cut is empty: paint more of the part to keep.	잘라낸 결과가 비어 있습니다. 남길 부분을 더 칠하세요.
+The destination is the profile the document already has	대상이 문서의 기존 프로필과 같습니다
+The destination must be another folder than the source.	대상 폴더는 소스 폴더와 달라야 합니다.
+The document has no layers	문서에 레이어가 없습니다
+The document is already in {name}	문서가 이미 {name}입니다
+The document is already tagged with this profile	문서에 이미 이 프로필이 지정되어 있습니다
+The document is already tagged {name}	문서에 이미 {name}이(가) 지정되어 있습니다
+The document's own profile: {error}	문서 자체 프로필: {error}
+The first {shown} of {n} pages are listed; a longer file opens only those.	{n}페이지 중 처음 {shown}페이지가 나열됩니다. 더 긴 파일은 이 페이지만 엽니다.
+The image has no opaque pixels to count	이미지에 셀 수 있는 불투명 픽셀이 없습니다
+The ink is laid over the image; the selection, if there is one, is where it prints.	잉크는 이미지 위에 놓이며, 선택 영역이 있으면 그곳에 인쇄됩니다.
+The last stop has no segment after it.	마지막 정지점 뒤에는 구간이 없습니다.
+The layer has no pixels to cut.	레이어에 잘라낼 픽셀이 없습니다.
+The layer's pixels are locked	레이어의 픽셀이 잠겨 있습니다
+The list is empty	목록이 비어 있습니다
+The margins and gutters leave no room for a column or a row	여백과 간격 때문에 열이나 행을 둘 공간이 없습니다
+The margins and gutters leave no room for a column or a row.	여백과 간격 때문에 열이나 행을 둘 공간이 없습니다.
+The name cannot be empty	이름은 비워 둘 수 없습니다
+The name has not changed	이름이 바뀌지 않았습니다
+The name is the file File > Export > Slices writes this slice as. The URL and Alt Tag go into the HTML page it writes beside the images.	이름은 파일 > 내보내기 > 분할 영역이 이 분할 영역을 기록하는 파일 이름입니다. URL과 Alt 태그는 이미지 옆에 기록되는 HTML 페이지에 들어갑니다.
+The new canvas is smaller — content outside it will be clipped.	새 캔버스가 더 작습니다. 캔버스 밖의 내용은 잘립니다.
+The next text layer the Type tool creates starts with this style.	문자 도구로 다음에 만드는 텍스트 레이어는 이 스타일로 시작합니다.
+The panel is already on this side	패널이 이미 이쪽에 있습니다
+The path encloses no pixel of the canvas	패스가 캔버스의 픽셀을 하나도 둘러싸지 않습니다
+The position must be a finite number	위치는 유한한 숫자여야 합니다
+The preview runs the real brush engine.	미리 보기는 실제 브러시 엔진을 사용합니다.
+The resolution must be 1 to 2400 ppi	해상도는 1~2400ppi여야 합니다
+The resolution must be {min} to {max} dpi	해상도는 {min}~{max}dpi여야 합니다
+The rulers and the size readouts use this unit	눈금자와 크기 판독값에 이 단위를 사용합니다
+The scale must be between 1% and 1000%	비율은 1%에서 1000% 사이여야 합니다
+The selection is kept with the document under this name	선택 영역은 이 이름으로 문서와 함께 보관됩니다
+The source and destination must be different folders	소스와 대상은 서로 다른 폴더여야 합니다
+The steps this snapshot named have been discarded	이 스냅숏이 가리키던 단계는 삭제되었습니다
+The table needs a name	표에는 이름이 필요합니다
+The warp has not changed	뒤틀기가 바뀌지 않았습니다
+There are no guides to slice along	분할할 안내선이 없습니다
+There are no slices to clear	지울 분할 영역이 없습니다
+There is no history to clear	지울 작업 내역이 없습니다
+There is no live selection to combine with	결합할 활성 선택 영역이 없습니다
+These are matrix-shaper profiles, which carry no perceptual or saturation tables: those two intents convert as Relative Colorimetric.	지각 표나 채도 표가 없는 매트릭스 셰이퍼 프로필입니다. 이 두 의도는 상대 색도계로 변환됩니다.
+Thin	가늘게
+Third-party notices	타사 고지 사항
+This Layer	이 레이어
+This adjustment has no panel controls	이 조정에는 패널 컨트롤이 없습니다
+This adjustment has no settings.	이 조정에는 설정이 없습니다.
+This build keeps channels on layers; it has no free-standing alpha channels yet	이 빌드는 채널을 레이어에 보관하며, 아직 독립된 알파 채널이 없습니다
+This effect is off. Tick it in the list to edit it.	이 효과가 꺼져 있습니다. 편집하려면 목록에서 선택하세요.
+This format cannot store CMYK, so the document is written as RGB. Choose JPEG or TIFF for CMYK.	이 형식은 CMYK를 저장할 수 없어 문서가 RGB로 기록됩니다. CMYK에는 JPEG 또는 TIFF를 선택하세요.
+This format could not be previewed.	이 형식은 미리 볼 수 없습니다.
+This format has no metadata slot: nothing is embedded	이 형식에는 메타데이터 공간이 없어 아무것도 포함되지 않습니다
+This format has no palette, so the indexed colours are written as RGB. Choose PNG or GIF for the palette.	이 형식에는 팔레트가 없어 인덱스 색상이 RGB로 기록됩니다. 팔레트에는 PNG 또는 GIF를 선택하세요.
+This format stores 8 bits per channel	이 형식은 채널당 8비트를 저장합니다
+This is a Lab document. No format here stores Lab, so it is converted to RGB on export.	Lab 문서입니다. 여기에는 Lab을 저장하는 형식이 없어 내보낼 때 RGB로 변환됩니다.
+This layer has no mask	이 레이어에는 마스크가 없습니다
+This panel is already at the bottom of its dock	이 패널은 이미 도크의 맨 아래에 있습니다
+This panel is already at the top of its dock	이 패널은 이미 도크의 맨 위에 있습니다
+This tool has no options	이 도구에는 옵션이 없습니다
+This tool is already at its defaults	이 도구는 이미 기본값입니다
+This window cannot read screen pixels, so the eyedropper is unavailable	이 창은 화면 픽셀을 읽을 수 없어 스포이드를 사용할 수 없습니다
+This works on a pixel layer; the active layer is a {kind}	픽셀 레이어에서 작동합니다. 활성 레이어는 {kind}입니다
+This works on an 8-bit document	8비트 문서에서 작동합니다
+This works on an RGB document	RGB 문서에서 작동합니다
+Threshold	한계값
+Threshold…	한계값…
+Thumbnail Size	축소판 크기
+Thumbnail size	축소판 크기
+Thumbnails by Document	문서별 축소판
+Thumbnails by Layer	레이어별 축소판
+Tiles/List	타일/목록
+Tiles…	타일…
+Tilt-Shift…	기울기-이동…
+Timeline	타임라인
+Tint	색조
+Tint hue	색조 색상
+Tint saturation	색조 채도
+To canvas	캔버스에
+Toggle Link	연결 전환
+Tonal width	계조 폭
+Tone	톤
+Tone and Detail	톤 및 세부
+Tool Presets	도구 사전 설정
+Top	위쪽
+Top Edges	위쪽 가장자리
+Top Left	왼쪽 위
+Top Left Pixel Color	왼쪽 위 픽셀 색상
+Top Right	오른쪽 위
+Top left	왼쪽 위
+Top right	오른쪽 위
+Trace Contour…	윤곽선 추적…
+Traces the active layer's colours into shape layers, one per colour.	활성 레이어의 색상을 색상마다 하나씩 모양 레이어로 추적합니다.
+Transform	변형
+Transform Layer	레이어 변형
+Transform Selection	선택 영역 변형
+Transparency	투명도
+Transparent Pixels	투명 픽셀
+Trim Away	잘라낼 부분
+Trim…	재단…
+Tritone	3도
+Turn on Resample to change the pixel count.	픽셀 수를 바꾸려면 리샘플링을 켜세요.
+Twirl…	돌리기…
+Twist	비틀기
+Two variables share a name	두 변수의 이름이 같습니다
+Type	문자
+Type a zoom level	확대/축소 수준 입력
+Type is edited in Character and Paragraph	문자는 문자 및 단락에서 편집합니다
+Type tool defaults	문자 도구 기본값
+UI scale	UI 배율
+URL	URL
+US Letter	US Letter
+Ultra Condensed	매우 좁게
+Ultra Expanded	매우 넓게
+Underlying Layer	하위 레이어
+Undo	실행 취소
+Ungroup Layers	레이어 그룹 해제
+Uniform	균일
+Unite Shapes	모양 결합
+Units	단위
+Unmake Frames	프레임 해제
+Unsaved changes	저장되지 않은 변경 내용
+Unsharp Mask…	언샵 마스크…
+Update the applied comp from the layers	레이어에서 적용된 컴프 업데이트
+Use Black Point Compensation	검정점 보정 사용
+Use global light	전체 조명 사용
+Using:	사용 중:
+Vanishing Point…	소실점…
+Variables	변수
+Variance	분산
+Vector Mask	벡터 마스크
+Vector density	벡터 밀도
+Vector enabled	벡터 사용
+Vector feather	벡터 페더
+Vector invert	벡터 반전
+Vector mask	벡터 마스크
+Vectorize	벡터화
+Vectorize Bitmap	비트맵 벡터화
+Vectorize Bitmap…	비트맵 벡터화…
+Vertical Centers	세로 중앙
+Vertical Distortion	세로 왜곡
+Vertical center guide	세로 중앙 안내선
+Vertical scale, in percent: stretches the glyphs about the baseline; leading is unchanged	세로 비율(%): 기준선을 중심으로 글리프를 늘립니다. 행간은 그대로입니다
+Vertically	세로로
+Vibrance	활기
+Vibrance…	활기…
+View	보기
+Violet	보라
+Visibility	가시성
+Visible adjustment layers	보이는 조정 레이어
+Vivid Light	선명한 라이트
+W	W
+WEBP…	WEBP…
+Waiting for the composite…	합성 이미지 기다리는 중…
+Warm	따뜻하게
+Warp	뒤틀기
+Warp Style	뒤틀기 스타일
+Warp Text	텍스트 뒤틀기
+Warp Text…	텍스트 뒤틀기…
+Wave	파형
+Wavelet Decompose	웨이블릿 분해
+Wavelet Decompose splits into 2 to 7 scales	웨이블릿 분해는 2~7개 스케일로 나눕니다
+Wavelet Decompose works on an sRGB document	웨이블릿 분해는 sRGB 문서에서 작동합니다
+Wavelet Decompose: the layer has no pixels	웨이블릿 분해: 레이어에 픽셀이 없습니다
+Wavelet Decompose: {n} detail layers over a residual; the source layer is hidden	웨이블릿 분해: 잔여물 위에 세부 레이어 {n}개. 소스 레이어는 숨겨졌습니다
+Wavelet Decompose…	웨이블릿 분해…
+Wave…	파형…
+Web (216)	웹(216)
+WebP (lossless)	WebP(무손실)
+WebP (lossy)	WebP(손실)
+Weight	두께
+White	흰색
+White to Black	흰색에서 검정으로
+Whites	흰색 계열
+Width	폭
+Width and height must be at least 1 pixel	폭과 높이는 1픽셀 이상이어야 합니다
+Width must be between 1 and 250 pixels	폭은 1~250픽셀이어야 합니다
+Width to 110%	폭을 110%로
+Width to 125%	폭을 125%로
+Width to 80%	폭을 80%로
+Width to 90%	폭을 90%로
+Window	창
+Wind…	바람…
+With Handles	핸들 사용
+Work Path	작업 패스
+Workspace	작업 영역
+Wrap to box	상자에 맞춰 줄 바꿈
+Writes the visible adjustment layers, applied to an identity lattice, as a 3D LUT (.cube).	보이는 조정 레이어를 항등 격자에 적용하여 3D LUT(.cube)로 기록합니다.
+Written as CMYK: a naive ink model, not an ICC press profile.	CMYK로 기록됨: 단순한 잉크 모델이며 ICC 인쇄 프로필이 아닙니다.
+Written as XMP into PNG, JPEG and TIFF files by Export As.	내보내기 형식이 PNG, JPEG, TIFF 파일에 XMP로 기록합니다.
+Written with the document's palette.	문서의 팔레트로 기록했습니다.
+Yellow	노랑
+Yellow / Blue	노랑 / 파랑
+Yellows	노랑 계열
+ZigZag…	지그재그…
+Zoom In	확대
+Zoom Out	축소
+Zoom in	확대
+Zoom out	축소
+Zoom to Selection	선택 영역으로 확대/축소
+a layer could not be rewritten	레이어를 다시 쓸 수 없습니다
+before / after	이전 / 이후
+changed	변경됨
+content thumbnail — click to edit the layer's pixels	내용 축소판 — 클릭하여 레이어의 픽셀 편집
+dpi	dpi
+edits are aimed at this mask — right-click for view and mask options	편집 대상이 이 마스크입니다 — 마우스 오른쪽 버튼으로 보기 및 마스크 옵션
+lines past the box	상자를 벗어난 줄
+mask off	마스크 끔
+mask thumbnail — click to edit the layer's mask	마스크 축소판 — 클릭하여 레이어의 마스크 편집
+minutes (0 is off)	분(0은 끔)
+no drop	놓을 수 없음
+px	px
+records here	여기에 기록
+skipped on play:	재생 시 건너뜀:
+the layers could not be added	레이어를 추가할 수 없습니다
+the profile cannot be transformed ({error})	프로필을 변환할 수 없습니다({error})
+to	~
+vector mask thumbnail — click to edit the vector mask	벡터 마스크 축소판 — 클릭하여 벡터 마스크 편집
+{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time	{format}: 타임라인, {fps}fps로 {frames}프레임, {length}ms. 각 프레임은 해당 시점의 레이어를 보여 줍니다
+{label} is not answered by this route	이 경로는 {label}에 응답하지 않습니다
+{label} was refused: {reason}	{label}이(가) 거부되었습니다: {reason}
+{name} Residual	{name} 잔여물
+{name} Scale {k}	{name} 스케일 {k}
+{name}: {n} pages	{name}: {n}페이지
+{n} slices from the guides ({cols} x {rows}); they replace the slices there were	안내선에서 분할 영역 {n}개({cols} x {rows}). 기존 분할 영역을 대체합니다
+{path} is a {space} profile; an RGB document takes an RGB profile	{path}은(는) {space} 프로필입니다. RGB 문서에는 RGB 프로필이 필요합니다
+{path} is {len} bytes, larger than any colour profile	{path}은(는) {len}바이트로 어떤 색상 프로필보다 큽니다
+{reason}; this one is {space}	{reason}. 이 문서는 {space}입니다

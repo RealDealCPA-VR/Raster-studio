@@ -18,61 +18,301 @@
 //! moves, and until then it is recorded as not-yet-passing rather than
 //! quietly weakened.
 
+use std::cell::Cell;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::OnceLock;
 
 /// The languages the catalogue carries. `En` is the source of truth.
+///
+/// W16-N: Photopea's More > Language list, cut to the languages this build
+/// translates in full — every English string the catalogue knows has a row in
+/// each of their tables (`crates/ui/src/i18n/<code>.tsv`), which
+/// `every_language_table_translates_every_catalogue_string` enforces. The rest
+/// of Photopea's list is not offered: a language picker that switched to a
+/// half-English UI would promise what the table cannot show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Locale {
     #[default]
     En,
+    De,
+    Es,
+    Fr,
+    It,
+    Pl,
+    PtBr,
+    Tr,
+    Ru,
+    Uk,
+    ZhCn,
+    Ja,
+    Ko,
 }
 
 impl Locale {
-    /// Every locale the catalogue has a row for, in preferences-list order.
-    /// One entry today: the Preferences dialog offers exactly this list, so
-    /// it cannot promise a language the table cannot show.
-    pub const ALL: &'static [Locale] = &[Locale::En];
+    /// Every locale the catalogue has a table for, in preferences-list order
+    /// (English, then the Latin-script languages, Cyrillic, CJK).
+    pub const ALL: &'static [Locale] = &[
+        Locale::En,
+        Locale::De,
+        Locale::Es,
+        Locale::Fr,
+        Locale::It,
+        Locale::Pl,
+        Locale::PtBr,
+        Locale::Tr,
+        Locale::Ru,
+        Locale::Uk,
+        Locale::ZhCn,
+        Locale::Ja,
+        Locale::Ko,
+    ];
 
     /// The locale the editor shows, as the preferences system stores it.
+    /// Unknown codes fall back to English.
     pub fn from_code(code: &str) -> Self {
         Self::ALL
             .iter()
             .copied()
-            .find(|l| l.code() == code)
+            .find(|l| l.code().eq_ignore_ascii_case(code))
             .unwrap_or(Self::En)
     }
 
-    /// The BCP-47 code, for the preferences UI.
+    /// The BCP-47 code, for the preferences file.
     pub const fn code(self) -> &'static str {
         match self {
             Self::En => "en",
+            Self::De => "de",
+            Self::Es => "es",
+            Self::Fr => "fr",
+            Self::It => "it",
+            Self::Pl => "pl",
+            Self::PtBr => "pt-BR",
+            Self::Tr => "tr",
+            Self::Ru => "ru",
+            Self::Uk => "uk",
+            Self::ZhCn => "zh-CN",
+            Self::Ja => "ja",
+            Self::Ko => "ko",
         }
     }
 
-    /// The name shown in the preferences list, in that language.
-    pub const fn display_name(self) -> &'static str {
-        match self {
-            Self::En => "English",
+    /// The name shown in the language list, in that language (the table's
+    /// `@name` row: a native name like the Japanese one is not ASCII, and the
+    /// Rust sources stay ASCII by gate).
+    pub fn display_name(self) -> &'static str {
+        match catalogue(self) {
+            Some(c) => c.name,
+            None => "English",
         }
+    }
+
+    /// Whether this language's script needs the bundled CJK face
+    /// ([`install_fonts`]); egui's own font covers Latin and Cyrillic.
+    pub const fn needs_cjk_font(self) -> bool {
+        matches!(self, Self::ZhCn | Self::Ja | Self::Ko)
+    }
+
+    /// The translation table, one `English<TAB>translation` row per line.
+    const fn source(self) -> Option<&'static str> {
+        Some(match self {
+            Self::En => return None,
+            Self::De => include_str!("i18n/de.tsv"),
+            Self::Es => include_str!("i18n/es.tsv"),
+            Self::Fr => include_str!("i18n/fr.tsv"),
+            Self::It => include_str!("i18n/it.tsv"),
+            Self::Pl => include_str!("i18n/pl.tsv"),
+            Self::PtBr => include_str!("i18n/pt-BR.tsv"),
+            Self::Tr => include_str!("i18n/tr.tsv"),
+            Self::Ru => include_str!("i18n/ru.tsv"),
+            Self::Uk => include_str!("i18n/uk.tsv"),
+            Self::ZhCn => include_str!("i18n/zh-CN.tsv"),
+            Self::Ja => include_str!("i18n/ja.tsv"),
+            Self::Ko => include_str!("i18n/ko.tsv"),
+        })
+    }
+
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|l| *l == self).unwrap_or(0)
     }
 }
 
 /// The active locale. One per process: the editor is a single-window app and
-/// the choice lives in preferences, read once at startup.
+/// the choice lives in preferences, installed at startup and again the moment
+/// the preference changes (`Editor::set_preferences`).
 static ACTIVE: AtomicU8 = AtomicU8::new(0);
 
-/// Switch the catalogue's locale. Unknown codes fall back to English.
-pub fn set_locale(locale: Locale) {
-    let index = Locale::ALL.iter().position(|l| *l == locale).unwrap_or(0);
-    ACTIVE.store(index as u8, Ordering::Relaxed);
+thread_local! {
+    /// A locale pinned for the current thread by [`with_locale`], ahead of the
+    /// process-wide one. Tests run in parallel threads of one process: a test
+    /// that switched the process-wide locale would flip every other test's
+    /// strings under it.
+    static SCOPED: Cell<Option<Locale>> = const { Cell::new(None) };
 }
 
-/// The locale in force.
+/// Switch the catalogue's locale for the whole process.
+pub fn set_locale(locale: Locale) {
+    ACTIVE.store(locale.index() as u8, Ordering::Relaxed);
+}
+
+/// The locale in force on this thread.
 pub fn active() -> Locale {
+    if let Some(scoped) = SCOPED.with(Cell::get) {
+        return scoped;
+    }
     let index = ACTIVE.load(Ordering::Relaxed) as usize;
     Locale::ALL.get(index).copied().unwrap_or(Locale::En)
 }
 
+/// Run `f` with `locale` in force on this thread only, restoring what was
+/// there before even if `f` panics.
+pub fn with_locale<R>(locale: Locale, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<Locale>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SCOPED.with(|s| s.set(self.0));
+        }
+    }
+    let _restore = Restore(SCOPED.with(|s| s.replace(Some(locale))));
+    f()
+}
+
+/// One language's parsed table: its native name and English-to-translation
+/// rows.
+struct Catalogue {
+    name: &'static str,
+    rows: HashMap<&'static str, &'static str>,
+}
+
+/// The parsed table for `locale`, built once on first use.
+fn catalogue(locale: Locale) -> Option<&'static Catalogue> {
+    static CATALOGUES: [OnceLock<Catalogue>; 13] = [const { OnceLock::new() }; 13];
+    let source = locale.source()?;
+    Some(CATALOGUES[locale.index()].get_or_init(|| parse_catalogue(source)))
+}
+
+/// Parse one `.tsv` table. Blank lines and `#` comments are skipped; `@name`
+/// names the language; every other line is `English<TAB>translation`, with
+/// `\n`, `\t` and `\\` escapes in either column.
+fn parse_catalogue(source: &'static str) -> Catalogue {
+    let mut name = "";
+    let mut rows = HashMap::new();
+    for line in source.lines() {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((english, translated)) = line.split_once('\t') else {
+            continue;
+        };
+        if english == "@name" {
+            name = translated;
+            continue;
+        }
+        rows.insert(unescape(english), unescape(translated));
+    }
+    Catalogue { name, rows }
+}
+
+/// A table cell with its escapes resolved. Rows without a backslash borrow
+/// the embedded table; the few that carry one are built once and kept.
+fn unescape(cell: &'static str) -> &'static str {
+    if !cell.contains('\\') {
+        return cell;
+    }
+    let mut out = String::with_capacity(cell.len());
+    let mut chars = cell.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some(other) => out.push(other),
+            None => out.push('\\'),
+        }
+    }
+    Box::leak(out.into_boxed_str())
+}
+
+/// W16-N: `english` in the active locale — the menu labels, panel titles,
+/// blend-mode names and history steps are English source strings the model
+/// crates own (`layer_model::BlendMode::label` is a `const fn` the tool
+/// options fold at compile time), so they are translated by their text where
+/// they are drawn. A string the table has no row for is shown as it is: a
+/// file name or a layer the user named is never mangled.
+pub fn tr_en(english: &str) -> &str {
+    let locale = active();
+    if locale == Locale::En {
+        return english;
+    }
+    let Some(catalogue) = catalogue(locale) else {
+        return english;
+    };
+    if let Some(row) = catalogue.rows.get(english) {
+        return row;
+    }
+    // A history step is named after the menu row that made it, without the
+    // row's ellipsis ("Gaussian Blur" from the "Gaussian Blur" row, ellipsis dropped).
+    if !english.is_empty() && !english.ends_with('\u{2026}') {
+        let with_ellipsis = format!("{english}\u{2026}");
+        if let Some(row) = catalogue.rows.get(with_ellipsis.as_str()) {
+            return row.strip_suffix('\u{2026}').unwrap_or(row);
+        }
+    }
+    english
+}
+
+/// [`tr_en`] for an owned label, such as `MenuAction::label`'s.
+pub fn tr_owned(english: String) -> String {
+    match tr_en(&english) {
+        same if same == english => english,
+        translated => translated.to_string(),
+    }
+}
+
+/// The id [`install_fonts`] marks a context with once its fonts are in.
+fn fonts_installed_id() -> egui::Id {
+    egui::Id::new("raster-i18n-fonts-installed")
+}
+
+/// W16-N: add the bundled CJK face (a subset of Noto Sans CJK SC, SIL OFL 1.1:
+/// `i18n/OFL.txt`) to egui's fallback chain, after egui's own fonts, so the
+/// Chinese, Japanese and Korean tables — and those languages' names in the
+/// language list — draw as glyphs rather than empty boxes. Idempotent per
+/// context: the chrome calls it with every theme install.
+///
+/// The face is cut to the characters the three tables use (plus kana and
+/// CJK punctuation); arbitrary CJK text a user types into a dialog field can
+/// still meet a glyph the subset does not carry.
+pub fn install_fonts(ctx: &egui::Context) {
+    let id = fonts_installed_id();
+    if ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false) {
+        return;
+    }
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        CJK_FONT_NAME.to_string(),
+        egui::FontData::from_static(CJK_FONT),
+    );
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .push(CJK_FONT_NAME.to_string());
+    }
+    ctx.set_fonts(fonts);
+    ctx.data_mut(|d| d.insert_temp(id, true));
+}
+
+/// The name the CJK face is registered under in egui's font definitions.
+pub const CJK_FONT_NAME: &str = "raster-noto-sans-cjk-subset";
+
+/// The bundled CJK face (see [`install_fonts`]).
+const CJK_FONT: &[u8] = include_bytes!("i18n/NotoSansCJKsc-subset.otf");
 /// Every catalogue entry: the English source string first, then any
 /// translations. A locale missing from a row falls back to English at lookup.
 const TABLE: &[(&str, &[(Locale, &str)])] = &[
@@ -270,6 +510,44 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.docks.channels.menu.new.spot", &[(Locale::En, "New Spot Channel…")]),
     ("ui.docks.channels.menu.merge", &[(Locale::En, "Merge Channels…")]),
     ("ui.docks.channels.menu.no.document", &[(Locale::En, "Open a document first")]),
+    // W16-E: the preset, History and Channels panel menus, the mask popups,
+    // the Layer Comps flags, the Notes author and the Navigator angle.
+    ("ui.w16.menu.open.aco", &[(Locale::En, "Open .ACO…")]),
+    ("ui.w16.menu.open.abr", &[(Locale::En, "Open .ABR…")]),
+    ("ui.w16.menu.open.asl", &[(Locale::En, "Open .ASL…")]),
+    ("ui.w16.menu.export.aco", &[(Locale::En, "Export as .ACO…")]),
+    ("ui.w16.menu.export.abr", &[(Locale::En, "Export as .ABR…")]),
+    ("ui.w16.menu.export.asl", &[(Locale::En, "Export as .ASL…")]),
+    ("ui.w16.menu.nothing.selected", &[(Locale::En, "Click an item in the panel first")]),
+    ("ui.w16.menu.library.empty", &[(Locale::En, "The list is empty")]),
+    ("ui.w16.menu.styles.no.style", &[(Locale::En, "The active layer has no layer style to save")]),
+    ("ui.w16.menu.rename", &[(Locale::En, "Name Change")]),
+    ("ui.w16.menu.delete", &[(Locale::En, "Delete")]),
+    ("ui.w16.menu.tiles.list", &[(Locale::En, "Tiles/List")]),
+    ("ui.w16.menu.define.new", &[(Locale::En, "Define New")]),
+    ("ui.w16.history.no.document", &[(Locale::En, "Open a document first")]),
+    ("ui.w16.history.nothing.to.clear", &[(Locale::En, "There is no history to clear")]),
+    ("ui.w16.history.clear", &[(Locale::En, "Clear History")]),
+    ("ui.w16.history.new.snapshot", &[(Locale::En, "New Snapshot")]),
+    ("ui.w16.channels.gone", &[(Locale::En, "That channel is no longer in the document")]),
+    ("ui.w16.channels.color.not.deletable", &[(Locale::En, "A colour channel cannot be deleted")]),
+    ("ui.w16.channels.menu.new", &[(Locale::En, "New")]),
+    ("ui.w16.channels.menu.delete", &[(Locale::En, "Delete")]),
+    ("ui.w16.channels.spot.delete", &[(Locale::En, "Delete this spot channel")]),
+    ("ui.w16.channels.spot.options", &[(Locale::En, "Spot Channel Options…")]),
+    ("ui.w16.mask.delete", &[(Locale::En, "Delete")]),
+    ("ui.w16.mask.apply", &[(Locale::En, "Apply")]),
+    ("ui.w16.vector.mask.disable", &[(Locale::En, "Disable Vector Mask")]),
+    ("ui.w16.vector.mask.enable", &[(Locale::En, "Enable Vector Mask")]),
+    ("ui.w16.vector.mask.delete", &[(Locale::En, "Delete Vector Mask")]),
+    ("ui.w16.navigator.angle", &[(Locale::En, "Angle")]),
+    ("ui.w16.navigator.degrees", &[(Locale::En, "\u{b0}")]),
+    ("ui.w16.comps.last.state", &[(Locale::En, "Last Document State")]),
+    ("ui.w16.comps.last.state.none", &[(Locale::En, "Kept when a comp is first applied")]),
+    ("ui.w16.comps.flag.visibility", &[(Locale::En, "Visibility")]),
+    ("ui.w16.comps.flag.position", &[(Locale::En, "Position")]),
+    ("ui.w16.comps.flag.appearance", &[(Locale::En, "Appearance")]),
+    ("ui.w16.notes.author", &[(Locale::En, "Author")]),
     ("ui.docks.channels.spot.hint", &[(Locale::En, "Spot channel: composited over the image as its ink")]),
     ("ui.folder_job.resize.title", &[(Locale::En, "Resize Images")]),
     ("ui.folder_job.mockups.title", &[(Locale::En, "Generate Mockups")]),
@@ -657,6 +935,21 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.docks.shape.join.round", &[(Locale::En, "Round")]),
     ("ui.docks.shape.join.bevel", &[(Locale::En, "Bevel")]),
     ("ui.docks.shape.dash", &[(Locale::En, "Dash")]),
+    // W16-G: the shape page's Live Shape section (Photopea's words).
+    ("ui.docks.shape.live", &[(Locale::En, "Live Shape")]),
+    ("ui.docks.shape.live.w", &[(Locale::En, "W")]),
+    ("ui.docks.shape.live.h", &[(Locale::En, "H")]),
+    ("ui.docks.shape.live.x", &[(Locale::En, "X")]),
+    ("ui.docks.shape.live.y", &[(Locale::En, "Y")]),
+    ("ui.docks.shape.live.same.radii", &[(Locale::En, "Same Radii")]),
+    ("ui.docks.shape.live.radius.tl", &[(Locale::En, "Top Left")]),
+    ("ui.docks.shape.live.radius.tr", &[(Locale::En, "Top Right")]),
+    ("ui.docks.shape.live.radius.br", &[(Locale::En, "Bottom Right")]),
+    ("ui.docks.shape.live.radius.bl", &[(Locale::En, "Bottom Left")]),
+    ("ui.docks.shape.live.sides", &[(Locale::En, "Sides")]),
+    ("ui.docks.shape.live.points", &[(Locale::En, "Points")]),
+    ("ui.docks.shape.live.inner", &[(Locale::En, "Inner Radius")]),
+    ("ui.docks.shape.live.weight", &[(Locale::En, "Weight")]),
     ("ui.docks.smart.embedded", &[(Locale::En, "Embedded source")]),
     ("ui.docks.smart.linked", &[(Locale::En, "Linked file")]),
     ("ui.docks.smart.no.source", &[(Locale::En, "No source recorded for this object")]),
@@ -695,12 +988,27 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.animation.interp.ease_out", &[(Locale::En, "Ease Out")]),
     ("ui.animation.interp.hold", &[(Locale::En, "Hold")]),
     ("ui.animation.no_layers", &[(Locale::En, "No layers yet: each top-level layer gets a bar on the timeline.")]),
+    // W16-M: the timeline's Add Media and video rows.
+    ("ui.animation.add_media", &[(Locale::En, "Add Media")]),
+    ("ui.animation.add_media.tip", &[(Locale::En, "Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read")]),
+    ("ui.animation.video.frames", &[(Locale::En, " frames")]),
     ("ui.export_as.timeline.frames", &[(Locale::En, "{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time")]),
     ("ui.docks.layers.search", &[(Locale::En, "Search layers by name")]),
     ("ui.docks.layers.search.placeholder", &[(Locale::En, "Search layers")]),
     ("ui.docks.history.no.document", &[(Locale::En, "Open a document to see its history")]),
     ("ui.docks.properties.no.document", &[(Locale::En, "Open a document to see its properties")]),
     ("ui.docks.layers.rename.tip", &[(Locale::En, "Double-click to rename")]),
+    // W16-D: the Layers panel's effects list and panel options.
+    ("ui.docks.layers.effects", &[(Locale::En, "Effects")]),
+    ("ui.docks.layers.effects.eye", &[(Locale::En, "Show / hide the layer style")]),
+    ("ui.docks.layers.effect.eye", &[(Locale::En, "Show / hide this effect")]),
+    ("ui.docks.layers.effects.tip", &[(Locale::En, "Double-click to edit in Layer Style; drag to the trash to delete")]),
+    ("ui.docks.layers.fx.toggle", &[(Locale::En, "Show / hide the effects list")]),
+    ("ui.docks.layers.options", &[(Locale::En, "Layers panel options")]),
+    ("ui.docks.layers.options.add.copy", &[(Locale::En, "Add \"copy\" to copied layers")]),
+    ("ui.docks.layers.options.thumb.size", &[(Locale::En, "Thumbnail Size")]),
+    ("ui.docks.layers.options.by.layer", &[(Locale::En, "Thumbnails by Layer")]),
+    ("ui.docks.layers.options.by.document", &[(Locale::En, "Thumbnails by Document")]),
     ("ui.docks.character.kerning", &[(Locale::En, "Pair kerning")]),
     ("ui.docks.character.kerning.tip", &[(Locale::En, "Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.")]),
     ("ui.docks.character.kerning.amount", &[(Locale::En, "Amount")]),
@@ -888,12 +1196,33 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.toolbar.straighten.layer", &[(Locale::En, "Straighten Layer")]),
     ("ui.toolbar.straighten.layer.hint", &[(Locale::En, "Rotate the active layer so the measured line is level (Enter)")]),
     ("ui.toolbar.straighten.layer.nothing", &[(Locale::En, "Drag a line with the Ruler first")]),
+    // W16-C: the options bar's float units and its Commit button.
+    ("ui.toolbar.unit.percent", &[(Locale::En, "%")]),
+    ("ui.toolbar.unit.px", &[(Locale::En, " px")]),
+    ("ui.toolbar.unit.degrees", &[(Locale::En, "\u{00B0}")]),
+    ("ui.toolbar.commit.hint", &[(Locale::En, "Commit (Enter)")]),
     ("ui.toolbar.swap.colours.x", &[(Locale::En, "Swap colours  (X)")]),
     ("ui.toolbar.default.colours.d.2", &[(Locale::En, "Default colours  (D)")]),
     // W9-L: the Move bar's Align / Distribute captions and Free Transform's
     // reference-point cells.
     ("ui.toolbar.align", &[(Locale::En, "Align")]),
     ("ui.toolbar.distribute", &[(Locale::En, "Distribute")]),
+    // W16-F: Path Select's Arrange / Delete buttons.
+    ("ui.toolbar.path.arrange", &[(Locale::En, "Arrange")]),
+    (
+        "ui.toolbar.path.bring.to.front",
+        &[(Locale::En, "Bring to Front")],
+    ),
+    (
+        "ui.toolbar.path.bring.forward",
+        &[(Locale::En, "Bring Forward")],
+    ),
+    (
+        "ui.toolbar.path.send.backward",
+        &[(Locale::En, "Send Backward")],
+    ),
+    ("ui.toolbar.path.send.to.back", &[(Locale::En, "Send to Back")]),
+    ("ui.toolbar.path.delete", &[(Locale::En, "Delete")]),
     ("ui.toolbar.reference.top.left", &[(Locale::En, "Reference point: Top Left")]),
     ("ui.toolbar.reference.top", &[(Locale::En, "Reference point: Top")]),
     ("ui.toolbar.reference.top.right", &[(Locale::En, "Reference point: Top Right")]),
@@ -1187,6 +1516,42 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.docks.channels.menu.new.spot",
     "ui.docks.channels.menu.merge",
     "ui.docks.channels.menu.no.document",
+    "ui.w16.menu.open.aco",
+    "ui.w16.menu.open.abr",
+    "ui.w16.menu.open.asl",
+    "ui.w16.menu.export.aco",
+    "ui.w16.menu.export.abr",
+    "ui.w16.menu.export.asl",
+    "ui.w16.menu.nothing.selected",
+    "ui.w16.menu.library.empty",
+    "ui.w16.menu.styles.no.style",
+    "ui.w16.menu.rename",
+    "ui.w16.menu.delete",
+    "ui.w16.menu.tiles.list",
+    "ui.w16.menu.define.new",
+    "ui.w16.history.no.document",
+    "ui.w16.history.nothing.to.clear",
+    "ui.w16.history.clear",
+    "ui.w16.history.new.snapshot",
+    "ui.w16.channels.gone",
+    "ui.w16.channels.color.not.deletable",
+    "ui.w16.channels.menu.new",
+    "ui.w16.channels.menu.delete",
+    "ui.w16.channels.spot.delete",
+    "ui.w16.channels.spot.options",
+    "ui.w16.mask.delete",
+    "ui.w16.mask.apply",
+    "ui.w16.vector.mask.disable",
+    "ui.w16.vector.mask.enable",
+    "ui.w16.vector.mask.delete",
+    "ui.w16.navigator.angle",
+    "ui.w16.navigator.degrees",
+    "ui.w16.comps.last.state",
+    "ui.w16.comps.last.state.none",
+    "ui.w16.comps.flag.visibility",
+    "ui.w16.comps.flag.position",
+    "ui.w16.comps.flag.appearance",
+    "ui.w16.notes.author",
     "ui.docks.channels.spot.hint",
     // W13X-7.
     "ui.pdf_import.title",
@@ -1507,9 +1872,21 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.toolbar.straighten.layer",
     "ui.toolbar.straighten.layer.hint",
     "ui.toolbar.straighten.layer.nothing",
+    // W16-C: the options bar's float units and its Commit button.
+    "ui.toolbar.unit.percent",
+    "ui.toolbar.unit.px",
+    "ui.toolbar.unit.degrees",
+    "ui.toolbar.commit.hint",
     // W9-L: the Move bar's Align / Distribute and the reference grid.
     "ui.toolbar.align",
     "ui.toolbar.distribute",
+    // W16-F: Path Select's Arrange / Delete buttons.
+    "ui.toolbar.path.arrange",
+    "ui.toolbar.path.bring.to.front",
+    "ui.toolbar.path.bring.forward",
+    "ui.toolbar.path.send.backward",
+    "ui.toolbar.path.send.to.back",
+    "ui.toolbar.path.delete",
     "ui.toolbar.reference.top.left",
     "ui.toolbar.reference.top",
     "ui.toolbar.reference.top.right",
@@ -1727,6 +2104,21 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.docks.shape.join.round",
     "ui.docks.shape.join.bevel",
     "ui.docks.shape.dash",
+    // W16-G.
+    "ui.docks.shape.live",
+    "ui.docks.shape.live.w",
+    "ui.docks.shape.live.h",
+    "ui.docks.shape.live.x",
+    "ui.docks.shape.live.y",
+    "ui.docks.shape.live.same.radii",
+    "ui.docks.shape.live.radius.tl",
+    "ui.docks.shape.live.radius.tr",
+    "ui.docks.shape.live.radius.br",
+    "ui.docks.shape.live.radius.bl",
+    "ui.docks.shape.live.sides",
+    "ui.docks.shape.live.points",
+    "ui.docks.shape.live.inner",
+    "ui.docks.shape.live.weight",
     "ui.docks.smart.embedded",
     "ui.docks.smart.linked",
     "ui.docks.smart.no.source",
@@ -1764,12 +2156,27 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.animation.interp.ease_out",
     "ui.animation.interp.hold",
     "ui.animation.no_layers",
+    // W16-M
+    "ui.animation.add_media",
+    "ui.animation.add_media.tip",
+    "ui.animation.video.frames",
     "ui.export_as.timeline.frames",
     "ui.docks.layers.search",
     "ui.docks.layers.search.placeholder",
     "ui.docks.history.no.document",
     "ui.docks.properties.no.document",
     "ui.docks.layers.rename.tip",
+    // W16-D
+    "ui.docks.layers.effects",
+    "ui.docks.layers.effects.eye",
+    "ui.docks.layers.effect.eye",
+    "ui.docks.layers.effects.tip",
+    "ui.docks.layers.fx.toggle",
+    "ui.docks.layers.options",
+    "ui.docks.layers.options.add.copy",
+    "ui.docks.layers.options.thumb.size",
+    "ui.docks.layers.options.by.layer",
+    "ui.docks.layers.options.by.document",
     "ui.docks.character.kerning",
     "ui.docks.character.kerning.tip",
     "ui.docks.character.kerning.amount",
@@ -1885,17 +2292,80 @@ const KNOWN_KEYS: &[&str] = &[
 /// key the migrated modules use (KNOWN_KEYS), so a leak here means a module
 /// grew a string without a table row. At runtime the empty string is better
 /// than a panic or a rogue key leaking into the UI.
+///
+/// W16-N: a row's own entry for the locale wins; otherwise the English
+/// source is looked up in that language's table ([`tr_en`]), so a string
+/// shared by many keys ("OK") is translated once.
 pub fn tr(key: &str) -> &'static str {
-    let locale = active();
-    let Some((_, row)) = TABLE.iter().find(|(k, _)| *k == key) else {
+    let Some(row) = rows_by_key().get(key) else {
         return "";
     };
-    row.iter()
-        .find(|(l, _)| *l == locale)
-        .or_else(|| row.iter().find(|(l, _)| *l == Locale::En))
+    let locale = active();
+    if let Some((_, own)) = row.iter().find(|(l, _)| *l == locale) {
+        return own;
+    }
+    let english = row
+        .iter()
+        .find(|(l, _)| *l == Locale::En)
         .map(|(_, s)| *s)
-        .unwrap_or("")
+        .unwrap_or("");
+    tr_en(english)
 }
+
+/// [`TABLE`] indexed by key, built once. A key listed twice keeps its first
+/// row, as the linear scan this replaced did.
+fn rows_by_key() -> &'static HashMap<&'static str, &'static [(Locale, &'static str)]> {
+    static INDEX: OnceLock<HashMap<&'static str, &'static [(Locale, &'static str)]>> =
+        OnceLock::new();
+    INDEX.get_or_init(|| {
+        let mut index = HashMap::with_capacity(TABLE.len());
+        for (key, row) in TABLE {
+            index.entry(*key).or_insert(*row);
+        }
+        index
+    })
+}
+
+/// W16-N: every English source string the language tables must translate:
+/// the catalogue's own rows plus the strings the model crates hand the UI
+/// ([`crate::menu`], [`crate::dock`], the blend modes, the history steps).
+/// The gate test walks it for every language; it is public so the shell's
+/// own tests can prove a string they draw is in it.
+pub fn catalogue_sources() -> Vec<String> {
+    let mut out: Vec<String> = TABLE
+        .iter()
+        .filter_map(|(_, row)| row.iter().find(|(l, _)| *l == Locale::En))
+        .map(|(_, s)| s.to_string())
+        .collect();
+    out.extend(with_locale(Locale::En, i18n_sources::sources));
+    out.retain(|s| !s.is_empty() && !is_untranslatable(s));
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// A string no language translates: it has no letters (a unit, a
+/// placeholder-only pattern such as `{path}: {error}`), or it is a proper
+/// name the tables keep as it is (a file format, a colour standard).
+fn is_untranslatable(s: &str) -> bool {
+    let mut outside_braces = String::new();
+    let mut depth = 0usize;
+    for c in s.chars() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            c if depth == 0 => outside_braces.push(c),
+            _ => {}
+        }
+    }
+    !outside_braces.chars().any(char::is_alphabetic)
+        || i18n_sources::PROPER_NAMES.contains(&s)
+}
+
+/// The English strings the model crates hand the UI (see
+/// [`catalogue_sources`]).
+#[path = "i18n/sources.rs"]
+mod i18n_sources;
 
 #[cfg(test)]
 mod tests {
@@ -1905,12 +2375,16 @@ mod tests {
     fn the_catalogue_resolves_every_registered_key_for_every_locale() {
         for (key, row) in TABLE {
             for (locale, expected) in row.iter() {
-                set_locale(*locale);
-                assert_eq!(tr(key), *expected, "key {key:?} in {locale:?}");
+                // The first row of a key listed twice is the one that shows.
+                if TABLE.iter().find(|(k, _)| k == key).map(|(_, r)| *r) != Some(*row) {
+                    continue;
+                }
+                with_locale(*locale, || {
+                    assert_eq!(tr(key), *expected, "key {key:?} in {locale:?}");
+                });
             }
         }
         // English is always complete and always the fallback.
-        set_locale(Locale::En);
         for (key, row) in TABLE {
             assert!(
                 row.iter().any(|(l, _)| *l == Locale::En),
@@ -1923,16 +2397,247 @@ mod tests {
     fn every_listed_locale_round_trips_through_its_code_and_unknown_codes_fall_back() {
         for locale in Locale::ALL {
             assert_eq!(Locale::from_code(locale.code()), *locale);
-            set_locale(*locale);
-            assert_eq!(active(), *locale);
+            with_locale(*locale, || assert_eq!(active(), *locale));
         }
         assert_eq!(Locale::from_code("xx-not-a-locale"), Locale::En);
-        set_locale(Locale::En);
     }
 
     #[test]
     fn an_unknown_key_is_empty_rather_than_a_leak_or_a_panic() {
         assert_eq!(tr("not.a.key"), "");
+    }
+
+    /// W16-N: the English strings drawn through `tr_en("...")` literals in
+    /// the ui and app-shell sources, so a call site added later is gated
+    /// without anyone listing it by hand.
+    fn tr_en_literals() -> Vec<String> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs")
+                    && path.file_name().is_some_and(|n| n != "strings.rs")
+                {
+                    out.push(path);
+                }
+            }
+        }
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = Vec::new();
+        walk(&manifest.join("src"), &mut files);
+        walk(&manifest.join("../app-shell/src"), &mut files);
+        let mut out = Vec::new();
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap_or_default();
+            let mut rest = text.as_str();
+            while let Some(at) = rest.find("tr_en(\"") {
+                rest = &rest[at + "tr_en(\"".len()..];
+                if let Some(end) = rest.find('"') {
+                    out.push(rest[..end].to_string());
+                }
+            }
+        }
+        out
+    }
+
+    /// The strings every language table must translate.
+    fn gated_sources() -> Vec<String> {
+        let mut all = catalogue_sources();
+        all.extend(tr_en_literals());
+        all.retain(|s| !s.is_empty() && !is_untranslatable(s));
+        all.sort_unstable();
+        all.dedup();
+        all
+    }
+
+    /// The `{name}` placeholders of a string, sorted.
+    fn placeholders(s: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut rest = s;
+        while let Some(open) = rest.find('{') {
+            rest = &rest[open + 1..];
+            let Some(close) = rest.find('}') else { break };
+            out.push(rest[..close].to_string());
+            rest = &rest[close + 1..];
+        }
+        out.sort_unstable();
+        out
+    }
+
+    /// W16-N, the gate: every language offered translates every string the
+    /// interface draws through the catalogue — every `tr()` key's English,
+    /// every menu title and row, panel tab, blend mode, history step and the
+    /// other model labels (`catalogue_sources`), and every `tr_en("...")`
+    /// literal — keeps each `{placeholder}` and each menu ellipsis, and carries
+    /// no row for a string nothing draws any more.
+    #[test]
+    fn every_language_table_translates_every_catalogue_string() {
+        let sources = gated_sources();
+        assert!(sources.len() > 1500, "only {} sources gathered", sources.len());
+        let mut problems = Vec::new();
+        for locale in Locale::ALL.iter().copied().filter(|l| *l != Locale::En) {
+            let table = catalogue(locale).expect("every non-English locale has a table");
+            assert!(!table.name.is_empty(), "{locale:?} has no @name row");
+            let mut missing = 0usize;
+            for english in &sources {
+                let Some(translated) = table.rows.get(english.as_str()) else {
+                    missing += 1;
+                    if missing <= 20 {
+                        problems.push(format!("{locale:?} is missing {english:?}"));
+                    }
+                    continue;
+                };
+                if translated.trim().is_empty() {
+                    problems.push(format!("{locale:?} translates {english:?} as nothing"));
+                }
+                if placeholders(english) != placeholders(translated) {
+                    problems.push(format!(
+                        "{locale:?}: {english:?} -> {translated:?} changes the placeholders"
+                    ));
+                }
+                if english.ends_with('\u{2026}') != translated.ends_with('\u{2026}') {
+                    problems.push(format!(
+                        "{locale:?}: {english:?} -> {translated:?} changes the ellipsis"
+                    ));
+                }
+            }
+            if missing > 20 {
+                problems.push(format!("{locale:?}: {missing} strings missing in all"));
+            }
+            for english in table.rows.keys() {
+                if sources.binary_search_by(|s| s.as_str().cmp(english)).is_err() {
+                    problems.push(format!("{locale:?} has a stale row {english:?}"));
+                }
+            }
+        }
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+    }
+
+    #[test]
+    fn a_translated_locale_changes_what_tr_and_tr_en_return_and_english_stays_the_source() {
+        with_locale(Locale::De, || {
+            assert_eq!(tr_en("File"), "Datei");
+            assert_eq!(tr("ui.pdf_import.ok"), tr_en("Open"));
+            assert_ne!(tr("ui.pdf_import.ok"), "Open");
+            // A string no table has (a file or layer name) is shown as it is.
+            assert_eq!(tr_en("holiday-2026.psd"), "holiday-2026.psd");
+            // A history step named after a menu row, ellipsis dropped.
+            assert_eq!(tr_en("Gaussian Blur"), tr_en("Gaussian Blur\u{2026}").trim_end_matches('\u{2026}'));
+            assert_ne!(tr_en("Gaussian Blur"), "Gaussian Blur");
+        });
+        with_locale(Locale::Ja, || assert_ne!(tr_en("File"), "File"));
+        assert_eq!(tr_en("File"), "File");
+        assert_eq!(Locale::De.display_name(), "Deutsch");
+    }
+
+    #[test]
+    fn with_locale_is_scoped_to_its_thread_and_restores_after_a_panic() {
+        let outer = active();
+        let caught = std::panic::catch_unwind(|| {
+            with_locale(Locale::Fr, || {
+                assert_eq!(active(), Locale::Fr);
+                let other = std::thread::spawn(active).join().unwrap();
+                assert_eq!(other, Locale::En, "another thread keeps the process locale");
+                panic!("unwind through the scope");
+            })
+        });
+        assert!(caught.is_err());
+        assert_eq!(active(), outer);
+    }
+
+    /// W16-N: the Chinese, Japanese and Korean tables — and every language's
+    /// own name in the language list — draw as glyphs once [`install_fonts`]
+    /// has run; egui's own fonts carry none of them (the anti-vacuity half).
+    #[test]
+    fn the_bundled_cjk_face_draws_every_cjk_row_and_egui_alone_cannot() {
+        let frame = |ctx: &egui::Context| {
+            let _ = ctx.run(egui::RawInput::default(), |_| {});
+        };
+        let body = egui::FontId::proportional(13.0);
+        let mono = egui::FontId::monospace(13.0);
+        let bare = egui::Context::default();
+        frame(&bare);
+        assert!(
+            !bare.fonts(|f| f.has_glyphs(&body, "日本語")),
+            "egui's own fonts already draw CJK; this test would prove nothing"
+        );
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        install_fonts(&ctx); // idempotent: a second call changes nothing
+        frame(&ctx);
+        for locale in Locale::ALL.iter().copied() {
+            let name = locale.display_name();
+            assert!(ctx.fonts(|f| f.has_glyphs(&body, name)), "{name:?} has tofu");
+        }
+        for locale in [Locale::ZhCn, Locale::Ja, Locale::Ko] {
+            assert!(locale.needs_cjk_font());
+            let table = catalogue(locale).expect("a CJK table");
+            for text in table.rows.values() {
+                assert!(
+                    ctx.fonts(|f| f.has_glyphs(&body, text) && f.has_glyphs(&mono, text)),
+                    "{locale:?}: {text:?} has a character the fonts cannot draw"
+                );
+            }
+        }
+    }
+
+    /// W16-N: the menu model the bar draws is in the active language — titles,
+    /// submenus and rows — while `MenuAction::label`, which scripts and tests
+    /// match on, stays the English source; Window carries Language (every
+    /// offered language, each in its own name) and Glass Menus.
+    #[test]
+    fn the_menu_bar_model_speaks_the_active_language_and_offers_the_language_list() {
+        use crate::menu::{menu_bar, Entry, MenuAction, MenuContext};
+        let titles = || menu_bar(0).iter().map(|m| m.title).collect::<Vec<_>>();
+        assert_eq!(
+            titles(),
+            ["File", "Edit", "Image", "Layer", "Select", "Filter", "View", "Window", "Help"]
+        );
+        with_locale(Locale::De, || {
+            assert_eq!(
+                titles(),
+                ["Datei", "Bearbeiten", "Bild", "Ebene", "Auswahl", "Filter", "Ansicht", "Fenster", "Hilfe"]
+            );
+            let ctx = MenuContext::default();
+            assert_eq!(MenuAction::Open.label(), "Open\u{2026}", "the source stays English");
+            assert_eq!(MenuAction::Open.label_in(&ctx), "\u{00D6}ffnen\u{2026}");
+            let undo = MenuContext {
+                undo_label: Some("Create Layer".into()),
+                ..MenuContext::default()
+            };
+            assert_eq!(MenuAction::Undo.label_in(&undo), "R\u{00FC}ckg\u{00E4}ngig Ebene erstellen");
+            let window = menu_bar(0).into_iter().find(|m| m.title == "Fenster").unwrap();
+            let languages = window
+                .entries
+                .iter()
+                .find_map(|e| match e {
+                    Entry::Submenu { label, entries } if *label == "Sprache" => Some(entries.clone()),
+                    _ => None,
+                })
+                .expect("Window has a Language submenu");
+            let offered: Vec<String> = languages
+                .iter()
+                .flat_map(Entry::actions)
+                .map(|a| a.label_in(&ctx))
+                .collect();
+            let names: Vec<String> =
+                Locale::ALL.iter().map(|l| l.display_name().to_string()).collect();
+            assert_eq!(offered, names, "every language, each in its own name");
+            assert!(window.actions().contains(&MenuAction::ToggleGlassMenus));
+            assert_eq!(MenuAction::ToggleGlassMenus.label_in(&ctx), "Glasmen\u{00FC}s");
+            assert_eq!(MenuAction::SetLanguage(Locale::De).checked(&ctx), Some(true));
+            assert_eq!(MenuAction::SetLanguage(Locale::Fr).checked(&ctx), Some(false));
+        });
+    }
+
+    #[test]
+    fn the_catalogue_parser_reads_names_rows_escapes_and_skips_comments() {
+        let parsed = parse_catalogue("# a comment\n@name\tTest\nA\\tB\tC\\nD\r\nplain\tsimple\n\nno tab here\n");
+        assert_eq!(parsed.name, "Test");
+        assert_eq!(parsed.rows.get("A\tB"), Some(&"C\nD"));
+        assert_eq!(parsed.rows.get("plain"), Some(&"simple"));
+        assert_eq!(parsed.rows.len(), 2);
     }
 
     #[test]

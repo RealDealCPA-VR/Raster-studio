@@ -266,6 +266,106 @@ fn unpack_bits(mut packed: &[u8], row: usize, out: &mut Vec<u8>) -> Result<(), A
     Ok(())
 }
 
+/// W16-E: pack one scanline with PackBits (runs of 3+ equal bytes as a
+/// repeat, the rest as literal runs of at most 128) — the inverse of
+/// [`unpack_bits`].
+fn pack_bits(row: &[u8], out: &mut Vec<u8>) {
+    let mut i = 0;
+    while i < row.len() {
+        let mut run = 1;
+        while i + run < row.len() && run < 128 && row[i + run] == row[i] {
+            run += 1;
+        }
+        if run >= 3 {
+            out.push((257 - run) as u8);
+            out.push(row[i]);
+            i += run;
+            continue;
+        }
+        let start = i;
+        while i < row.len() && i - start < 128 {
+            let repeats = i + 2 < row.len() && row[i] == row[i + 1] && row[i] == row[i + 2];
+            if repeats {
+                break;
+            }
+            i += 1;
+        }
+        out.push((i - start - 1) as u8);
+        out.extend_from_slice(&row[start..i]);
+    }
+}
+
+/// W16-E: the Brushes panel's Export as .ABR. Writes a version 6.2 brush
+/// file with one sampled brush per tip in a `samp` section, each an 8-bit
+/// PackBits-compressed coverage plane under a 36-character identifier —
+/// the layout [`parse_abr`] (and GIMP, Krita and Photopea) read. No `desc`
+/// section is written: brush names and dynamics are not part of what this
+/// build reads back from an `.abr`, so they are not claimed here either.
+///
+/// Refuses an empty list, more than [`MAX_BRUSHES`] tips, a tip with no
+/// area or a side past [`MAX_SIDE`], or a plane of the wrong length.
+pub fn write_abr(tips: &[AbrBrush]) -> Result<Vec<u8>, AbrError> {
+    if tips.is_empty() {
+        return Err(AbrError::NoBrushes);
+    }
+    if tips.len() > MAX_BRUSHES {
+        return Err(AbrError::TooManyBrushes);
+    }
+    let mut samp = Vec::new();
+    for (index, tip) in tips.iter().enumerate() {
+        let (w, h) = (tip.width, tip.height);
+        if w == 0 || h == 0 {
+            return Err(AbrError::Malformed("the tip has no area"));
+        }
+        if w > MAX_SIDE || h > MAX_SIDE {
+            return Err(AbrError::Malformed("the tip is larger than 5000 pixels"));
+        }
+        if tip.alpha8.len() != w as usize * h as usize {
+            return Err(AbrError::Malformed("a scanline is shorter than its width"));
+        }
+        // The identifier: a Pascal string of 36 characters, then the
+        // subversion 2 header's remaining bytes, zeroed.
+        let mut body = Vec::with_capacity(301 + 19 + tip.alpha8.len());
+        let id = format!("$raster-studio-brush-{index:015}");
+        body.push(id.len() as u8);
+        body.extend_from_slice(id.as_bytes());
+        body.resize(301, 0);
+        for v in [0i32, 0, h as i32, w as i32] {
+            body.extend_from_slice(&v.to_be_bytes());
+        }
+        body.extend_from_slice(&8u16.to_be_bytes());
+        body.push(1);
+        let rows: Vec<Vec<u8>> = tip
+            .alpha8
+            .chunks(w as usize)
+            .map(|row| {
+                let mut packed = Vec::new();
+                pack_bits(row, &mut packed);
+                packed
+            })
+            .collect();
+        for row in &rows {
+            let len = u16::try_from(row.len())
+                .map_err(|_| AbrError::Malformed("a scanline does not compress"))?;
+            body.extend_from_slice(&len.to_be_bytes());
+        }
+        for row in rows {
+            body.extend_from_slice(&row);
+        }
+        samp.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        let len = body.len();
+        samp.extend_from_slice(&body);
+        samp.resize(samp.len() + ((4 - len % 4) % 4), 0);
+    }
+    let mut file = Vec::with_capacity(16 + samp.len());
+    file.extend_from_slice(&6u16.to_be_bytes());
+    file.extend_from_slice(&2u16.to_be_bytes());
+    file.extend_from_slice(b"8BIMsamp");
+    file.extend_from_slice(&(samp.len() as u32).to_be_bytes());
+    file.extend_from_slice(&samp);
+    Ok(file)
+}
+
 /// Test support: a v6 `.abr` holding `tips` (raw when `rle` is false,
 /// PackBits otherwise). Public so the application's own tests can build a
 /// fixture the same way.
@@ -460,5 +560,83 @@ mod tests {
         // A scanline that decodes past its width.
         assert!(unpack_bits(&[0x81, 7], 4, &mut Vec::new()).is_err());
         assert!(unpack_bits(&[5, 1, 2], 6, &mut Vec::new()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod w16e_write_tests {
+    use super::*;
+
+    fn soft_disc(side: u32) -> Vec<u8> {
+        let c = side as f32 / 2.0;
+        (0..side * side)
+            .map(|i| {
+                let (x, y) = ((i % side) as f32 + 0.5, (i / side) as f32 + 0.5);
+                let d = ((x - c).powi(2) + (y - c).powi(2)).sqrt() / c;
+                ((1.0 - d).clamp(0.0, 1.0) * 255.0) as u8
+            })
+            .collect()
+    }
+
+    /// W16-E: what Export as .ABR writes, the importer reads back — every
+    /// tip, in order, pixel for pixel (flat runs and noisy runs both, so
+    /// both PackBits branches are exercised).
+    #[test]
+    fn an_exported_abr_reads_back_tip_for_tip() {
+        let noisy: Vec<u8> = (0..7 * 3).map(|i| (i * 37 % 251) as u8).collect();
+        let tips = vec![
+            AbrBrush {
+                width: 19,
+                height: 19,
+                alpha8: soft_disc(19),
+            },
+            AbrBrush {
+                width: 300,
+                height: 2,
+                alpha8: vec![255; 600],
+            },
+            AbrBrush {
+                width: 7,
+                height: 3,
+                alpha8: noisy,
+            },
+        ];
+        let bytes = write_abr(&tips).expect("writes");
+        assert_eq!(parse_abr(&bytes).expect("reads back"), tips);
+    }
+
+    #[test]
+    fn packbits_round_trips_every_run_shape() {
+        let rows: [&[u8]; 5] = [
+            &[1],
+            &[9, 9, 9, 9, 9],
+            &[1, 2, 3, 3, 3, 3, 4, 5, 5],
+            &[0; 400],
+            &[7, 7, 8, 8, 9, 9],
+        ];
+        for row in rows {
+            let mut packed = Vec::new();
+            pack_bits(row, &mut packed);
+            let mut out = Vec::new();
+            unpack_bits(&packed, row.len(), &mut out).expect("unpacks");
+            assert_eq!(out, row);
+        }
+    }
+
+    #[test]
+    fn a_tip_the_reader_would_refuse_is_refused_on_the_way_out() {
+        assert_eq!(write_abr(&[]), Err(AbrError::NoBrushes));
+        let empty = AbrBrush {
+            width: 0,
+            height: 4,
+            alpha8: Vec::new(),
+        };
+        assert!(write_abr(&[empty]).is_err());
+        let short = AbrBrush {
+            width: 4,
+            height: 4,
+            alpha8: vec![0; 3],
+        };
+        assert!(write_abr(&[short]).is_err());
     }
 }

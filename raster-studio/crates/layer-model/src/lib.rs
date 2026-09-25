@@ -45,6 +45,8 @@ pub mod ids;
 pub mod layer;
 // W10-A: independent link groups (Layer ▸ Link Layers).
 pub mod link_groups;
+// W16-G: a shape layer's live-shape parameters.
+pub mod live_shape;
 pub mod mask;
 pub mod smart_filter;
 pub mod text;
@@ -76,6 +78,7 @@ pub use tree::{ClippingGroup, DetachedSubtree, LayerTree, TreeError};
 pub use color_label::{ColorLabel, LayerColorLabel};
 // W10-A: the group an old document's single link chain maps to.
 pub use link_groups::LEGACY_LINK_GROUP;
+pub use live_shape::LiveShape;
 // W10-B: the document-level records of the Layer Comps, Notes and style panels.
 pub use doc_extras::{
     AlphaEdit, CharacterStyle, CompLayerState, DocumentExtras, LayerComp, Note, ParagraphStyle,

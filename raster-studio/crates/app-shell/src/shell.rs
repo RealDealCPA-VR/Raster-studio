@@ -504,6 +504,12 @@ mod w13l_tests;
 #[path = "shell_nudge_tests.rs"]
 mod nudge_tests;
 
+// W16-A: the selection tools' outline drag and the lassos' Enter,
+// double-click, Backspace and Escape, through the shell's own routes.
+#[cfg(test)]
+#[path = "select_w16_shell_tests.rs"]
+mod select_w16_tests;
+
 /// Held modifiers as the tools read them.
 ///
 /// The platform modifier folds into `ctrl`, because a tool that checks `ctrl`
@@ -2266,6 +2272,18 @@ impl Shell {
                     if outcome.had_pending {
                         return;
                     }
+                }
+                // W16-A: Backspace / Delete remove the last point of a lasso
+                // outline held open between presses (Photopea) — before the
+                // keymap, where Delete clears the selected pixels.
+                if (chord == Chord::plain(Key::Backspace) || chord == Chord::plain(Key::Delete))
+                    && self.pointer.remove_last_lasso_point(&self.editor)
+                {
+                    let geometry = self.pointer.live_geometry();
+                    self.chrome
+                        .publish_tool_geometry(geometry, self.editor.active().map(|d| d.id()));
+                    self.repaint_at = Some(Instant::now());
+                    return;
                 }
                 // W13-M: Photopea's mask-view keys, before the keymap — a
                 // view toggle that works wherever the keyboard is the

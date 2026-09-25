@@ -1040,16 +1040,33 @@ fn an_unknown_blend_mode_key_degrades_to_normal_with_a_warning() {
     );
 }
 
+/// W16-B: CMYK and Lab are read as themselves (never as RGB); an Indexed
+/// header without its palette and an 8-bit Bitmap header are malformed; a
+/// code Photoshop never assigned is refused by name.
 #[test]
-fn an_unsupported_colour_mode_is_refused_by_name_rather_than_read_as_rgb() {
+fn a_colour_mode_is_read_as_itself_and_an_unknown_one_is_refused_by_name() {
     let mut bytes = write(&rich_document()).unwrap();
-    for (code, name) in [(4u16, "CMYK"), (9, "Lab"), (2, "Indexed"), (0, "Bitmap")] {
+    for (code, mode) in [(4u16, ColorMode::Cmyk), (9, ColorMode::Lab)] {
+        bytes[24..26].copy_from_slice(&code.to_be_bytes());
+        assert_eq!(read(&bytes).unwrap().header.color_mode, mode);
+    }
+    bytes[24..26].copy_from_slice(&2u16.to_be_bytes());
+    assert!(matches!(
+        read(&bytes).unwrap_err(),
+        PsdError::SectionLengthMismatch { .. }
+    ));
+    bytes[24..26].copy_from_slice(&0u16.to_be_bytes());
+    assert!(matches!(
+        read(&bytes).unwrap_err(),
+        PsdError::UnsupportedDepth(8)
+    ));
+    for code in [5u16, 6, 10] {
         bytes[24..26].copy_from_slice(&code.to_be_bytes());
         match read(&bytes).unwrap_err() {
             PsdError::UnsupportedColorMode { code: c, name: n } => {
-                assert_eq!((c, n), (code, name));
+                assert_eq!((c, n), (code, "unknown"));
             }
-            other => panic!("{name}: wrong error: {other}"),
+            other => panic!("{code}: wrong error: {other}"),
         }
     }
 }

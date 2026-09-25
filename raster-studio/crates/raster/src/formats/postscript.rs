@@ -156,6 +156,68 @@ pub fn render_with(
     limits: ImportLimits,
     budget: Budget,
 ) -> Result<(DecodedSurface, String), CodecError> {
+    let list = display_list_with(ps, limits, budget)?;
+    let mut surface = svg_import::rasterize(list.svg.as_bytes(), limits)?;
+    surface.source_format = ImportFormat::Eps;
+    Ok((surface, list.note))
+}
+
+/// W16-I: what an EPS paints, as a vector display list: an SVG document
+/// (device pixels, one pixel per point, the page cut to the bounding box)
+/// holding one element per fill, stroke, image and `show`, in paint order,
+/// each wrapped in the clip groups in force when it was painted. File >
+/// Open maps it onto layers (`svg_import::layers`); [`render_with`] draws
+/// it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisplayList {
+    /// The SVG document.
+    pub svg: String,
+    /// The sentence that says what was drawn and what was not.
+    pub note: String,
+}
+
+/// [`DisplayList`] of `ps` under the default [`Budget`].
+pub fn display_list(ps: &[u8], limits: ImportLimits) -> Result<DisplayList, CodecError> {
+    display_list_with(ps, limits, Budget::default())
+}
+
+/// W16-I: an EPS file as layers: its [`DisplayList`] mapped by
+/// `svg_import::layers` (fills and strokes as shape layers, `show` text as
+/// text layers, images as raster layers, clipped marks flattened and
+/// reported). A DOS binary EPS is read through its PostScript section.
+/// Answers the layers and the interpreter's note.
+pub fn layers(
+    eps: &[u8],
+    limits: ImportLimits,
+) -> Result<(svg_import::layers::VectorLayers, String), CodecError> {
+    let ps = if eps.starts_with(&[0xC5, 0xD0, 0xD3, 0xC6]) {
+        let word = |at: usize| {
+            eps.get(at..at + 4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize)
+        };
+        let (off, len) = (word(4).unwrap_or(0), word(8).unwrap_or(0));
+        eps.get(off..off.saturating_add(len)).ok_or_else(|| {
+            CodecError::Unsupported("the DOS EPS PostScript section runs past the file".into())
+        })?
+    } else {
+        eps
+    };
+    let list = display_list(ps, limits)?;
+    let layers = svg_import::layers::read_layers(
+        list.svg.as_bytes(),
+        limits,
+        ImportFormat::Eps,
+        "the artwork",
+    )?;
+    Ok((layers, list.note))
+}
+
+/// [`display_list`] under an explicit budget.
+pub fn display_list_with(
+    ps: &[u8],
+    limits: ImportLimits,
+    budget: Budget,
+) -> Result<DisplayList, CodecError> {
     let bbox = bounding_box(ps).ok_or_else(|| {
         CodecError::Unsupported("the PostScript has no usable %%BoundingBox".into())
     })?;
@@ -191,9 +253,7 @@ pub fn render_with(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\">\n{}</svg>\n",
         it.svg
     );
-    let mut surface = svg_import::rasterize(svg.as_bytes(), limits)?;
-    surface.source_format = ImportFormat::Eps;
-    Ok((surface, note))
+    Ok(DisplayList { svg, note })
 }
 
 /// The page box: `%%HiResBoundingBox` over `%%BoundingBox`; the header's

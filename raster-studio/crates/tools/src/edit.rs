@@ -109,6 +109,11 @@ pub struct MoveTool {
     /// duplicates the layer(s) the tool's move names and moves the copies
     /// (`app-shell` `move_duplicate`), either way as one undo step.
     copy: bool,
+    /// W16-F: a press on one of Show Transform Controls' handles (a corner,
+    /// a side or the rotate band outside a corner) runs that drag as a Free
+    /// Transform session over the framed box, committed at the release as
+    /// ONE step. `None` for every other Move gesture.
+    handle_drag: Option<Box<crate::transform::TransformTool>>,
 }
 
 impl Default for MoveTool {
@@ -125,11 +130,44 @@ impl Default for MoveTool {
             current: Vec2::ZERO,
             layer: None,
             copy: false,
+            handle_drag: None,
         }
     }
 }
 
 impl MoveTool {
+    /// W16-F: which of Show Transform Controls' handles is under `p`, if
+    /// the box is shown: a corner, a side or a corner's rotate band — the
+    /// handles Free Transform hit-tests, at the view's zoom. The inside and
+    /// the pivot stay a plain Move drag. `None` with a pixel selection (the
+    /// Move tool moves the selected pixels then, not the framed layer).
+    pub fn display_handle_at(
+        &self,
+        ctx: &ToolContext<'_>,
+        p: Vec2,
+    ) -> Option<crate::transform::Handle> {
+        use crate::transform::{Handle, TransformMode, TransformState};
+        if !self.show_transform || ctx.selection.bounds().is_some() {
+            return None;
+        }
+        let bounds = self.display_bounds?;
+        if self.display_layer != ctx.active_layer {
+            return None;
+        }
+        let hit =
+            TransformState::new(bounds).hit_test_zoomed(p, TransformMode::Scale, ctx.view.zoom);
+        // The rotate band counts only OUTSIDE the box (Photopea: "drag
+        // outside the rectangle to rotate it"); inside it is a Move.
+        let outside = (p.x as f64) < bounds.x as f64
+            || (p.y as f64) < bounds.y as f64
+            || (p.x as f64) > bounds.right() as f64
+            || (p.y as f64) > bounds.bottom() as f64;
+        hit.filter(|h| match h {
+            Handle::Corner(_) | Handle::Edge(_) => true,
+            Handle::Rotate(_) => outside,
+            _ => false,
+        })
+    }
     /// W13-A: whether the running drag was begun with Alt held, so it moves
     /// a copy rather than the original.
     pub fn is_copying(&self) -> bool {
@@ -365,6 +403,10 @@ impl Tool for MoveTool {
     /// WITHOUT starting an edit — an identity transform state over the
     /// cached ink bounds. No session, no commands, no history.
     fn live_geometry(&self) -> Option<crate::tool::SessionGeometry> {
+        // W16-F: a handle drag shows the live quad under the pointer.
+        if let Some(drag) = &self.handle_drag {
+            return drag.live_geometry();
+        }
         if !self.show_transform {
             return None;
         }
@@ -385,6 +427,23 @@ impl Tool for MoveTool {
         event: PointerEvent,
     ) -> Result<(), ToolError> {
         crate::error::finite_pt("move start", event.pos)?;
+        // W16-F: Show Transform Controls' handles are live (Photopea): a
+        // press on one begins a Free Transform session over the framed box
+        // and this drag is that session's handle drag. Alt keeps its copy
+        // meaning, so an Alt press stays a Move.
+        if !event.modifiers.alt {
+            if let (Some(_), Some(bounds)) =
+                (self.display_handle_at(ctx, event.pos), self.display_bounds)
+            {
+                let mut session = Box::new(crate::transform::TransformTool::default());
+                session.begin_from_context(ctx)?;
+                // The session frames exactly the box the user grabbed.
+                session.begin(bounds)?;
+                session.on_pointer_down(ctx, event)?;
+                self.handle_drag = Some(session);
+                return Ok(());
+            }
+        }
         self.start = Some(event.pos);
         self.current = event.pos;
         // W13-A: Alt at the press makes the whole drag a copy.
@@ -436,6 +495,9 @@ impl Tool for MoveTool {
         ctx: &mut ToolContext<'_>,
         event: PointerEvent,
     ) -> Result<(), ToolError> {
+        if let Some(drag) = self.handle_drag.as_mut() {
+            return drag.on_pointer_move(ctx, event);
+        }
         if let (Some(start), true) = (
             self.start,
             event.pos.x.is_finite() && event.pos.y.is_finite(),
@@ -458,6 +520,20 @@ impl Tool for MoveTool {
         ctx: &mut ToolContext<'_>,
         event: PointerEvent,
     ) -> Result<(), ToolError> {
+        // W16-F: a Show Transform Controls handle drag commits its session
+        // as ONE step, and the box then frames where the ink went.
+        if let Some(mut drag) = self.handle_drag.take() {
+            drag.on_pointer_up(ctx, event)?;
+            let moved = drag
+                .state
+                .as_ref()
+                .and_then(|s| s.dest_bounds_unclipped(drag.session_mode()));
+            drag.commit(ctx)?;
+            if moved.is_some() {
+                self.display_bounds = moved;
+            }
+            return Ok(());
+        }
         let Some(start) = self.start.take() else {
             return Ok(());
         };
@@ -614,10 +690,12 @@ impl Tool for MoveTool {
         self.base_bounds = None;
         // W13-A: and so does an Alt copy.
         self.copy = false;
+        // W16-F: an Escaped handle drag commits nothing.
+        self.handle_drag = None;
     }
 
     fn is_active(&self) -> bool {
-        self.start.is_some()
+        self.start.is_some() || self.handle_drag.is_some()
     }
 }
 
@@ -2909,5 +2987,129 @@ mod option_tests {
                 &px[centre..centre + 4]
             );
         }
+    }
+}
+
+/// W16-F: Show Transform Controls' handles are live — a press on one runs a
+/// Free Transform drag over the framed box, committed at the release.
+#[cfg(test)]
+mod w16f_show_transform_tests {
+    use super::*;
+    use crate::tiles::MemoryTiles;
+
+    fn at(x: f32, y: f32) -> PointerEvent {
+        PointerEvent::at(x, y)
+    }
+
+    #[test]
+    fn a_corner_handle_drag_scales_the_layer_in_one_command() {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 96, 96));
+        let layer = LayerId::new();
+        ctx.active_layer = Some(layer);
+        ctx.active_layer_content_bounds = Some(PixelRect::new(20, 24, 30, 18));
+        let mut tool = MoveTool {
+            show_transform: true,
+            ..MoveTool::default()
+        };
+        tool.seed_display(&ctx);
+        // The bottom-right corner handle, dragged halfway to the top-left.
+        tool.on_pointer_down(&mut ctx, at(50.0, 42.0)).unwrap();
+        assert!(tool.is_active(), "the handle drag holds the pointer");
+        tool.on_pointer_move(&mut ctx, at(35.0, 33.0)).unwrap();
+        let Some(crate::tool::SessionGeometry::Transform { state, active, .. }) =
+            tool.live_geometry()
+        else {
+            panic!("the drag publishes its live quad");
+        };
+        assert_eq!(active, Some(crate::transform::Handle::Corner(2)));
+        assert_eq!(state.corners[2], Vec2::new(35.0, 33.0));
+        tool.on_pointer_up(&mut ctx, at(35.0, 33.0)).unwrap();
+        let cmds = ctx.drain();
+        let [Command::TransformLayer { layer_id, matrix }] = &cmds[..] else {
+            panic!("one layer transform: {cmds:?}");
+        };
+        assert_eq!(*layer_id, layer);
+        let m = glam::Affine2::from_cols_array(matrix);
+        assert!((m.matrix2.x_axis.x - 0.5).abs() < 1e-4, "{m:?}");
+        assert!((m.matrix2.y_axis.y - 0.5).abs() < 1e-4, "{m:?}");
+        // The top-left corner is the anchor: it stays where it was.
+        let anchor = m.transform_point2(Vec2::new(20.0, 24.0));
+        assert!(
+            (anchor - Vec2::new(20.0, 24.0)).length() < 1e-3,
+            "{anchor:?}"
+        );
+        assert!(!tool.is_active());
+        // The box now frames where the ink went.
+        let Some(crate::tool::SessionGeometry::Transform { state, .. }) = tool.live_geometry()
+        else {
+            panic!("the box stays shown");
+        };
+        assert_eq!(state.source, PixelRect::new(20, 24, 16, 10));
+    }
+
+    #[test]
+    fn a_drag_just_outside_a_corner_rotates_the_layer() {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 96, 96));
+        let layer = LayerId::new();
+        ctx.active_layer = Some(layer);
+        ctx.active_layer_content_bounds = Some(PixelRect::new(20, 20, 40, 40));
+        let mut tool = MoveTool {
+            show_transform: true,
+            ..MoveTool::default()
+        };
+        tool.seed_display(&ctx);
+        // Outside the top-left corner, in its rotate band.
+        assert!(matches!(
+            tool.display_handle_at(&ctx, Vec2::new(12.0, 12.0)),
+            Some(crate::transform::Handle::Rotate(0))
+        ));
+        // A quarter turn about the centre (40, 40).
+        tool.on_pointer_down(&mut ctx, at(12.0, 12.0)).unwrap();
+        tool.on_pointer_move(&mut ctx, at(68.0, 12.0)).unwrap();
+        tool.on_pointer_up(&mut ctx, at(68.0, 12.0)).unwrap();
+        let cmds = ctx.drain();
+        let [Command::TransformLayer { matrix, .. }] = &cmds[..] else {
+            panic!("one layer transform: {cmds:?}");
+        };
+        let m = glam::Affine2::from_cols_array(matrix);
+        let centre = m.transform_point2(Vec2::new(40.0, 40.0));
+        assert!((centre - Vec2::new(40.0, 40.0)).length() < 1e-3, "{m:?}");
+        let turned = m.transform_point2(Vec2::new(20.0, 20.0));
+        assert!(
+            (turned - Vec2::new(60.0, 20.0)).length() < 1e-2,
+            "{turned:?}"
+        );
+    }
+
+    #[test]
+    fn inside_the_box_it_is_still_a_move_and_without_the_option_no_handle_is_live() {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 96, 96));
+        let layer = LayerId::new();
+        ctx.active_layer = Some(layer);
+        ctx.active_layer_content_bounds = Some(PixelRect::new(20, 24, 30, 18));
+        let mut shown = MoveTool {
+            show_transform: true,
+            ..MoveTool::default()
+        };
+        shown.seed_display(&ctx);
+        assert!(shown
+            .display_handle_at(&ctx, Vec2::new(30.0, 28.0))
+            .is_none());
+        let mut hidden = MoveTool::default();
+        hidden.seed_display(&ctx);
+        assert!(hidden
+            .display_handle_at(&ctx, Vec2::new(50.0, 42.0))
+            .is_none());
+        // A corner drag with the option off is a plain move.
+        hidden.on_pointer_down(&mut ctx, at(50.0, 42.0)).unwrap();
+        hidden.on_pointer_up(&mut ctx, at(35.0, 33.0)).unwrap();
+        let cmds = ctx.drain();
+        let [Command::TransformLayer { matrix, .. }] = &cmds[..] else {
+            panic!("{cmds:?}");
+        };
+        assert_eq!(*matrix, translation_matrix(Vec2::new(-15.0, -9.0)));
     }
 }

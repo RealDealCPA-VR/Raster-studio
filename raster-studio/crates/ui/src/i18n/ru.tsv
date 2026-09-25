@@ -1,0 +1,1609 @@
+# Raster Studio interface strings, ru. One row per line: the English source, a TAB,
+# the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
+# Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
+@name	Русский
+ fps	 кадр/с
+ frames	 кадров
+ ms	 мс
+ px	 пикс.
+0 bytes	0 байт
+16 Bits/Channel	16 бит/канал
+16 bit	16 бит
+32 Bits/Channel	32 бит/канал
+3D	3D
+50% Grey	50% серого
+50% Threshold	Порог 50%
+8 Bits/Channel	8 бит/канал
+8 bit	8 бит
+90° Clockwise	90° по часовой
+90° Counter Clockwise	90° против часовой
+A CSV row has the wrong number of fields, at line	В строке CSV неверное число полей, строка
+A blank canvas at any size	Пустой холст любого размера
+A colour channel cannot be deleted	Цветовой канал нельзя удалить
+A layered raster editor	Растровый редактор со слоями
+A palette holds 2 to 256 colours	Палитра содержит от 2 до 256 цветов
+A saved selection already has that name	Сохранённое выделение с таким именем уже есть
+A saved selection: click to open Select > Load Selection, then choose it by name there	Сохранённое выделение: нажмите, чтобы открыть Выделение > Загрузить выделение, и выберите его там по имени
+A slice needs a name	Фрагменту нужно имя
+AV1 (smaller, newer players)	AV1 (меньше, новые плееры)
+About Raster Studio	О программе Raster Studio
+Absolute Colorimetric	Абсолютный колориметрический
+Action sets	Наборы операций
+Actions	Операции
+Adaptive (median cut)	Адаптивная (медианное сечение)
+Add "copy" to copied layers	Добавлять «копия» к скопированным слоям
+Add Artboard Above	Добавить монтажную область сверху
+Add Artboard Below	Добавить монтажную область снизу
+Add Artboard Left	Добавить монтажную область слева
+Add Artboard Right	Добавить монтажную область справа
+Add Filter Mask	Добавить маску фильтра
+Add Media	Добавить медиафайл
+Add Noise…	Добавить шум…
+Add a layer mask	Добавить слой-маску
+Add a smart filter mask	Добавить маску смарт-фильтра
+Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read	Добавить видеофайл (MP4: H.264 или AV1) как видеослой в позиции воспроизведения; звук не читается
+Add an adjustment layer	Добавить корректирующий слой
+Add another instance of this effect	Добавить ещё один экземпляр этого эффекта
+Add current colour	Добавить текущий цвет
+Add export	Добавить экспорт
+Add frame	Добавить кадр
+Add or remove room around the image. Pixels are not resampled.	Добавляет или убирает место вокруг изображения. Пиксели не пересчитываются.
+Add shortcut	Добавить сочетание клавиш
+Add to Selection	Добавить к выделенной области
+Adds one guide at a document coordinate, in pixels.	Добавляет одну направляющую в координате документа, в пикселях.
+Adjustments	Коррекция
+Advanced	Дополнительно
+Again	Повторить
+Again with Copy	Повторить с копией
+Aliased (pencil)	Без сглаживания (карандаш)
+Align	Выровнять
+Align the bottom edge to the canvas	Выровнять нижний край по холсту
+Align the left edge to the canvas	Выровнять левый край по холсту
+Align the right edge to the canvas	Выровнять правый край по холсту
+Align the top edge to the canvas	Выровнять верхний край по холсту
+Align with layer	Выровнять по слою
+All	Все
+All Caps	Все прописные
+All Caps shapes every lowercase letter as its capital; Small Caps shapes it as a capital at 70 % size. The stored text keeps the case you typed.	«Все прописные» рисует каждую строчную букву как прописную; «Капитель» — как прописную размером 70 %. Сохранённый текст сохраняет введённый регистр.
+All Layers	Все слои
+Alpha	Альфа
+Already used by	Уже используется:
+Alt Tag	Тег Alt
+Amount	Эффект
+An export needs at least one output	Экспорту нужен хотя бы один вывод
+An image or project from this computer	Изображение или проект с этого компьютера
+Angle	Угол
+Angle (degrees)	Угол (градусы)
+Angle jitter	Колебание угла
+Animation	Анимация
+Another slice already has this name	Другой фрагмент уже носит это имя
+Appearance	Оформление
+Applied	Применена
+Apply	Применить
+Apply Guides	Применить направляющие
+Apply Image	Внешний канал
+Apply Image…	Внешний канал…
+Apply Mask	Применить маску
+Apply Style	Применить стиль
+Apply Style 1	Применить стиль 1
+Apply Style Preset…	Применить набор стилей…
+Apply the next comp	Применить следующую композицию
+Apply the previous comp	Применить предыдущую композицию
+Apply this mask	Применить эту маску
+Approximate. The composited result is what the canvas shows.	Приблизительно. Совмещённый результат — то, что показывает холст.
+Arbitrary…	Произвольно…
+Arc	Дуга
+Arc Lower	Дуга снизу
+Arc Upper	Дуга сверху
+Arch	Арка
+Arrange	Упорядочить
+Artboard	Монтажная область
+Artboard from Layers	Монтажная область из слоёв
+Artboards in one document	Монтажные области в одном документе
+Artboards to Files…	Монтажные области в файлы…
+Assign Profile	Назначить профиль
+Assigned {name}: the pixel numbers are unchanged, so the colours look different	Назначен {name}: значения пикселей не изменились, поэтому цвета выглядят иначе
+Author	Автор
+Auto Color	Автоматическая цветовая коррекция
+Auto Contrast	Автоконтраст
+Auto Tone	Автотон
+Auto leading	Авто интерлиньяж
+Auto-Align Layers…	Автоматически выравнивать слои…
+Auto-Blend Layers…	Автоналожение слоёв…
+Automate	Автоматизация
+Autosaves of never-saved documents go here; empty uses the default	Сюда попадают автосохранения ни разу не сохранённых документов; пусто — папка по умолчанию
+Average	Среднее
+BMP…	BMP…
+Back to the colour this opened on	Вернуться к цвету, с которым открылось
+Background — double-click for the picker	Фон — дважды щёлкните, чтобы открыть палитру
+Based On	На основе
+Baseline shift	Смещение базовой линии
+Baseline to baseline. Auto leading follows the type size.	От базовой линии до базовой линии. Авто интерлиньяж следует размеру шрифта.
+Batch	Пакетная обработка
+Batch…	Пакетная обработка…
+Bend	Изгиб
+Bevel	Скос
+Bevel & Emboss	Тиснение
+Bevel & Emboss…	Тиснение…
+Bind a text replacement variable to a text layer, or a visibility variable to any layer.	Свяжите переменную замены текста с текстовым слоем или переменную видимости с любым слоем.
+Bitmap	Битовый формат
+Bitmap…	Битовый формат…
+Black	Чёрный
+Black & White	Чёрно-белое
+Black & White…	Чёрно-белое…
+Black to Transparent	От чёрного к прозрачному
+Black to White	От чёрного к белому
+Black to white through the inks	От чёрного к белому через краски
+Blacks	Чёрные
+Blend If	Наложить, если
+Blend Mode: Color	Режим наложения: Цветность
+Blend Mode: Color Burn	Режим наложения: Затемнение основы
+Blend Mode: Color Dodge	Режим наложения: Осветление основы
+Blend Mode: Darken	Режим наложения: Замена тёмным
+Blend Mode: Difference	Режим наложения: Разница
+Blend Mode: Dissolve	Режим наложения: Затухание
+Blend Mode: Exclusion	Режим наложения: Исключение
+Blend Mode: Hard Light	Режим наложения: Жёсткий свет
+Blend Mode: Hard Mix	Режим наложения: Жёсткое смешение
+Blend Mode: Hue	Режим наложения: Цветовой тон
+Blend Mode: Lighten	Режим наложения: Замена светлым
+Blend Mode: Linear Burn	Режим наложения: Линейный затемнитель
+Blend Mode: Linear Dodge (Add)	Режим наложения: Линейный осветлитель (добавить)
+Blend Mode: Linear Light	Режим наложения: Линейный свет
+Blend Mode: Luminosity	Режим наложения: Яркость
+Blend Mode: Multiply	Режим наложения: Умножение
+Blend Mode: Normal	Режим наложения: Обычные
+Blend Mode: Overlay	Режим наложения: Перекрытие
+Blend Mode: Pin Light	Режим наложения: Точечный свет
+Blend Mode: Saturation	Режим наложения: Насыщенность
+Blend Mode: Screen	Режим наложения: Экран
+Blend Mode: Soft Light	Режим наложения: Мягкий свет
+Blend Mode: Vivid Light	Режим наложения: Яркий свет
+Blending	Наложение
+Blending Options	Параметры наложения
+Blending Options…	Параметры наложения…
+Blending options	Параметры наложения
+Blends a source document, layer or channel into the active layer as one step.	Смешивает исходный документ, слой или канал с активным слоем за один шаг.
+Blends one channel of each of two sources into a new channel, a selection or a new document.	Смешивает по одному каналу из двух источников в новый канал, выделение или новый документ.
+Blue	Синий
+Blues	Синие
+Blur	Размытие
+Blur Gallery	Галерея размытия
+Blur More	Размытие +
+Bold	Полужирный
+Border Selection	Выделение границы
+Border…	Граница…
+Both axes	Обе оси
+Bottom	Низ
+Bottom Edges	Нижние края
+Bottom Left	Внизу слева
+Bottom Right	Внизу справа
+Bottom Right Pixel Color	Цвет нижнего правого пикселя
+Bottom left	Внизу слева
+Bottom right	Внизу справа
+Box Blur…	Размытие по рамке…
+Box height	Высота рамки
+Brightness	Яркость
+Brightness jitter	Колебание яркости
+Brightness/Contrast	Яркость/Контрастность
+Brightness/Contrast…	Яркость/Контрастность…
+Bring Forward	Переложить вперёд
+Bring to Front	На передний план
+Brush Editor	Редактор кистей
+Brush: Background	Кисть: фон
+Brush: Foreground	Кисть: основной цвет
+Brushes	Кисти
+Bulge	Выпуклость
+Butt	Срез
+CMYK Color	Цвета CMYK
+Calculations	Вычисления
+Calculations…	Вычисления…
+Camera Raw…	Camera Raw…
+Canvas Size	Размер холста
+Canvas Size…	Размер холста…
+Canvas extension	Расширение холста
+Caps	Регистр
+Carries the XMP; the source's EXIF goes into JPEG only	Содержит XMP; EXIF источника попадает только в JPEG
+Cell size (pixels)	Размер ячейки (пиксели)
+Center	По центру
+Center horizontally on the canvas	По центру холста по горизонтали
+Center vertically on the canvas	По центру холста по вертикали
+Centimeters	Сантиметры
+Centre	Центр
+Centre the view on this note	Центрировать вид на этой заметке
+Change Bit Depth	Изменить битовую глубину
+Change Colour Mode	Изменить цветовой режим
+Change Layer Properties	Изменить свойства слоя
+Change how many pixels the document has, or how large it prints.	Измените число пикселей в документе или его размер при печати.
+Channel	Канал
+Channel Mixer	Микширование каналов
+Channel Mixer…	Микширование каналов…
+Channel thumbnail	Миниатюра канала
+Channels	Каналы
+Character	Символ
+Character Style	Стиль символов
+Character Styles	Стили символов
+Checkerboard	Шахматная доска
+Choose 2 to 256 colours	Выберите от 2 до 256 цветов
+Choose a colour profile	Выберите цветовой профиль
+Choose a destination folder	Выберите папку назначения
+Choose a source folder	Выберите исходную папку
+Choose at least one page to open	Выберите хотя бы одну страницу для открытия
+Choose at least one side to trim	Выберите хотя бы одну сторону для обрезки
+Choose the Action to play	Выберите операцию для воспроизведения
+Choose the open grayscale document each channel of the new RGB document comes from.	Выберите открытый документ в градациях серого, из которого берётся каждый канал нового документа RGB.
+Choose the pages to open, their resolution and how they open.	Выберите страницы для открытия, их разрешение и способ открытия.
+Choose the source and the destination folders.	Выберите исходную папку и папку назначения.
+Choose…	Выбрать…
+Clear	Очистить
+Clear All	Очистить все
+Clear Guides	Удалить направляющие
+Clear History	Очистить историю
+Clear Layer Style	Очистить стиль слоя
+Clear Slices	Удалить фрагменты
+Clear Strokes	Очистить штрихи
+Clear existing guides	Удалить существующие направляющие
+Clear the {noun} from the active text layer	Убрать {noun} с активного текстового слоя
+Cleared {n} slice(s)	Удалено фрагментов: {n}
+Click an item in the panel first	Сначала щёлкните элемент на панели
+Click anywhere to sample a colour	Щёлкните где угодно, чтобы взять образец цвета
+Click anywhere to sample a colour, or press Escape.	Щёлкните где угодно, чтобы взять образец цвета, или нажмите Esc.
+Click the graph to add a point, drag a point to bend the curve, drag it off the graph to remove it	Щёлкните по графику, чтобы добавить точку; перетащите точку, чтобы изогнуть кривую; утащите её с графика, чтобы удалить
+Click the preview to sample a colour from it	Щёлкните по превью, чтобы взять из него образец цвета
+Click the preview to sample the colour to replace	Щёлкните по превью, чтобы взять образец заменяемого цвета
+Click the ramp to edit its stops.	Щёлкните по шкале, чтобы изменить её контрольные точки.
+Clip to layer below	Обтравить по нижнему слою
+Clipboard	Буфер обмена
+Clipping	Обтравочная маска
+Close	Закрыть
+Close All	Закрыть все
+Close Alpha Channel	Закрыть альфа-канал
+Close Others	Закрыть остальные
+Close panel	Закрыть панель
+Clouds	Облака
+Codec	Кодек
+Color	Цвет
+Color Balance	Цветовой баланс
+Color Balance…	Цветовой баланс…
+Color Burn	Затемнение основы
+Color Dodge	Осветление основы
+Color Dynamics	Динамика цвета
+Color Halftone…	Цветные полутона…
+Color Intensity	Интенсивность цвета
+Color Label	Цветовая метка
+Color Lookup	Поиск цвета
+Color Lookup Tables…	Таблицы поиска цвета…
+Color Lookup…	Поиск цвета…
+Color Overlay	Наложение цвета
+Color Overlay…	Наложение цвета…
+Color Picker	Палитра цветов
+Color Range	Цветовой диапазон
+Color Range…	Цветовой диапазон…
+Color fringe cleanup: pulls the boundary pixels' color toward the nearby interior ink — a separate edit from mask refinement.	Очистка цветной каймы: приближает цвет краевых пикселей к соседней внутренней краске — отдельная правка, не уточнение маски.
+Color to Alpha…	Цвет в альфу…
+Colors	Цвета
+Colour	Цвет
+Colour varies once per stroke.	Цвет меняется раз за штрих.
+Colours	Цвета
+Colours must be 1 to 64, the tolerance above 0 and the corner length at least 1	Число цветов — от 1 до 64, допуск больше 0, а длина угла не меньше 1
+Columns	Столбцы
+Columns and rows with gutters between them, inside optional margins, in pixels.	Столбцы и строки с промежутками между ними, внутри необязательных полей, в пикселях.
+Combine Shapes	Объединить фигуры
+Commit (Enter)	Применить (Enter)
+Commit Contents	Применить содержимое
+Composite	Совмещённый
+Condensed	Узкий
+Cone	Конус
+Constant	Постоянный
+Constrain proportions	Сохранять пропорции
+Content-Aware	С учётом содержимого
+Content-Aware Scale	Масштаб с учётом содержимого
+Contour	Контур
+Contract Selection	Сжать выделение
+Contract by	Сжать на
+Contract…	Сжать…
+Contrast	Контрастность
+Conversion Options	Параметры преобразования
+Convert Formats	Преобразовать форматы
+Convert Formats…	Преобразовать форматы…
+Convert for Smart Filters	Преобразовать для смарт-фильтров
+Convert to Layers	Преобразовать в слои
+Convert to Linked…	Преобразовать в связанный…
+Convert to Paragraph Text	Преобразовать в абзацный текст
+Convert to Point Text	Преобразовать в строчный текст
+Convert to Profile	Преобразовать в профиль
+Convert to Profile works on 8- and 16-bit documents	Преобразование в профиль работает с 8- и 16-битными документами
+Convert to Profile…	Преобразовать в профиль…
+Convert to Shape	Преобразовать в фигуру
+Convert to Smart Object	Преобразовать в смарт-объект
+Converted to {name} ({intent}): the numbers changed so the colours look the same	Преобразовано в {name} ({intent}): значения изменились, чтобы цвета выглядели так же
+Cool	Холодный
+Copper	Медь
+Copy	Копировать
+Copy Layer Style	Скопировать стиль слоя
+Copy Merged	Скопировать совмещённые данные
+Copyright Notice	Уведомление об авторских правах
+Corner length	Длина угла
+Corner radius	Радиус угла
+Corner radius applies to rectangles; this path has no corners to round	Радиус угла применяется к прямоугольникам; у этого контура нет углов для скругления
+Corners	Углы
+Count jitter	Колебание количества
+Create Clipping Mask	Создать обтравочную маску
+Create Layer	Создать слой
+Create Layers	Создать слои
+Crop	Кадрировать
+Crop and Straighten Photos	Кадрировать и выпрямить фотографии
+Crops the canvas to the content, judged by the basis below.	Обрезает холст по содержимому, по основе ниже.
+Crystallize…	Кристаллизация…
+Current Layer	Текущий слой
+Current Path	Текущий контур
+Curve tolerance	Допуск кривой
+Curves	Кривые
+Curves…	Кривые…
+Custom	Заказной
+Custom Brush	Заказная кисть
+Custom: with the Move tool, drag the 16 mesh handles on the canvas	Заказной: инструментом «Перемещение» перетащите 16 маркеров сетки на холсте
+Custom…	Заказной…
+Cut	Вырезать
+Cyan	Голубой
+Cyan / Red	Голубой / Красный
+Cyans	Голубые
+DDS…	DDS…
+DXF…	DXF…
+Dark	Тёмная
+Dark Blue	Тёмно-синяя
+Dark Grey	Тёмно-серая
+Darken	Замена тёмным
+Darker Color	Темнее
+Dash	Штрих
+Data Set	Набор данных
+Data Sets	Наборы данных
+Data Sets…	Наборы данных…
+Default	По умолчанию
+Default colours  (D)	Цвета по умолчанию  (D)
+Default colours (D)	Цвета по умолчанию (D)
+Define	Определить
+Define Brush Preset…	Определить набор кистей…
+Define Custom Shape…	Определить заказную фигуру…
+Define New	Определить новый
+Define Pattern…	Определить узор…
+Define…	Определить…
+Delete	Удалить
+Delete Filter Mask	Удалить маску фильтра
+Delete Layer	Удалить слой
+Delete Mask	Удалить маску
+Delete Vector Mask	Удалить векторную маску
+Delete action	Удалить операцию
+Delete channel	Удалить канал
+Delete frame	Удалить кадр
+Delete path	Удалить контур
+Delete selected layers	Удалить выбранные слои
+Delete set and its actions	Удалить набор и его операции
+Delete stop	Удалить точку
+Delete the applied comp	Удалить применённую композицию
+Delete the selected keyframe	Удалить выбранный ключевой кадр
+Delete the selected tool preset	Удалить выбранный набор параметров инструмента
+Delete the selected {noun}	Удалить выбранное: {noun}
+Delete the smart filter mask	Удалить маску смарт-фильтра
+Delete this note	Удалить эту заметку
+Delete this smart filter	Удалить этот смарт-фильтр
+Delete this spot channel	Удалить этот канал плашечного цвета
+Density	Плотность
+Dents…	Вмятины…
+Desaturate	Обесцветить
+Description	Описание
+Deselect	Отменить выделение
+Deselect Layers	Отменить выделение слоёв
+Despeckle	Ретушь
+Destination	Назначение
+Destination Space	Целевое пространство
+Detail	Детали
+Detail scales	Масштабы деталей
+Diamond	Ромб
+Difference	Разница
+Difference Clouds	Облака с наложением
+Diffuse…	Диффузия…
+Diffusion	Диффузия
+Diffusion Dither	Диффузный дизеринг
+Disable / Enable Filter Mask	Отключить / включить маску фильтра
+Disable / Enable Mask	Отключить / включить маску
+Disable / Enable Vector Mask	Отключить / включить векторную маску
+Disable Mask	Отключить маску
+Disable Vector Mask	Отключить векторную маску
+Displace…	Смещение…
+Dissolve	Затухание
+Distance	Расстояние
+Distort	Искажение
+Distribute	Распределить
+Dither	Дизеринг
+Dither…	Дизеринг…
+Divide	Разделить
+Dock this panel here	Закрепить эту панель здесь
+Document	Документ
+Document Bounds	Границы документа
+Document Info	Сведения о документе
+Document Title	Заголовок документа
+Document size	Размер документа
+Double-click to edit in Layer Style; drag to the trash to delete	Дважды щёлкните, чтобы изменить в «Стиле слоя»; перетащите в корзину, чтобы удалить
+Double-click to edit this filter's settings	Дважды щёлкните, чтобы изменить параметры этого фильтра
+Double-click to rename	Дважды щёлкните, чтобы переименовать
+Drag a line with the Ruler first	Сначала проведите линию линейкой
+Drag to zoom the view	Перетащите, чтобы масштабировать вид
+Drop Shadow	Тень
+Drop Shadow…	Тень…
+Duotone	Дуплекс
+Duotone Options	Параметры дуплекса
+Duotone…	Дуплекс…
+Duplicate	Дублировать
+Duplicate Layer	Дублировать слой
+Duplicate Layer…	Дублировать слой…
+Duplicate frame	Дублировать кадр
+Dust & Scratches…	Пыль и царапины…
+EMF…	EMF…
+EXIF and XMP writing is not implemented — only ICC is embedded	Запись EXIF и XMP не реализована — встраивается только ICC
+EXR…	EXR…
+Ease In	Плавный вход
+Ease Out	Плавный выход
+Edge Glow	Свечение краёв
+Edge refinement: feather, shift, smooth, and contrast over the mask's existing coverage — not subject recognition.	Уточнение краёв: растушёвка, смещение, сглаживание и контраст поверх имеющегося покрытия маски — без распознавания объекта.
+Edges	Края
+Edit	Редактирование
+Edit Adjustment	Изменить коррекцию
+Edit Adjustment…	Изменить коррекцию…
+Edit Alpha Channel	Изменить альфа-канал
+Edit Contents…	Редактировать содержимое…
+Edit Document Records	Изменить записи документа
+Edit Fill	Изменить заливку
+Edit Filter Mask	Изменить маску фильтра
+Edit Generator	Изменить генератор
+Edit Group	Изменить группу
+Edit Guides	Изменить направляющие
+Edit Raster	Изменить растровый слой
+Edit Saved Selection	Изменить сохранённое выделение
+Edit Shape	Изменить фигуру
+Edit Slices	Изменить фрагменты
+Edit Smart object	Изменить смарт-объект
+Edit Text	Изменить текст
+Edit Timeline	Изменить шкалу времени
+Edit brush…	Изменить кисть…
+Edit fill	Изменить заливку
+Edit gradient stops — click to open the editor	Изменить контрольные точки градиента — щёлкните, чтобы открыть редактор
+Edit in Quick Mask Mode	Редактировать в режиме быстрой маски
+Edit this ramp	Изменить эту шкалу
+Effects	Эффекты
+Effects apply to the whole layer and undo as one step.	Эффекты применяются ко всему слою и отменяются одним шагом.
+Embed EXIF and XMP	Встроить EXIF и XMP
+Embed Linked	Встроить связанный
+Embed colour profile	Встроить цветовой профиль
+Embedded source	Встроенный источник
+Emboss…	Тиснение…
+Enable / disable the smart filter mask	Включить / отключить маску смарт-фильтра
+Enable Mask	Включить маску
+Enable Vector Mask	Включить векторную маску
+Enable at least one export	Включите хотя бы один экспорт
+Enabled	Включено
+Enlarge smaller images	Увеличивать меньшие изображения
+Enter a colour like #3366CC	Введите цвет, например #3366CC
+Entropy	Энтропия
+Equalize	Выровнять яркость
+Essentials	Основная рабочая среда
+Every enabled row is written when you export.	При экспорте записывается каждая включённая строка.
+Every image in the source folder is fitted into the box and written to the destination folder in its own format.	Каждое изображение из исходной папки вписывается в рамку и записывается в папку назначения в своём формате.
+Every parameter is at its neutral value — there is nothing to clean	Все параметры на нейтральном значении — очищать нечего
+Every parameter is at its neutral value — there is nothing to refine	Все параметры на нейтральном значении — уточнять нечего
+Every variable needs a name	Каждой переменной нужно имя
+Exact	Точно
+Exclude Overlapping Shapes	Исключить перекрывающиеся фигуры
+Exclusion	Исключение
+Expand Selection	Расширить выделение
+Expand by	Расширить на
+Expand the dock	Развернуть док
+Expanded	Широкий
+Expand…	Расширить…
+Export	Экспорт
+Export As	Экспортировать как
+Export Color Lookup	Экспорт поиска цвета
+Export Contents…	Экспортировать содержимое…
+Export Diagnostics…	Экспорт диагностики…
+Export Layers…	Экспортировать слои…
+Export PDF	Экспорт PDF
+Export as .ABR…	Экспортировать как .ABR…
+Export as .ACO…	Экспортировать как .ACO…
+Export as .ASL…	Экспортировать как .ASL…
+Export set as .atn	Экспортировать набор как .atn
+Export…	Экспорт…
+Exposure	Экспозиция
+Exposure…	Экспозиция…
+Extra Bold	Сверхжирный
+Extra Condensed	Сверхузкий
+Extra Expanded	Сверхширокий
+Extra Light	Сверхсветлый
+Extras	Вспомогательные элементы
+Extrude…	Экструзия…
+Eyedropper	Пипетка
+Face	Начертание
+Facet	Фасет
+Fade	Ослабить
+Fade…	Ослабить…
+Family	Гарнитура
+Feather	Растушёвка
+Feather Selection	Растушевать выделение
+Feather radius	Радиус растушёвки
+Feather…	Растушёвка…
+Fibers…	Волокна…
+Field Blur…	Размытие поля…
+File	Файл
+File Info	Сведения о файле
+File Info…	Сведения о файле…
+File name	Имя файла
+Files that fail are listed in batch-errors.txt in the destination.	Файлы с ошибками перечислены в batch-errors.txt в папке назначения.
+Fill	Заливка
+Fill Filter Mask	Залить маску фильтра
+Fill Mask	Залить маску
+Fill Screen	Заполнить экран
+Fill in File Info, or open a file that has EXIF, to embed metadata	Заполните сведения о файле или откройте файл с EXIF, чтобы встроить метаданные
+Fill path with the foreground colour, on a new shape layer	Залить контур основным цветом на новом слое-фигуре
+Fill type	Тип заливки
+Fills the active selection with the chosen contents.	Заливает активное выделение выбранным содержимым.
+Fill…	Выполнить заливку…
+Filter	Фильтр
+Filter Gallery	Галерея фильтров
+Filter Gallery…	Галерея фильтров…
+Find Edges	Выделение краёв
+First line	Первая строка
+Fish	Рыба
+Fisheye	Рыбий глаз
+Fit on Screen	Показать во весь экран
+Fit the whole image in the window	Вписать всё изображение в окно
+Fixed height	Фиксированная высота
+Flag	Флаг
+Flame…	Пламя…
+Flat Angled 40	Плоская наклонная 40
+Flatten Image	Выполнить сведение
+Flip Canvas Horizontal	Отразить холст по горизонтали
+Flip Canvas Vertical	Отразить холст по вертикали
+Flip Horizontal	Отразить по горизонтали
+Flip Vertical	Отразить по вертикали
+Flip View Horizontal	Отразить вид по горизонтали
+Flip View Vertical	Отразить вид по вертикали
+Flow jitter	Колебание нажима
+Folders	Папки
+Font: 	Шрифт: 
+Foreground strokes mark what to keep, background strokes what to drop; Preview shows the cut.	Штрихи основного цвета отмечают, что оставить, штрихи фона — что убрать; превью показывает вырез.
+Foreground — double-click for the picker	Основной цвет — дважды щёлкните, чтобы открыть палитру
+Foreground/background jitter	Колебание основного/фонового цвета
+Format	Формат
+Fourier	Фурье
+Fourier Transform	Преобразование Фурье
+Fragment	Фрагментация
+Frame	Рамка
+Frames	Кадры
+Free Transform	Свободное трансформирование
+Free Transform a Copy	Свободно трансформировать копию
+From Transparency	Из прозрачности
+Fullscreen	Полный экран
+Fuzziness	Разброс
+GIF…	GIF…
+Gamma	Гамма
+Gamut Warning	Цвета вне охвата
+Gaussian	По Гауссу
+Gaussian Blur…	Размытие по Гауссу…
+Generate Mockups	Создать макеты
+Generate Mockups…	Создать макеты…
+Give the brush a name	Дайте кисти имя
+Give the export a file name	Дайте экспорту имя файла
+Glass Menus	Стеклянные меню
+Global light	Глобальное освещение
+Glyphs	Глифы
+Gradient	Градиент
+Gradient Editor	Редактор градиентов
+Gradient Map	Карта градиента
+Gradient Map…	Карта градиента…
+Gradient Overlay	Наложение градиента
+Gradient Overlay…	Наложение градиента…
+Gradient…	Градиент…
+Gray	Серый
+Grayscale	Градации серого
+Green	Зелёный
+Greens	Зелёные
+Grid	Сетка
+Grid points	Узлы сетки
+Group	Группа
+Group Layers	Сгруппировать слои
+Grow	Смежные пикселы
+Guide Guy	Guide Guy
+Guides	Направляющие
+Gutter	Промежуток
+H	H
+H.264 (plays everywhere)	H.264 (воспроизводится везде)
+HDR Toning	HDR-тонирование
+HDR Toning…	HDR-тонирование…
+HSB/HSL…	HSB/HSL…
+Halftone Screen	Полутоновый узор
+Hard Light	Жёсткий свет
+Hard Mix	Жёсткое смешение
+Hard Round 24	Жёсткая круглая 24
+Hard Round 4	Жёсткая круглая 4
+Hard edges, no blending. Pixel art only — it aliases on downscale.	Жёсткие края, без смешивания. Только для пиксель-арта — при уменьшении появляются ступеньки.
+Harder Brush	Более жёсткая кисть
+Height	Высота
+Height to 110%	Высота до 110%
+Height to 125%	Высота до 125%
+Height to 80%	Высота до 80%
+Height to 90%	Высота до 90%
+Help	Справка
+Hide All	Скрыть все
+Hide Layers	Скрыть слои
+Hide Selection	Скрыть выделение
+Hide the source layer	Скрыть исходный слой
+High Contrast	Высокий контраст
+High Pass…	Цветовой контраст…
+Highlights	Света
+Histogram	Гистограмма
+Histories	Истории
+History	История
+Hold	Удержание
+Horizontal Centers	Центры по горизонтали
+Horizontal Distortion	Искажение по горизонтали
+Horizontal center guide	Горизонтальная центральная направляющая
+Horizontal scale, in percent: widens or narrows the glyphs and their spacing	Масштаб по горизонтали в процентах: расширяет или сужает глифы и интервалы между ними
+Horizontally	По горизонтали
+Hue	Цветовой тон
+Hue jitter	Колебание цветового тона
+Hue/Saturation	Цветовой тон/Насыщенность
+Hue/Saturation…	Цветовой тон/Насыщенность…
+ICC profile	Профиль ICC
+ICO…	ICO…
+Image	Изображение
+Image Options	Параметры изображения
+Image Rotation	Вращение изображения
+Image Size	Размер изображения
+Image Size…	Размер изображения…
+Image size	Размер изображения
+Import CSV…	Импорт CSV…
+Import PDF	Импорт PDF
+Import a CSV of data sets first	Сначала импортируйте CSV с наборами данных
+Import a CSV: the first row names the variables, every further row is one data set.	Импортируйте CSV: первая строка называет переменные, каждая следующая строка — один набор данных.
+In use	Используется
+Inches	Дюймы
+Indexed Color	Индексированные цвета
+Indexed Color…	Индексированные цвета…
+Inflate	Раздувание
+Info	Инфо
+Ink	Краска
+Ink Color	Цвет краски
+Ink printed at 0, 25, 50, 75 and 100% tint	Краска, напечатанная с оттенком 0, 25, 50, 75 и 100%
+Inner Glow	Внутреннее свечение
+Inner Glow…	Внутреннее свечение…
+Inner Radius	Внутренний радиус
+Inner Shadow	Внутренняя тень
+Inner Shadow…	Внутренняя тень…
+Inside	Внутри
+Intent	Метод рендеринга
+Intersect Shape Areas	Пересечь области фигур
+Intersect with Selection	Пересечь с выделенной областью
+Inverse	Инверсия
+Inverse Fourier Transform	Обратное преобразование Фурье
+Invert	Инвертировать
+Invert coverage	Инвертировать покрытие
+Invert has no parameters	У инверсии нет параметров
+Iris Blur…	Размытие диафрагмы…
+Italic	Курсив
+JPEG carries the XMP and the source's EXIF	JPEG содержит XMP и EXIF источника
+JPG…	JPG…
+Justify	По ширине
+Kaleidoscope…	Калейдоскоп…
+Keep as it was	Оставить как было
+Kept when a comp is first applied	Сохраняется при первом применении композиции
+Kerning	Кернинг
+Keyboard Shortcut Sheet…	Шпаргалка по сочетаниям клавиш…
+Keyboard Shortcuts…	Сочетания клавиш…
+Keywords	Ключевые слова
+Kind	Тип
+Kurtosis	Эксцесс
+Lab Color	Цвет Lab
+Landscape	Альбомная
+Language	Язык
+Large	Крупный
+Last Document State	Последнее состояние документа
+Last Filter	Последний фильтр
+Last line	Последняя строка
+Layer	Слои
+Layer Comps	Композиции слоёв
+Layer Edges	Края слоя
+Layer Mask	Слой-маска
+Layer Style	Стиль слоя
+Layer knocks out drop shadow	Слой выбивает тень
+Layer via Copy	Скопировать на новый слой
+Layer via Cut	Вырезать на новый слой
+Layers	Слои
+Layers panel options	Параметры панели «Слои»
+Left	Влево
+Left Edges	Левые края
+Left indent	Отступ слева
+Length	Длина
+Lens Blur…	Размытие при малой глубине резкости…
+Lens Correction…	Коррекция дисторсии…
+Lens Flare…	Блик…
+Level	Уровень
+Levels	Уровни
+Levels…	Уровни…
+Light	Светлый
+Light Grey	Светло-серая
+Lighten	Замена светлым
+Lighter Color	Светлее
+Lighting Effects…	Эффекты освещения…
+Lightness	Светлота
+Line	Линия
+Linear	Линейный
+Linear Burn	Линейный затемнитель
+Linear Dodge (Add)	Линейный осветлитель (добавить)
+Linear Light	Линейный свет
+Link / Unlink Mask	Связать / отвязать маску
+Link Layers	Связать слои
+Link selected layers	Связать выбранные слои
+Link with layer	Связать со слоем
+Linked	Связано
+Linked file	Связанный файл
+Liquify…	Пластика…
+Live Shape	Динамическая фигура
+Live preview	Живой просмотр
+Live preview is off.	Живой просмотр выключен.
+Load	Загрузить
+Load .atn	Загрузить .atn
+Load .cube file…	Загрузить файл .cube…
+Load Selection	Загрузить выделенную область
+Load Selection…	Загрузить выделенную область…
+Load actions	Загрузить операции
+Load channel as selection	Загрузить канал как выделение
+Load path as a selection	Загрузить контур как выделение
+Loaded file	Загруженный файл
+Lock	Закрепить
+Lock All	Закрепить все
+Lock Guides	Закрепить направляющие
+Lock Image Pixels	Сохранять пикселы изображения
+Lock Position	Закрепить положение
+Lock Transparent Pixels	Сохранять прозрачность пикселов
+Lock all	Закрепить все
+Lock pixels	Закрепить пикселы
+Lock position	Закрепить положение
+Lock transparent pixels	Закрепить прозрачные пикселы
+Lookup table	Таблица поиска
+Luminance	Яркость
+Luminance of the preview source; the markers are the black and white points.	Яркость источника превью; маркеры — точки чёрного и белого.
+Luminosity	Яркость
+MP4…	MP4…
+Magenta	Пурпурный
+Magenta / Green	Пурпурный / Зелёный
+Magentas	Пурпурные
+Magic Cut	Волшебная обрезка
+Magic Cut…	Волшебная обрезка…
+Make Frames	Создать кадры
+Make a selection first	Сначала создайте выделение
+Make work path from selection	Создать рабочий контур из выделения
+Manual	Вручную
+Maps every colour onto one palette. The document keeps RGBA pixels; GIF and PNG export write this palette.	Сопоставляет каждый цвет с одной палитрой. Документ сохраняет пикселы RGBA; экспорт в GIF и PNG записывает эту палитру.
+Maps the active layer onto a palette as one undo step; the document stays RGB.	Сопоставляет активный слой с палитрой за один шаг отмены; документ остаётся в RGB.
+Margins	Поля
+Mark this state so you can come back to it	Отметить это состояние, чтобы к нему вернуться
+Mask	Маска
+Mask source	Источник маски
+Match Color	Подобрать цвет
+Match Color…	Подобрать цвет…
+Matting	Обработка краёв
+Maximum	Максимум
+Maximum…	Максимум…
+Mean	Среднее
+Median	Медиана
+Median…	Медиана…
+Medium	Средний
+Memory	Память
+Menu Bar and Canvas	Строка меню и холст
+Merge	Объединить
+Merge Channels	Объединить каналы
+Merge Channels…	Объединить каналы…
+Merge Down	Объединить с предыдущим
+Merge Layers	Объединить слои
+Merge Visible	Объединить видимые
+Merged	Объединённый
+Method	Метод
+Metrics	Метрический
+Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.	Метрический использует парный кернинг шрифта; 0 отключает кернинг; Вручную ставит одно значение (1/1000 em) между каждой парой текущего текста, а символы, набранные позже, начинаются без кернинга; нужны хотя бы два символа, поэтому для более короткого текста и параметров по умолчанию инструмента «Текст» он не предлагается. У модуля шейпинга нет оптического кернинга, поэтому этот режим не предлагается.
+Mezzotint…	Меццо-тинто…
+Midtones	Средние тона
+Millimeters	Миллиметры
+Min diameter	Мин. диаметр
+Min roundness	Мин. округлость
+Min size	Мин. размер
+Minimal	Минимальная
+Minimum	Минимум
+Minimum size only applies when pressure controls size.	Минимальный размер действует, только если нажим управляет размером.
+Minimum…	Минимум…
+Miter	Острый
+Mode	Режим
+Modify	Модификация
+Monochrome	Монохромный
+Monotone	Монотон
+More readouts	Другие показатели
+More tabs	Другие вкладки
+Mosaic…	Мозаика…
+Motion Blur…	Размытие в движении…
+Move Layer	Переместить слой
+Move a control first: these settings would change nothing	Сначала измените какой-либо параметр: эти настройки ничего не изменят
+Move this panel	Переместить эту панель
+Move this panel within its dock	Переместить эту панель внутри её дока
+Move to	Переместить в
+Move with the layer	Перемещать вместе со слоем
+Multiply	Умножение
+Name	Имя
+Name Change	Смена имени
+Name the channel first.	Сначала назовите канал.
+Navigator	Навигатор
+Nearest Neighbour	По соседним
+Neutralize	Нейтрализовать
+Neutrals	Нейтральные
+New	Новый
+New Adjustment Layer	Новый корректирующий слой
+New Channel	Новый канал
+New Document	Новый документ
+New Fill Layer	Новый слой-заливка
+New Guide	Новая направляющая
+New Guide Layout	Новый макет направляющих
+New Guide Layout…	Новый макет направляющих…
+New Guides from Shape	Новые направляющие из фигуры
+New Guide…	Новая направляющая…
+New Layer	Новый слой
+New Layer Based Slice	Новый фрагмент из слоя
+New Selection	Новая выделенная область
+New Smart Object via Copy	Новый смарт-объект через копирование
+New Snapshot	Новый снимок
+New Spot Channel	Новый канал плашечного цвета
+New Spot Channel…	Новый канал плашечного цвета…
+New Style Preset	Новый набор стилей
+New channel	Новый канал
+New group	Новая группа
+New layer	Новый слой
+New layer comp	Новая композиция слоёв
+New note at the centre of the view	Новая заметка в центре вида
+New path (saves the Work Path when it is selected)	Новый контур (сохраняет рабочий контур, если он выбран)
+New set	Новый набор
+New size	Новый размер
+New style from the active layer	Новый стиль из активного слоя
+New tool preset from the active tool	Новый набор параметров из активного инструмента
+New {noun} from the active text layer	Новый элемент ({noun}) из активного текстового слоя
+New…	Новый…
+Next Blend Mode	Следующий режим наложения
+No Color	Без цвета
+No character styles yet. New records the active text layer's font, size and look.	Стилей символов пока нет. «Новый» запоминает шрифт, размер и вид активного текстового слоя.
+No command loads a channel as the selection in this build; the Select menu's Load Selection restores a saved selection instead	В этой сборке ни одна команда не загружает канал как выделение; «Загрузить выделенную область» в меню «Выделение» восстанавливает сохранённое выделение
+No commands to bind	Нет команд для привязки
+No document	Нет документа
+No document is open	Нет открытых документов
+No export selected	Экспорт не выбран
+No faces listed for this family name	Для этого имени гарнитуры нет начертаний
+No frames yet. Add frame makes an _a_ layer: each one is a frame, bottom first.	Кадров пока нет. «Добавить кадр» создаёт слой _a_: каждый такой слой — кадр, начиная с нижнего.
+No guide crosses the canvas	Ни одна направляющая не пересекает холст
+No installed family matches	Нет подходящих установленных гарнитур
+No layer comps yet. New Layer Comp records every layer's visibility, position and appearance.	Композиций слоёв пока нет. «Новая композиция слоёв» запоминает видимость, положение и вид каждого слоя.
+No layers yet. Add one with the + button below.	Слоёв пока нет. Добавьте слой кнопкой + внизу.
+No layers yet: each top-level layer gets a bar on the timeline.	Слоёв пока нет: каждый слой верхнего уровня получает полосу на шкале времени.
+No notes yet. Click the canvas with the Note tool (I), or New Note pins one at the centre of the view; notes are saved with the document and never exported.	Заметок пока нет. Щёлкните по холсту инструментом «Заметка» (I) или нажмите «Новая заметка», чтобы закрепить её в центре вида; заметки сохраняются с документом и никогда не экспортируются.
+No open document is the same size as this one	Нет открытого документа такого же размера, как этот
+No paragraph styles yet. New records the active text layer's alignment, indents and spacing.	Стилей абзацев пока нет. «Новый» запоминает выключку, отступы и интервалы активного текстового слоя.
+No pattern chosen — the overlay paints nothing.	Узор не выбран — наложение ничего не рисует.
+No patterns are defined yet	Узоры пока не определены
+No profile file was chosen	Файл профиля не выбран
+No recent files yet	Недавних файлов пока нет
+No selection has been saved	Ни одно выделение не сохранено
+No source recorded for this object	Для этого объекта не записан источник
+No stop selected	Контрольная точка не выбрана
+No style presets yet. Define one with Layer > Layer Style > Define Style Preset, or add a Photoshop library with File > Open (.asl).	Наборов стилей пока нет. Определите его командой «Слои > Стиль слоя > Определить набор стилей» или добавьте библиотеку Photoshop через «Файл > Открыть» (.asl).
+No styles yet. The + button saves the active layer's style; File > Open loads an .asl style library.	Стилей пока нет. Кнопка + сохраняет стиль активного слоя; «Файл > Открыть» загружает библиотеку стилей .asl.
+No such command	Нет такой команды
+No tool presets yet. New Tool Preset saves the active tool with its current options.	Наборов параметров инструментов пока нет. «Новый набор параметров» сохраняет активный инструмент с его текущими параметрами.
+Noise	Шум
+None	Нет
+Normal	Обычные
+Normal Map…	Карта нормалей…
+Not a hex colour	Это не шестнадцатеричный цвет
+Not installed — shaping with	Не установлен — набирается шрифтом
+Not saved yet	Ещё не сохранено
+Notes	Заметки
+Nothing has changed	Ничего не изменилось
+Nothing in this submenu is available right now	Сейчас ничего в этом подменю недоступно
+Nothing is left to learn the background from: paint over it with the background brush.	Не осталось ничего, по чему можно изучить фон: закрасьте его кистью фона.
+Nothing to measure yet — paint or place something on this layer first	Пока нечего измерять — сначала нарисуйте или поместите что-нибудь на этот слой
+Nothing to preview.	Нечего показывать.
+OK	ОК
+Oblique	Наклонный
+Off: the wheel pans the view and Ctrl+wheel zooms	Выкл.: колесо прокручивает вид, а Ctrl+колесо масштабирует
+Offset…	Сдвиг…
+Oil Paint…	Масляная краска…
+One page holding the flattened image; no vector content.	Одна страница со сведённым изображением; без векторного содержимого.
+Onion skin	Калька
+Only English is available in this build	В этой сборке доступен только английский
+Only a mask channel can be loaded as a selection here	Здесь как выделение можно загрузить только канал маски
+Only web-safe colours	Только веб-цвета
+Opacity	Непрозрачность
+Opacity 10%	Непрозрачность 10%
+Opacity 100%	Непрозрачность 100%
+Opacity 20%	Непрозрачность 20%
+Opacity 30%	Непрозрачность 30%
+Opacity 40%	Непрозрачность 40%
+Opacity 50%	Непрозрачность 50%
+Opacity 60%	Непрозрачность 60%
+Opacity 70%	Непрозрачность 70%
+Opacity 80%	Непрозрачность 80%
+Opacity 90%	Непрозрачность 90%
+Opacity jitter	Колебание непрозрачности
+Opacity key	Ключ непрозрачности
+Opacity must be between 0% and 100%	Непрозрачность должна быть от 0% до 100%
+Opacity scales the layer and its effects; Fill scales the layer's own pixels only.	Непрозрачность масштабирует слой и его эффекты; «Заливка» — только собственные пикселы слоя.
+Opacity stops sit above the bar, colour stops below it.	Контрольные точки непрозрачности находятся над полосой, точки цвета — под ней.
+Open	Открыть
+Open .ABR…	Открыть .ABR…
+Open .ACO…	Открыть .ACO…
+Open .ASL…	Открыть .ASL…
+Open Recent	Последние документы
+Open a document first	Сначала откройте документ
+Open a document to animate it.	Откройте документ, чтобы анимировать его.
+Open a document to apply styles to its layers.	Откройте документ, чтобы применять стили к его слоям.
+Open a document to insert glyphs into its text.	Откройте документ, чтобы вставлять глифы в его текст.
+Open a document to keep text styles in it.	Откройте документ, чтобы хранить в нём текстовые стили.
+Open a document to lay guides out on it.	Откройте документ, чтобы расставить на нём направляющие.
+Open a document to pin notes on it.	Откройте документ, чтобы закреплять на нём заметки.
+Open a document to record layer comps.	Откройте документ, чтобы записывать композиции слоёв.
+Open a document to see its CSS	Откройте документ, чтобы увидеть его CSS
+Open a document to see its facts.	Откройте документ, чтобы увидеть сведения о нём.
+Open a document to see its histogram	Откройте документ, чтобы увидеть его гистограмму
+Open a document to see its history	Откройте документ, чтобы увидеть его историю
+Open a document to see its properties	Откройте документ, чтобы увидеть его свойства
+Open another document, or add another pixel layer, to match its colours.	Откройте другой документ или добавьте ещё один пиксельный слой, чтобы подобрать его цвета.
+Open as	Открыть как
+Open editor…	Открыть редактор…
+Open the Adjustments panel	Открыть панель «Коррекция»
+Open…	Открыть…
+Operation	Операция
+Orange	Оранжевый
+Other	Другое
+Out of gamut	Вне охвата
+Outer Glow	Внешнее свечение
+Outer Glow…	Внешнее свечение…
+Outline the path	Обвести контур
+Output	Выход
+Output channel	Выходной канал
+Outside	Снаружи
+Overlay	Перекрытие
+PBM…	PBM…
+PDF Presentation…	PDF-презентация…
+PDF…	PDF…
+PGM…	PGM…
+PNG…	PNG…
+PPM…	PPM…
+Page	Страница
+Page {n}	Страница {n}
+Page {page} opens at {w} x {h} px	Страница {page} откроется размером {w} x {h} пикс.
+Pages	Страницы
+Paint	Рисование
+Paint Filter Mask	Рисовать маску фильтра
+Paint Mask	Рисовать маску
+Paint over the part to keep with the foreground brush first.	Сначала закрасьте кистью основного цвета часть, которую нужно оставить.
+Paint over what to keep and over what to drop	Закрасьте то, что нужно оставить, и то, что нужно убрать
+Paint the inside of the path	Закрасить внутренность контура
+Painting	Рисование
+Paints a band along the active selection's border.	Рисует полосу вдоль границы активного выделения.
+Pair kerning	Парный кернинг
+Palette	Палитра
+Paragraph	Абзац
+Paragraph Style	Стиль абзаца
+Paragraph Styles	Стили абзацев
+Particles…	Частицы…
+Paste	Вставить
+Paste Into	Вставить в
+Paste Layer Style	Вставить стиль слоя
+Paste Outside	Вставить снаружи
+Paste Special	Специальная вставка
+Paste in Place	Вставить вместо
+Path	Контур
+Path Blur…	Размытие контура…
+Path editing lives in the Paths panel	Редактирование контуров — на панели «Контуры»
+Paths	Контуры
+Pattern	Узор
+Pattern Dither	Узорный дизеринг
+Pattern Overlay	Перекрытие узора
+Pattern Overlay…	Перекрытие узора…
+Pattern Preview	Просмотр узора
+Pattern…	Узор…
+Pencil 1px	Карандаш 1 пикс.
+Percent	Проценты
+Perceptual	Перцепционный
+Perspective	Перспектива
+Perspective Warp	Деформация перспективы
+Photo Filter	Фотофильтр
+Photo Filter…	Фотофильтр…
+Photography	Фотография
+Picas	Пики
+Pick a filter; it applies at its default settings.	Выберите фильтр; он применится с параметрами по умолчанию.
+Pin Light	Точечный свет
+Pinch…	Щипок…
+Pixel Grid	Пиксельная сетка
+Pixel dimensions	Размеры в пикселах
+Pixel mask	Пиксельная маска
+Pixelate	Оформление
+Pixels	Пикселы
+Place Embedded…	Поместить встроенные…
+Place Linked…	Поместить связанные…
+Play	Воспроизвести
+Play from step	Воспроизвести с шага
+Play selection	Воспроизвести выделенное
+Play this step (unchecked steps are passed over)	Воспроизвести этот шаг (неотмеченные шаги пропускаются)
+Plays a recorded Action on every image in the source folder and saves each result to the destination.	Воспроизводит записанную операцию для каждого изображения в исходной папке и сохраняет каждый результат в папке назначения.
+Pointer	Указатель
+Pointillize…	Пуантилизм…
+Points	Пункты
+Polar Coordinates…	Полярные координаты…
+Position	Положение
+Position is locked — unlock it in the Layers panel to move or resize	Положение закреплено — снимите закрепление на панели «Слои», чтобы перемещать или менять размер
+Position key	Ключ положения
+Posterize	Постеризация
+Posterize…	Постеризация…
+Precise Cursor	Точный курсор
+Preferences…	Настройки…
+Preserve Transparency	Сохранять прозрачность
+Preserve luminosity	Сохранить яркость
+Preset Manager…	Управление наборами…
+Press a key…	Нажмите клавишу…
+Pressure controls flow	Нажим управляет потоком
+Pressure controls size	Нажим управляет размером
+Preview	Просмотр
+Preview against	Просмотр на фоне
+Preview is off.	Просмотр выключен.
+Previewed on the active layer; applied to its pixels as one undoable step.	Просмотр на активном слое; применяется к его пикселам одним отменяемым шагом.
+Previous Blend Mode	Предыдущий режим наложения
+Print Size	Размер оттиска
+Print as PDF…	Печать в PDF…
+Print size	Размер при печати
+Prints the grayscale image through one to four inks, each through its own curve. The inks are applied to the pixels when the mode changes.	Печатает изображение в градациях серого одной–четырьмя красками, каждой по своей кривой. Краски применяются к пикселам при смене режима.
+Print…	Печать…
+Profile	Профиль
+Profile from File…	Профиль из файла…
+Profiles are assigned to RGB documents	Профили назначаются документам RGB
+Profiles are converted between in RGB documents	Преобразование между профилями выполняется в документах RGB
+Profiles belong to RGB documents; convert to RGB first	Профили относятся к документам RGB; сначала преобразуйте в RGB
+Proof Colors	Цветопроба
+Properties	Свойства
+Puppet Warp	Марионеточная деформация
+Purge	Удалить из памяти
+Purple	Фиолетовая
+Quadtone	Квадротон
+Quality	Качество
+Quick Export Layer as PNG…	Быстрый экспорт слоя в PNG…
+Quit	Выход
+RGB Color	Цвета RGB
+Radial Blur…	Радиальное размытие…
+Radius	Радиус
+Radius (px)	Радиус (пикс.)
+Range	Диапазон
+Raster Studio Help	Справка Raster Studio
+Rasterize	Растрировать
+Reassign anyway	Всё равно переназначить
+Recent	Недавние
+Record	Запись
+Record Source Size	Записать размер источника
+Record an Action in the Actions panel first	Сначала запишите операцию на панели «Операции»
+Record an edit, then replay the whole sequence on any document with at least as many layers.	Запишите правку, затем воспроизведите всю последовательность на любом документе, где слоёв не меньше.
+Record into set	Записать в набор
+Recording: every edit is captured until Stop	Запись: каждая правка фиксируется до нажатия «Стоп»
+Red	Красный
+Redefine the selected {noun} from the active text layer, restyling every layer that uses it	Переопределить выбранное ({noun}) по активному текстовому слою и обновить стиль каждого слоя, который его использует
+Redo	Повторить
+Reds	Красные
+Reduce Colors	Уменьшить число цветов
+Reduce Colors changed nothing: the layer already uses only colours of that palette	Уменьшение числа цветов ничего не изменило: слой уже использует только цвета этой палитры
+Reduce Colors: the layer now uses at most {n} colours	Уменьшение числа цветов: теперь в слое не более {n} цветов
+Reduce Colors…	Уменьшить число цветов…
+Reduce Noise…	Уменьшить шум…
+Reduces the grayscale image to pure black and white. The layers are flattened into one, over white.	Сводит изображение в градациях серого к чистому чёрному и белому. Слои сводятся в один поверх белого.
+Reference point: Bottom	Опорная точка: внизу
+Reference point: Bottom Left	Опорная точка: внизу слева
+Reference point: Bottom Right	Опорная точка: внизу справа
+Reference point: Centre	Опорная точка: центр
+Reference point: Left	Опорная точка: слева
+Reference point: Right	Опорная точка: справа
+Reference point: Top	Опорная точка: вверху
+Reference point: Top Left	Опорная точка: вверху слева
+Reference point: Top Right	Опорная точка: вверху справа
+Refine	Уточнить
+Refine Edge…	Уточнить край…
+Refine Mask	Уточнить маску
+Refine Mask…	Уточнить маску…
+Regular	Обычный
+Relative	Относительно
+Relative Colorimetric	Относительный колориметрический
+Release Clipping Mask	Отменить обтравочную маску
+Release Notes	Заметки о выпуске
+Relink to File…	Заново связать с файлом…
+Remove Black Matte	Удалить чёрный ореол
+Remove Color Fringe	Удалить цветную кайму
+Remove Color Fringe…	Удалить цветную кайму…
+Remove Fringe	Устранить кайму
+Remove White Matte	Удалить белый ореол
+Remove export	Удалить экспорт
+Remove this instance of the effect	Удалить этот экземпляр эффекта
+Remove this shortcut	Удалить это сочетание клавиш
+Rename Layer	Переименовать слой
+Rename Layer…	Переименовать слой…
+Rename set	Переименовать набор
+Render	Рендеринг
+Rendering the preview…	Рендеринг превью…
+Repeat…	Повторить…
+Replace Color	Заменить цвет
+Replace Color…	Заменить цвет…
+Replace Contents	Заменить содержимое
+Replace Contents…	Заменить содержимое…
+Replace existing guides	Заменить существующие направляющие
+Replay	Воспроизвести снова
+Report an Issue	Сообщить о проблеме
+Reselect	Выделить снова
+Reset	Сбросить
+Reset Transform	Сбросить трансформацию
+Reset View Rotation	Сбросить поворот вида
+Reset all shortcuts	Сбросить все сочетания клавиш
+Resize Canvas	Изменить размер холста
+Resize Images	Изменить размер изображений
+Resize Images…	Изменить размер изображений…
+Resolution	Разрешение
+Resolution must be greater than zero	Разрешение должно быть больше нуля
+Restore Layer	Восстановить слой
+Result	Результат
+Return this tool to its defaults	Вернуть этому инструменту значения по умолчанию
+Reveal All	Показать все
+Reveal Selection	Показать выделенную область
+Reverse	Обратить
+Revert	Восстановить
+Rewrites every pixel layer's numbers so the picture looks the same under the destination profile, as one undo step.	Переписывает значения каждого пиксельного слоя, чтобы изображение выглядело так же в целевом профиле, одним шагом отмены.
+Right	Справа
+Right (narrow)	Справа (узкая)
+Right (wide)	Справа (широкая)
+Right Edges	Правые края
+Right indent	Отступ справа
+Right-click a swatch to remove it	Щёлкните образец правой кнопкой, чтобы удалить его
+Ring	Кольцо
+Ripple…	Рябь…
+Rise	Подъём
+Rotate	Повернуть
+Rotate 180°	Повернуть на 180°
+Rotate 90° Clockwise	Повернуть на 90° по часовой
+Rotate 90° Counter Clockwise	Повернуть на 90° против часовой
+Rotate Canvas	Вращение холста
+Rotate the active layer so the measured line is level (Enter)	Повернуть активный слой, чтобы измеренная линия стала горизонтальной (Enter)
+Rotates the canvas and every layer. Right angles are pixel-exact; other angles resample.	Поворачивает холст и все слои. Прямые углы точны до пиксела; другие углы пересчитываются.
+Rotation key	Ключ поворота
+Round	Круглый
+Round (computed)	Круглый (вычисленный)
+Rounded Steps	Скруглённые шаги
+Roundness jitter	Колебание округлости
+Rows	Строки
+Rulers	Линейки
+Run	Запустить
+SVG…	SVG…
+Same Radii	Одинаковые радиусы
+Sample a colour from the canvas	Взять образец цвета с холста
+Sample radius	Радиус образца
+Sampled	Образец
+Sampled colour	Цвет образца
+Sampled tip not loaded; painting round	Кончик-образец не загружен; рисуется круглым
+Satin…	Глянец…
+Saturation	Насыщенность
+Saturation jitter	Колебание насыщенности
+Save	Сохранить
+Save As	Сохранить как
+Save As…	Сохранить как…
+Save Brush	Сохранить кисть
+Save Selection	Сохранить выделенную область
+Save Selection…	Сохранить выделенную область…
+Save actions	Сохранить операции
+Save as PSD…	Сохранить как PSD…
+Save current brush	Сохранить текущую кисть
+Save selection as channel	Сохранить выделение как канал
+Saves every image in the source folder to the destination in another format, quality or size.	Сохраняет каждое изображение из исходной папки в папку назначения в другом формате, качестве или размере.
+Scale	Масштаб
+Scale %	Масштаб %
+Scale Effects	Масштабировать эффекты
+Scale Effects…	Масштабировать эффекты…
+Scale H	Масштаб по гор.
+Scale V	Масштаб по верт.
+Scale key	Ключ масштаба
+Scale:	Масштаб:
+Scales every size and distance of the active layer's style as one undo step.	Масштабирует каждый размер и расстояние стиля активного слоя одним шагом отмены.
+Scaling by 100% changes nothing	Масштаб 100% ничего не меняет
+Scratch directory	Рабочая папка
+Screen	Экран
+Screen, print and social presets	Наборы для экрана, печати и соцсетей
+Script…	Сценарий…
+Scroll wheel zooms instead of scrolling	Колесо масштабирует, а не прокручивает
+Search Commands…	Поиск команд…
+Search layers	Поиск слоёв
+Search layers by name	Поиск слоёв по имени
+Select	Выделение
+Select All	Все
+Select Bottom Layer	Выделить нижний слой
+Select Layer Above	Выделить слой выше
+Select Layer Below	Выделить слой ниже
+Select Linked Layers	Выделить связанные слои
+Select None	Снять выделение
+Select Top Layer	Выделить верхний слой
+Select a layer first	Сначала выберите слой
+Select a layer to see its CSS	Выберите слой, чтобы увидеть его CSS
+Select a layer to see its properties	Выберите слой, чтобы увидеть его свойства
+Select a layer: a click on a style applies it to the active layer.	Выберите слой: щелчок по стилю применяет его к активному слою.
+Select a path first	Сначала выберите контур
+Select a text layer, or type into one: a click inserts the glyph at the caret.	Выберите текстовый слой или печатайте в нём: щелчок вставляет глиф в позицию курсора.
+Select every pixel near one colour	Выделить все пикселы, близкие к одному цвету
+Selection	Выделение
+Selection Edges	Края выделения
+Selection: white is replaced, black is kept.	Выделение: белое заменяется, чёрное сохраняется.
+Selective Color	Выборочная коррекция цвета
+Selective Color…	Выборочная коррекция цвета…
+Selects a band of this width along the selection's edge	Выделяет полосу такой ширины вдоль края выделения
+Semi Condensed	Полуузкий
+Semi Expanded	Полуширокий
+Semibold	Полужирный
+Send Backward	Переложить назад
+Send to Back	На задний план
+Separate documents	Отдельные документы
+Separate keywords with commas or semicolons.	Разделяйте ключевые слова запятыми или точками с запятой.
+Sepia	Сепия
+Set	Набор
+Set the History Brush to paint from this state (the marked row)	Сделать это состояние источником архивной кисти (отмеченная строка)
+Shadows	Тени
+Shadows/Highlights	Тени/Света
+Shadows/Highlights…	Тени/Света…
+Shape	Фигура
+Shape Dynamics	Динамика формы
+Shape Mosaic…	Мозаика из фигур…
+Sharpen	Резкость
+Sharpen Edges	Резкость на краях
+Sharpen More	Резкость +
+Sharpest, with a little ringing on hard edges.	Самая резкая, с небольшим звоном на жёстких краях.
+Shear…	Искривление…
+Shift Edge	Сместить край
+Show	Показать
+Show / Hide Layer	Показать / скрыть слой
+Show / hide layer	Показать / скрыть слой
+Show / hide the effects list	Показать / скрыть список эффектов
+Show / hide the layer style	Показать / скрыть стиль слоя
+Show / hide this channel	Показать / скрыть этот канал
+Show / hide this effect	Показать / скрыть этот эффект
+Show / hide this path	Показать / скрыть этот контур
+Show / hide this smart filter	Показать / скрыть этот смарт-фильтр
+Show Layers	Показать слои
+Show every layer	Показать каждый слой
+Show or hide the position, size and alignment fields	Показать или скрыть поля положения, размера и выравнивания
+Show or hide the recorded steps	Показать или скрыть записанные шаги
+Show or hide the set's actions	Показать или скрыть операции набора
+Show this alpha channel alone in grayscale and paint into it; click again to store it	Показать только этот альфа-канал в градациях серого и рисовать в нём; щёлкните снова, чтобы сохранить его
+Sides	Стороны
+Similar	Подобные оттенки
+Size	Размер
+Size jitter	Колебание размера
+Skew	Наклон
+Skewness	Асимметрия
+Slice Options	Параметры фрагмента
+Slice Options…	Параметры фрагмента…
+Slices	Фрагменты
+Slices from Guides	Фрагменты по направляющим
+Slices…	Фрагменты…
+Small	Мелкий
+Small Caps	Капитель
+Smart Blur…	«Умное» размытие…
+Smart Filter	Смарт-фильтр
+Smart Filters	Смарт-фильтры
+Smart Guides	Быстрые направляющие
+Smart Object	Смарт-объект
+Smart Sharpen…	«Умная» резкость…
+Smart filter mask: click to paint on it	Маска смарт-фильтра: щёлкните, чтобы рисовать на ней
+Smooth	Плавное
+Smooth Selection	Сгладить выделение
+Smooth draws grey-scale edges; None draws hard, aliased edges. The glyph scaler has one smooth mode, so Sharp, Crisp and Strong are not offered.	«Плавное» рисует края в градациях серого; «Нет» — жёсткие ступенчатые края. У масштабирования глифов один плавный режим, поэтому «Резкое», «Чёткое» и «Сильное» не предлагаются.
+Smooth…	Сгладить…
+Snap	Привязка
+Snap To	Привязать к
+Soft Light	Мягкий свет
+Soft Round 100	Мягкая круглая 100
+Soft Round 24	Мягкая круглая 24
+Soft and cheap. Good for a small enlargement.	Мягко и дёшево. Годится для небольшого увеличения.
+Softer Brush	Более мягкая кисть
+Solarize	Соляризация
+Solid Color…	Цвет…
+Solidity	Плотность
+Source	Источник
+Source 1	Источник 1
+Source 2	Источник 2
+Source Space	Исходное пространство
+Spectrum	Спектр
+Spherize…	Сферизация…
+Spin Blur…	Размытие вращения…
+Splits the active layer into Linear Light detail layers over a residual, finest on top; together they recomposite to the layer.	Разбивает активный слой на слои деталей в режиме «Линейный свет» над остатком, самый мелкий сверху; вместе они снова дают слой.
+Spot Channel	Канал плашечного цвета
+Spot Channel Options…	Параметры канала плашечного цвета…
+Spot channel: composited over the image as its ink	Канал плашечного цвета: накладывается на изображение как его краска
+Square	Квадрат
+Squeeze	Сжатие
+Stack Mode	Режим стека
+Stamp Visible	Штамп видимых
+Standard	Стандартный
+Standard Deviation	Стандартное отклонение
+Standard ligatures	Стандартные лигатуры
+Step Backward	Шаг назад
+Step Forward	Шаг вперёд
+Stop	Стоп
+Straighten Layer	Выпрямить слой
+Strength	Сила
+Stroke	Обводка
+Stroke path with the foreground colour at the brush size, on a new shape layer	Обвести контур основным цветом размером кисти на новом слое-фигуре
+Stroke…	Выполнить обводку…
+Style	Стиль
+Styles	Стили
+Styles enabled	Стили включены
+Stylize	Стилизация
+Sub	Нижний
+Subject	Объект
+Subtract	Вычитание
+Subtract Front Shape	Вычесть переднюю фигуру
+Subtract from Selection	Вычесть из выделенной области
+Summation	Сумма
+Sunset	Закат
+Super	Верхний
+Superscript raises and shrinks the text; subscript lowers and shrinks it.	Верхний индекс поднимает и уменьшает текст; нижний опускает и уменьшает его.
+Surface Blur…	Размытие по поверхности…
+Swap colours  (X)	Поменять цвета  (X)
+Swap foreground and background (X)	Поменять основной и фоновый цвета (X)
+Swatches	Образцы
+TGA…	TGA…
+TIF…	TIF…
+Templates	Шаблоны
+Text	Текст
+Text overflows the box	Текст не помещается в рамку
+Text replacement	Замена текста
+Texture Dilation…	Расширение текстуры…
+That channel is no longer in the document	Этого канала больше нет в документе
+That file could not be used:	Этот файл нельзя использовать:
+The CSV ends inside a quoted field	CSV заканчивается внутри поля в кавычках
+The CSV has a header but no data sets	В CSV есть заголовок, но нет наборов данных
+The CSV is empty	CSV пуст
+The CSV names a variable that is not defined:	В CSV упомянута неопределённая переменная:
+The active layer has no layer style to save	У активного слоя нет стиля слоя для сохранения
+The active layer is not in the document	Активного слоя нет в документе
+The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	Активный смарт-объект по очереди показывает каждое изображение из исходной папки; каждый результат экспортируется в PNG в папку назначения.
+The amount must be within	Значение должно быть в пределах
+The angle must be a finite number of degrees	Угол должен быть конечным числом градусов
+The balanced default for photographs.	Сбалансированный вариант по умолчанию для фотографий.
+The canvas grows to fit the rotated image.	Холст увеличивается, чтобы вместить повёрнутое изображение.
+The canvas must be at least 1 x 1 pixel	Холст должен быть не меньше 1 x 1 пиксел
+The cell size must be 2 to 200 pixels	Размер ячейки должен быть от 2 до 200 пикселов
+The cut is empty: paint more of the part to keep.	Вырез пуст: закрасьте больше той части, которую нужно оставить.
+The destination is the profile the document already has	Целевой профиль совпадает с профилем документа
+The destination must be another folder than the source.	Папка назначения должна отличаться от исходной.
+The document has no layers	В документе нет слоёв
+The document is already in {name}	Документ уже в {name}
+The document is already tagged with this profile	Документу уже назначен этот профиль
+The document is already tagged {name}	Документу уже назначен {name}
+The document's own profile: {error}	Собственный профиль документа: {error}
+The first {shown} of {n} pages are listed; a longer file opens only those.	Показаны первые {shown} из {n} страниц; более длинный файл открывает только их.
+The image has no opaque pixels to count	В изображении нет непрозрачных пикселов для подсчёта
+The ink is laid over the image; the selection, if there is one, is where it prints.	Краска накладывается на изображение; если есть выделение, она печатается в нём.
+The last stop has no segment after it.	После последней контрольной точки нет сегмента.
+The layer has no pixels to cut.	В слое нет пикселов для выреза.
+The layer's pixels are locked	Пикселы слоя закреплены
+The list is empty	Список пуст
+The margins and gutters leave no room for a column or a row	Поля и промежутки не оставляют места для столбца или строки
+The margins and gutters leave no room for a column or a row.	Поля и промежутки не оставляют места для столбца или строки.
+The name cannot be empty	Имя не может быть пустым
+The name has not changed	Имя не изменилось
+The name is the file File > Export > Slices writes this slice as. The URL and Alt Tag go into the HTML page it writes beside the images.	Имя — это файл, под которым «Файл > Экспорт > Фрагменты» записывает этот фрагмент. URL и тег Alt попадают в HTML-страницу, записываемую рядом с изображениями.
+The new canvas is smaller — content outside it will be clipped.	Новый холст меньше — содержимое за его пределами будет обрезано.
+The next text layer the Type tool creates starts with this style.	Следующий текстовый слой, созданный инструментом «Текст», начнётся с этим стилем.
+The panel is already on this side	Панель уже на этой стороне
+The path encloses no pixel of the canvas	Контур не охватывает ни одного пиксела холста
+The position must be a finite number	Положение должно быть конечным числом
+The preview runs the real brush engine.	Просмотр использует настоящий движок кистей.
+The resolution must be 1 to 2400 ppi	Разрешение должно быть от 1 до 2400 ppi
+The resolution must be {min} to {max} dpi	Разрешение должно быть от {min} до {max} dpi
+The rulers and the size readouts use this unit	Линейки и показатели размера используют эту единицу
+The scale must be between 1% and 1000%	Масштаб должен быть от 1% до 1000%
+The selection is kept with the document under this name	Выделение хранится с документом под этим именем
+The source and destination must be different folders	Исходная папка и папка назначения должны различаться
+The steps this snapshot named have been discarded	Шаги, на которые указывал этот снимок, удалены
+The table needs a name	Таблице нужно имя
+The warp has not changed	Деформация не изменилась
+There are no guides to slice along	Нет направляющих, по которым можно разрезать
+There are no slices to clear	Нет фрагментов для удаления
+There is no history to clear	Нет истории для очистки
+There is no live selection to combine with	Нет активного выделения для объединения
+These are matrix-shaper profiles, which carry no perceptual or saturation tables: those two intents convert as Relative Colorimetric.	Это матричные профили без перцепционных таблиц и таблиц насыщенности: эти два метода преобразуются как относительный колориметрический.
+Thin	Тонкий
+Third-party notices	Уведомления третьих сторон
+This Layer	Этот слой
+This adjustment has no panel controls	У этой коррекции нет элементов управления на панели
+This adjustment has no settings.	У этой коррекции нет параметров.
+This build keeps channels on layers; it has no free-standing alpha channels yet	Эта сборка хранит каналы в слоях; отдельных альфа-каналов пока нет
+This effect is off. Tick it in the list to edit it.	Этот эффект выключен. Отметьте его в списке, чтобы изменить.
+This format cannot store CMYK, so the document is written as RGB. Choose JPEG or TIFF for CMYK.	Этот формат не хранит CMYK, поэтому документ записывается в RGB. Для CMYK выберите JPEG или TIFF.
+This format could not be previewed.	Не удалось показать превью этого формата.
+This format has no metadata slot: nothing is embedded	В этом формате нет места для метаданных: ничего не встраивается
+This format has no palette, so the indexed colours are written as RGB. Choose PNG or GIF for the palette.	В этом формате нет палитры, поэтому индексированные цвета записываются в RGB. Для палитры выберите PNG или GIF.
+This format stores 8 bits per channel	Этот формат хранит 8 бит на канал
+This is a Lab document. No format here stores Lab, so it is converted to RGB on export.	Это документ Lab. Ни один формат здесь не хранит Lab, поэтому при экспорте он преобразуется в RGB.
+This layer has no mask	У этого слоя нет маски
+This panel is already at the bottom of its dock	Эта панель уже в самом низу своего дока
+This panel is already at the top of its dock	Эта панель уже в самом верху своего дока
+This tool has no options	У этого инструмента нет параметров
+This tool is already at its defaults	У этого инструмента уже значения по умолчанию
+This window cannot read screen pixels, so the eyedropper is unavailable	Это окно не может читать пикселы экрана, поэтому пипетка недоступна
+This works on a pixel layer; the active layer is a {kind}	Это работает на пиксельном слое; активный слой — {kind}
+This works on an 8-bit document	Это работает с 8-битным документом
+This works on an RGB document	Это работает с документом RGB
+Threshold	Изогелия
+Threshold…	Изогелия…
+Thumbnail Size	Размер миниатюр
+Thumbnail size	Размер миниатюры
+Thumbnails by Document	Миниатюры по документу
+Thumbnails by Layer	Миниатюры по слою
+Tiles/List	Плитки/Список
+Tiles…	Разбиение на плитки…
+Tilt-Shift…	Наклон-смещение…
+Timeline	Шкала времени
+Tint	Оттенок
+Tint hue	Тон оттенка
+Tint saturation	Насыщенность оттенка
+To canvas	К холсту
+Toggle Link	Переключить связь
+Tonal width	Тоновая ширина
+Tone	Тон
+Tone and Detail	Тон и детализация
+Tool Presets	Наборы параметров инструментов
+Top	Верх
+Top Edges	Верхние края
+Top Left	Вверху слева
+Top Left Pixel Color	Цвет верхнего левого пиксела
+Top Right	Вверху справа
+Top left	Вверху слева
+Top right	Вверху справа
+Trace Contour…	Трассировка контура…
+Traces the active layer's colours into shape layers, one per colour.	Переводит цвета активного слоя в слои-фигуры, по одному на цвет.
+Transform	Трансформирование
+Transform Layer	Трансформировать слой
+Transform Selection	Трансформировать выделенную область
+Transparency	Прозрачность
+Transparent Pixels	Прозрачные пикселы
+Trim Away	Обрезать
+Trim…	Тримминг…
+Tritone	Триотон
+Turn on Resample to change the pixel count.	Включите «Интерполяцию», чтобы изменить число пикселов.
+Twirl…	Скручивание…
+Twist	Скрутка
+Two variables share a name	У двух переменных одинаковое имя
+Type	Текст
+Type a zoom level	Введите масштаб
+Type is edited in Character and Paragraph	Текст редактируется на панелях «Символ» и «Абзац»
+Type tool defaults	Параметры инструмента «Текст» по умолчанию
+UI scale	Масштаб интерфейса
+URL	URL
+US Letter	US Letter
+Ultra Condensed	Сверхсжатый
+Ultra Expanded	Сверхрастянутый
+Underlying Layer	Подлежащий слой
+Undo	Отменить
+Ungroup Layers	Разгруппировать слои
+Uniform	Равномерное
+Unite Shapes	Объединить фигуры
+Units	Единицы
+Unmake Frames	Разобрать кадры
+Unsaved changes	Несохранённые изменения
+Unsharp Mask…	Контурная резкость…
+Update the applied comp from the layers	Обновить применённую композицию по слоям
+Use Black Point Compensation	Использовать компенсацию точки чёрного
+Use global light	Глобальное освещение
+Using:	Используется:
+Vanishing Point…	Исправление перспективы…
+Variables	Переменные
+Variance	Дисперсия
+Vector Mask	Векторная маска
+Vector density	Плотность вектора
+Vector enabled	Вектор включён
+Vector feather	Растушёвка вектора
+Vector invert	Инверсия вектора
+Vector mask	Векторная маска
+Vectorize	Векторизовать
+Vectorize Bitmap	Векторизовать растр
+Vectorize Bitmap…	Векторизовать растр…
+Vertical Centers	Центры по вертикали
+Vertical Distortion	Искажение по вертикали
+Vertical center guide	Вертикальная центральная направляющая
+Vertical scale, in percent: stretches the glyphs about the baseline; leading is unchanged	Масштаб по вертикали в процентах: растягивает глифы относительно базовой линии; интерлиньяж не меняется
+Vertically	По вертикали
+Vibrance	Вибрация
+Vibrance…	Вибрация…
+View	Просмотр
+Violet	Фиолетовый
+Visibility	Видимость
+Visible adjustment layers	Видимые корректирующие слои
+Vivid Light	Яркий свет
+W	Ш
+WEBP…	WEBP…
+Waiting for the composite…	Ожидание совмещённого изображения…
+Warm	Тёплый
+Warp	Деформация
+Warp Style	Стиль деформации
+Warp Text	Деформировать текст
+Warp Text…	Деформировать текст…
+Wave	Волна
+Wavelet Decompose	Вейвлет-разложение
+Wavelet Decompose splits into 2 to 7 scales	Вейвлет-разложение делит на 2–7 масштабов
+Wavelet Decompose works on an sRGB document	Вейвлет-разложение работает с документом sRGB
+Wavelet Decompose: the layer has no pixels	Вейвлет-разложение: в слое нет пикселов
+Wavelet Decompose: {n} detail layers over a residual; the source layer is hidden	Вейвлет-разложение: {n} слоёв деталей над остатком; исходный слой скрыт
+Wavelet Decompose…	Вейвлет-разложение…
+Wave…	Волна…
+Web (216)	Веб (216)
+WebP (lossless)	WebP (без потерь)
+WebP (lossy)	WebP (с потерями)
+Weight	Насыщенность шрифта
+White	Белый
+White to Black	От белого к чёрному
+Whites	Белые
+Width	Ширина
+Width and height must be at least 1 pixel	Ширина и высота должны быть не меньше 1 пиксела
+Width must be between 1 and 250 pixels	Ширина должна быть от 1 до 250 пикселов
+Width to 110%	Ширина до 110%
+Width to 125%	Ширина до 125%
+Width to 80%	Ширина до 80%
+Width to 90%	Ширина до 90%
+Window	Окно
+Wind…	Ветер…
+With Handles	С маркерами
+Work Path	Рабочий контур
+Workspace	Рабочая среда
+Wrap to box	Переносить по рамке
+Writes the visible adjustment layers, applied to an identity lattice, as a 3D LUT (.cube).	Записывает видимые корректирующие слои, применённые к единичной решётке, как 3D LUT (.cube).
+Written as CMYK: a naive ink model, not an ICC press profile.	Записано в CMYK: упрощённая модель красок, не печатный профиль ICC.
+Written as XMP into PNG, JPEG and TIFF files by Export As.	Записывается командой «Экспортировать как» в виде XMP в файлы PNG, JPEG и TIFF.
+Written with the document's palette.	Записано с палитрой документа.
+Yellow	Жёлтый
+Yellow / Blue	Жёлтый / Синий
+Yellows	Жёлтые
+ZigZag…	Зигзаг…
+Zoom In	Увеличить
+Zoom Out	Уменьшить
+Zoom in	Увеличить
+Zoom out	Уменьшить
+Zoom to Selection	Масштаб по выделению
+a layer could not be rewritten	не удалось перезаписать слой
+before / after	до / после
+changed	изменено
+content thumbnail — click to edit the layer's pixels	миниатюра содержимого — щёлкните, чтобы редактировать пикселы слоя
+dpi	dpi
+edits are aimed at this mask — right-click for view and mask options	правки направлены на эту маску — правый щелчок открывает параметры вида и маски
+lines past the box	строк за пределами рамки
+mask off	маска выкл.
+mask thumbnail — click to edit the layer's mask	миниатюра маски — щёлкните, чтобы редактировать маску слоя
+minutes (0 is off)	минут (0 — выкл.)
+no drop	нельзя бросить
+px	пикс.
+records here	запись сюда
+skipped on play:	пропускается при воспроизведении:
+the layers could not be added	не удалось добавить слои
+the profile cannot be transformed ({error})	профиль нельзя преобразовать ({error})
+to	до
+vector mask thumbnail — click to edit the vector mask	миниатюра векторной маски — щёлкните, чтобы редактировать векторную маску
+{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time	{format}: шкала времени, {frames} кадров при {fps} кадр/с за {length} мс; каждый кадр показывает слои в своё время
+{label} is not answered by this route	На {label} этот путь не отвечает
+{label} was refused: {reason}	{label} отклонено: {reason}
+{name} Residual	{name} Остаток
+{name} Scale {k}	{name} Масштаб {k}
+{name}: {n} pages	{name}: страниц: {n}
+{n} slices from the guides ({cols} x {rows}); they replace the slices there were	Фрагментов по направляющим: {n} ({cols} x {rows}); они заменяют прежние фрагменты
+{path} is a {space} profile; an RGB document takes an RGB profile	{path} — профиль {space}; документу RGB нужен профиль RGB
+{path} is {len} bytes, larger than any colour profile	{path} занимает {len} байт — больше любого цветового профиля
+{reason}; this one is {space}	{reason}; у этого — {space}

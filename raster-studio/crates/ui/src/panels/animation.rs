@@ -77,6 +77,10 @@ const DELETE: &str = "ui.animation.delete";
 const NO_DOCUMENT: &str = "ui.animation.no_document";
 const NO_FRAMES: &str = "ui.animation.no_frames";
 const MS: &str = "ui.animation.ms";
+// W16-M: the timeline's Add Media and its video rows.
+const ADD_MEDIA: &str = "ui.animation.add_media";
+const ADD_MEDIA_TIP: &str = "ui.animation.add_media.tip";
+const VIDEO_FRAMES: &str = "ui.animation.video.frames";
 
 fn tr(key: &str) -> &'static str {
     crate::strings::tr(key)
@@ -318,6 +322,54 @@ pub mod ids {
     pub fn delay(index: usize) -> egui::Id {
         egui::Id::new(("raster-animation-delay", index))
     }
+    /// W16-M: the timeline's Add Media button.
+    pub fn add_media() -> egui::Id {
+        egui::Id::new("raster-animation-add-media")
+    }
+    /// W16-M: video layer `index`'s row (the timeline's video list).
+    pub fn video(index: usize) -> egui::Id {
+        egui::Id::new(("raster-animation-video", index))
+    }
+}
+
+/// W16-M: the timeline's Add Media button and one row per video layer (its
+/// file, frame count, and trimmed length). Add Media is Photopea's "File -
+/// Open and Place" for a media file, so it asks the application for the
+/// same Place Embedded route, which turns a video file into a video layer
+/// at the playhead.
+fn video_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
+    ui.horizontal(|ui| {
+        let add = ui
+            .add(egui::Button::new(body(ui, tr(ADD_MEDIA))))
+            .on_hover_text(tr(ADD_MEDIA_TIP));
+        crate::view::mark(ui, add.rect, ids::add_media());
+        if add.clicked() {
+            w.emit(Intent::Action(crate::menu::MenuAction::PlaceEmbedded));
+        }
+    });
+    for (index, clip) in doc.timeline.videos.iter().enumerate() {
+        if doc.layers.get(clip.layer).is_none() {
+            continue;
+        }
+        let shown = doc
+            .timeline
+            .track(clip.layer)
+            .map_or(clip.media_ms(), |t| t.out_ms.saturating_sub(t.in_ms));
+        let row = ui.horizontal(|ui| {
+            ui.label(body(ui, &clip.name));
+            ui.label(hint(
+                ui,
+                format!(
+                    "{}{} {}{}",
+                    clip.durations_ms.len(),
+                    tr(VIDEO_FRAMES),
+                    shown,
+                    tr(MS)
+                ),
+            ));
+        });
+        crate::view::mark(ui, row.response.rect, ids::video(index));
+    }
 }
 
 /// Draw the panel.
@@ -328,6 +380,8 @@ pub(crate) fn animation_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     }
     // W13-L: the Frames / Timeline switch; Timeline mode draws its own body.
     if timeline::mode_toggle(w, ui, doc) {
+        // W16-M: Add Media and the video layers, above the bars.
+        video_rows(w, ui, doc);
         timeline::timeline_body(w, ui, doc);
         return;
     }
@@ -1000,5 +1054,60 @@ mod tests {
             images[0].1.a() < images[1].1.a(),
             "the onion frame is fainter: {images:?}"
         );
+    }
+
+    /// W16-M: in Timeline mode the panel draws Add Media above the bars
+    /// (a click asks for the Place Embedded route, Photopea's "Open and
+    /// Place" for a media file) and one row per video layer naming its
+    /// file, frame count and trimmed length.
+    #[test]
+    fn timeline_mode_has_add_media_and_a_row_per_video_layer() {
+        let mut doc = Document::new(32, 32, "Video");
+        let id = doc.layers.push_root(Layer::raster("clip.mp4")).unwrap();
+        doc.timeline.enabled = true;
+        doc.timeline.videos.push(editor_core::timeline::VideoClip {
+            layer: id,
+            name: "clip.mp4".into(),
+            source: String::new(),
+            width: 32,
+            height: 32,
+            start_ms: 0,
+            durations_ms: vec![100, 100, 200],
+            frames: Vec::new(),
+        });
+        doc.timeline.track_mut(id).out_ms = 300;
+        let mut live = Live::new(doc);
+        let intents = live.click(ids::add_media());
+        assert!(
+            intents.contains(&Intent::Action(crate::menu::MenuAction::PlaceEmbedded)),
+            "{intents:?}"
+        );
+        let row = live.rect(ids::video(0));
+        let add = live.rect(ids::add_media());
+        assert!(row.min.y >= add.max.y, "the row is under Add Media");
+        let (_, out) = live.frame(Vec::new());
+        let mut texts = Vec::new();
+        for clipped in &out.shapes {
+            if let egui::Shape::Text(t) = &clipped.shape {
+                if row.intersects(t.visual_bounding_rect()) {
+                    texts.push(t.galley.text().to_string());
+                }
+            }
+        }
+        assert!(texts.iter().any(|t| t == "clip.mp4"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "3 frames 300 ms"), "{texts:?}");
+        assert!(texts.iter().all(|t| !t.is_empty()));
+        let (_, out) = live.frame(Vec::new());
+        let labels: Vec<String> = out
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) if add.intersects(t.visual_bounding_rect()) => {
+                    Some(t.galley.text().to_string())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(labels.iter().any(|t| t == "Add Media"), "{labels:?}");
     }
 }

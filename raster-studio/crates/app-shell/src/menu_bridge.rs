@@ -114,6 +114,19 @@ pub(crate) mod menu_w13f;
 #[path = "layer_ops_w13.rs"]
 pub(crate) mod layer_ops_w13;
 
+// W16-E: the Swatches / Brushes / Styles / History / Channels / Navigator
+// panel requests (src/panel_menus_w16.rs).
+#[path = "panel_menus_w16.rs"]
+pub(crate) mod panel_menus_w16;
+
+// W16-K: View > Mode, Layer > New > Artboard, the Artboard / Crop bar rows
+// and the vector Export As writers' scene (src/menu_w16k.rs).
+#[path = "menu_w16k.rs"]
+pub(crate) mod w16k;
+#[cfg(test)]
+#[path = "menu_w16k_tests.rs"]
+mod w16k_tests;
+
 /// Shown on an item the shared menu model allows but this build cannot perform.
 ///
 /// Kept as the *fallback* only. Every item this build genuinely cannot do now
@@ -258,6 +271,8 @@ pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
     subject_job::poll(editor);
     // W10-E: and a running Batch / Convert Formats reports its progress.
     crate::automate::poll(editor);
+    // W16-E: and what a panel menu asked of the application last frame.
+    panel_menus_w16::poll(editor);
     let recent_files = editor
         .recent()
         .entries()
@@ -304,6 +319,8 @@ pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
         .iter()
         .any(|d| d.history.can_undo() || d.history.can_redo());
     context.theme = editor.preferences().theme.resolve(design::Theme::Dark);
+    // W16-N: Window > Glass Menus' tick.
+    context.glass_menus = editor.preferences().glass_menus;
     // W9-G: Layer ▸ Vector Mask ▸ Current Path reads the Paths panel, which
     // is the workspace's; `perform` only holds the editor, so the path the
     // menu was enabled for is parked here, frame by frame.
@@ -526,6 +543,18 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
     // [`perform`], which has no dock to reveal) keeps the menu item and the
     // panel button agreeing about what the click means. The set is absolute, so
     // opening an already-open panel is harmless.
+    // W16-N: Window > Language and Window > Glass Menus are preferences,
+    // stored and applied as Window > Appearance's theme is.
+    if let MenuAction::SetLanguage(locale) = action {
+        let mut prefs = editor.preferences().clone();
+        prefs.language = locale.code().to_string();
+        return Some(Pick::Preferences(Box::new(prefs)));
+    }
+    if action == MenuAction::ToggleGlassMenus {
+        let mut prefs = editor.preferences().clone();
+        prefs.glass_menus = !prefs.glass_menus;
+        return Some(Pick::Preferences(Box::new(prefs)));
+    }
     if action == MenuAction::EditAdjustmentLayer {
         return Some(Pick::Workspace(Box::new(Intent::SetPanelOpen {
             panel: ui::PanelId::Properties,
@@ -813,29 +842,34 @@ pub fn draw(
     on_click: &mut dyn FnMut(Intent),
 ) {
     let menus = menus(editor);
-    egui::TopBottomPanel::top("raster-menu-bar")
-        // The header band: the menu bar and the options bar under it share
-        // the header shade, the columns beneath them the panel shade.
-        .frame(crate::chrome::panel_frame(
-            ctx,
-            design::SurfaceRole::Header,
-            design::Space::Hair,
-        ))
-        .show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
-                for menu in &menus {
-                    ui.menu_button(menu.title, |ui| {
-                        entries(ui, &menu.entries, context, editor, on_click);
-                    });
-                }
+    // W16-N: Window > Glass Menus fills the menus translucently.
+    ui::menu::with_glass_menus(ctx, editor.preferences().glass_menus, || {
+        egui::TopBottomPanel::top("raster-menu-bar")
+            // The header band: the menu bar and the options bar under it share
+            // the header shade, the columns beneath them the panel shade.
+            .frame(crate::chrome::panel_frame(
+                ctx,
+                design::SurfaceRole::Header,
+                design::Space::Hair,
+            ))
+            .show(ctx, |ui| {
+                egui::menu::bar(ui, |ui| {
+                    for menu in &menus {
+                        ui.menu_button(menu.title, |ui| {
+                            entries(ui, &menu.entries, context, editor, on_click);
+                        });
+                    }
+                });
             });
-        });
+    });
     // W13-K: the File > Script window, when open. Run clicks the Script row
     // through `on_click`, so the run is routed like any menu click.
     crate::script::draw_window(ctx, on_click);
     // W13-N: the Styles panel's list, and the Magic Cut / Resize Images /
     // Generate Mockups windows, whose OK clicks their row through `on_click`.
     w13n_ops::frame(ctx, editor, on_click);
+    // W16-E: the Navigator's Angle field reads the document camera.
+    panel_menus_w16::publish(ctx, editor);
 }
 
 fn entries(
@@ -1514,6 +1548,11 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         }
         // W13-K: File > Script: open the window, or run what Run parked.
         MenuAction::Script => crate::script::perform(editor),
+        // W16-K.
+        MenuAction::SetScreenMode(item) => w16k::set_screen_mode(editor, item),
+        MenuAction::NewArtboard => w16k::add_artboard(editor, None),
+        MenuAction::ArtboardNeighbour(side) => w16k::add_artboard(editor, Some(side)),
+        MenuAction::CropToLayer => w16k::crop_to_layer(editor),
         MenuAction::ExportLayers => editor.export_layers(),
         // W4-H: one file per committed Slice-tool region.
         MenuAction::ExportSlices => crate::slices_export::export_slices(editor),
@@ -10179,6 +10218,9 @@ mod tests {
                 // source Run parks, which `script::tests::a_script_run_from_
                 // the_window_edits_the_document_as_one_undo_step` drives.
                 || action == MenuAction::Script
+                // W16-K: View > Mode moves the window, not the document;
+                // `w16k_tests::view_mode_rows_set_the_screen_mode` pins it.
+                || matches!(action, MenuAction::SetScreenMode(_))
                 || matches!(action, MenuAction::Purge(_))
                 // W13X-5: the fixture has no path, so Flame refuses loudly
                 // with Photopea's "Make a path first"; `flame_route::tests`

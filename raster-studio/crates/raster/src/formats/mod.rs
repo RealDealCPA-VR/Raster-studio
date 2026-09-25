@@ -19,7 +19,8 @@
 //! | OpenEXR, Radiance HDR (W11-H) | yes: File > Open makes a 32-bit document (`app-shell`); the surface returned here is clipped to 16-bit sRGB | EXR, 32-bit float | [`float`] |
 //! | Apple ICNS (W11-H) | PNG, ARGB and 24-bit RLE entries, largest | no | [`icns`] |
 //! | IFF ILBM / PBM (W11-H) | 1-8 planes (EHB, HAM6/8), 24, 32; ByteRun1 | no | [`iff`] |
-//! | Krita KRA (W11-H) | the merged image only | no | [`kra`] |
+//! | Krita KRA (W11-H) | the merged image; W16-L: the layer tree and RGBA paint layers ([`kra::layers::read`]), and the layers composited when there is no merged image | no | [`kra`] |
+//! | JPEG 2000, Clip Studio CLIP, Pixelmator Pro PXD, VTF, FITS, DICOM, DXF, CorelDRAW CDR, InDesign INDD (W16-L) | see [`more_formats_w16`]: the image (JPEG 2000, VTF, FITS, DICOM), the drawing (DXF), the embedded preview (CLIP, PXD, CDR, INDD); Affinity Photo and PaintTool SAI refused by name | no | [`more_formats_w16`] |
 //! | PDF, PDF-compatible AI (W13-D) | every page, rendered by `hayro` (the flat decode answers page 1; `app-shell` opens one artboard per page) | no (the print path's writer is `crate::pdf`) | [`pdf`] |
 //! | WMF, EMF (W13-D) | the common GDI records, drawn through `resvg` | no | [`metafile`] |
 //! | EPS (W15-E) | the PostScript artwork, run by the bounded interpreter in [`postscript`]; the embedded TIFF / WMF / EPSI preview when that cannot draw it, saying why | no | [`vector_docs`], [`postscript`] |
@@ -57,6 +58,9 @@ pub mod jxl;
 pub mod kra;
 /// W13-D: WMF / EMF.
 pub mod metafile;
+/// W16-L: JPEG 2000, CLIP, PXD, VTF, FITS, DICOM, DXF, CDR, INDD (and the
+/// Affinity / SAI refusals).
+pub mod more_formats_w16;
 /// W13-D: PDF and PDF-compatible `.ai`.
 pub mod pdf;
 /// W15-E: the bounded PostScript interpreter that draws EPS artwork.
@@ -114,7 +118,8 @@ pub fn sniff(head: &[u8]) -> Option<ImportFormat> {
     } else if metafile::looks_like_wmf(head) {
         Some(ImportFormat::Wmf)
     } else {
-        None
+        // W16-L.
+        more_formats_w16::sniff(head)
     }
 }
 
@@ -165,6 +170,18 @@ pub(super) fn sniff_source<R: BufRead + Seek>(
     }
     if mp4::looks_like_video(head) {
         return Err(mp4::video_refusal());
+    }
+    // W16-L: DICOM says `DICM` at offset 128, past the 64-byte head.
+    if filled == SNIFF_BYTES && sniff(head).is_none() {
+        let mut prefix = Vec::new();
+        source
+            .by_ref()
+            .take(more_formats_w16::SNIFF_PREFIX as u64)
+            .read_to_end(&mut prefix)?;
+        source.seek(std::io::SeekFrom::Start(start))?;
+        if let Some(format) = more_formats_w16::sniff_prefix(&prefix) {
+            return Ok(Some(format));
+        }
     }
     Ok(sniff(head))
 }
@@ -218,6 +235,8 @@ pub(super) fn probe<R: Read>(
         | ImportFormat::Fig => vector_docs::probe(format, &bytes, limits),
         ImportFormat::Dng => raw::probe(&bytes, limits),
         ImportFormat::CameraRaw => Err(raw::refusal(&bytes)),
+        // W16-L.
+        f if more_formats_w16::owns(f) => more_formats_w16::probe(f, &bytes, limits),
         other => Err(not_ours(other)),
     }
 }
@@ -249,6 +268,8 @@ pub(super) fn decode<R: Read>(
         | ImportFormat::Fig => vector_docs::decode(format, &bytes, limits),
         ImportFormat::Dng => raw::decode(&bytes, limits),
         ImportFormat::CameraRaw => Err(raw::refusal(&bytes)),
+        // W16-L.
+        // REVIEWMUT f if more_formats_w16::owns(f) => more_formats_w16::decode(f, &bytes, limits),
         other => Err(not_ours(other)),
     }
 }

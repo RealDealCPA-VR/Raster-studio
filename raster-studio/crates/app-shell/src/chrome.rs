@@ -110,6 +110,9 @@ const START_RECENT_MAX: usize = 8;
 /// actually chose is ever in play.
 pub fn install_theme(ctx: &egui::Context, theme: design::Theme) {
     design::apply_theme(ctx, theme);
+    // W16-N: the bundled CJK face joins egui's fallback chain (once per
+    // context), so the Chinese, Japanese and Korean interface draws glyphs.
+    ui::strings::install_fonts(ctx);
     let style = design::style_for(theme);
     ctx.set_style_of(egui::Theme::Dark, style.clone());
     ctx.set_style_of(egui::Theme::Light, style);
@@ -1496,6 +1499,8 @@ impl Chrome {
         self.dialogs.set_menu_context(&menu_ctx);
         self.channel_chords(ctx, editor);
         self.harvest(editor, &mut out);
+        // W16-D: the Layers panel's requests and "Thumbnails by Layer" crops.
+        crate::layers_panel_w16::after_harvest(&mut self.workspace, editor, &mut out);
         // W3-A: a View toggle this build cannot honour was refused rather
         // than ticked; say why, where the user is looking.
         if let Some(reason) = self.refused_view_flag.take() {

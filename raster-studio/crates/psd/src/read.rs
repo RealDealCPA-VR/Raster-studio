@@ -101,6 +101,9 @@ pub fn read_with(bytes: &[u8], opts: &ReadOptions) -> PsdResult<PsdFile> {
     let mut warnings = Vec::new();
 
     let color_mode_data = read_sized_section(&mut cur, "colour mode data", opts)?;
+    // W16-B: an Indexed file's palette is checked here, before any pixel is
+    // decoded against it.
+    crate::colour_modes::check_mode_data(&header, &color_mode_data)?;
     let resources = {
         let len = cur.u32()? as usize;
         let mut section = cur.sub(len)?;
@@ -119,7 +122,20 @@ pub fn read_with(bytes: &[u8], opts: &ReadOptions) -> PsdResult<PsdFile> {
     };
 
     let lmi_len = cur.length()?;
-    if lmi_len > 0 {
+    let bitmap = file.header.color_mode == crate::header::ColorMode::Bitmap;
+    if lmi_len > 0 && bitmap {
+        // W16-B: a Bitmap document is one flat 1-bit image; Photoshop keeps
+        // no layers in it. Its layer section is skipped (a non-empty one is
+        // named) rather than decoded at a depth its records do not have.
+        let section = cur.take(lmi_len)?;
+        if section.iter().any(|b| *b != 0) {
+            file.warnings.push(
+                "the layer section of a Bitmap-mode file was skipped: a Bitmap document is \
+                 one flat image"
+                    .into(),
+            );
+        }
+    } else if lmi_len > 0 {
         let mut lmi = cur.sub(lmi_len)?;
         read_layer_and_mask(&mut lmi, &mut file, opts, &mut budget)?;
     }
@@ -127,14 +143,31 @@ pub fn read_with(bytes: &[u8], opts: &ReadOptions) -> PsdResult<PsdFile> {
     if cur.remaining() >= 2 {
         let code = cur.u16()?;
         let compression = Compression::from_code(code)?;
-        let shape = ChannelShape::new(file.header.width, file.header.height, file.header.depth);
-        let channels = decode_merged(
+        // W16-B: Bitmap rows are packed 8 pixels a byte, so they are decoded
+        // as 8-bit rows ceil(width / 8) wide and then unpacked.
+        let row_width = if bitmap {
+            file.header.width.div_ceil(8)
+        } else {
+            file.header.width
+        };
+        let shape = ChannelShape::new(row_width, file.header.height, file.header.depth);
+        let mut channels = decode_merged(
             &mut cur,
             compression,
             shape,
             file.header.channels as usize,
             &mut budget,
         )?;
+        if bitmap {
+            for plane in &mut channels {
+                *plane = crate::colour_modes::unpack_bitmap(
+                    plane,
+                    file.header.width,
+                    file.header.height,
+                    &mut budget,
+                )?;
+            }
+        }
         file.merged = Some(MergedImage { channels });
     }
 

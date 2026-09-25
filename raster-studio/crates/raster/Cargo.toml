@@ -116,6 +116,14 @@ ruzstd = { version = "0.9", default-features = false, features = ["std"] }
 # Recorded in LICENSES/THIRD_PARTY_NOTICES.md.
 rusty_av1d = { version = "1.2.0", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
 heic-rs = { version = "0.1.1", default-features = false, features = ["std"] }
+# W16-L: JPEG 2000 reading (`src/formats/w16_jp2.rs`): `hayro-jpeg2000`
+# 0.3.1 (Apache-2.0 OR MIT), pure Rust, `#![forbid(unsafe_code)]`. Default
+# features off: no `simd` (`fearless_simd`, the only unsafe code under it)
+# and no `image` integration (it would pull `moxcms`); `std` only, so it
+# brings no dependency of its own. Pinned: 0.4 declares rust-version 1.92
+# (MSRV is 1.89); 0.3.1 declares none and builds with 1.89.
+# Recorded in LICENSES/THIRD_PARTY_NOTICES.md.
+hayro-jpeg2000 = { version = "=0.3.1", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # W15-A (test only): `heic-rs`'s `bench` feature exposes its synthetic HEVC

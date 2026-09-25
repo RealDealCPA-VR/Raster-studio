@@ -463,6 +463,18 @@ const GRADIENT: &[Prim] = &[
     Prim::Line([0.70, 0.24], [0.70, 0.76]),
 ];
 
+/// W16-G: the Vector Gradient tool - a gradient swatch crossed by its
+/// start-to-end line, a handle at each end.
+const VECTOR_GRADIENT: &[Prim] = &[
+    Prim::Poly(
+        &[[0.12, 0.24], [0.88, 0.24], [0.88, 0.76], [0.12, 0.76]],
+        true,
+    ),
+    Prim::Line([0.28, 0.62], [0.72, 0.38]),
+    Prim::Circle([0.28, 0.62], 0.08),
+    Prim::Dot([0.72, 0.38], 0.08),
+];
+
 const BUCKET: &[Prim] = &[
     Prim::Poly(
         &[[0.18, 0.44], [0.52, 0.12], [0.86, 0.46], [0.52, 0.78]],
@@ -1038,6 +1050,8 @@ pub fn icon_for(key: &str) -> Icon {
         "shape-spiral" => SHAPE_SPIRAL,
         // W10-B
         "note" => NOTE,
+        // W16-G
+        "vector-gradient" => VECTOR_GRADIENT,
         _ => return Icon::UNKNOWN,
     })
 }

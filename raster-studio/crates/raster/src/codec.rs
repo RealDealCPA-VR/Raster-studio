@@ -51,6 +51,10 @@ pub mod svg_import;
 #[path = "formats/mod.rs"]
 pub mod formats;
 
+/// W16-K: the PDF / EMF / DXF writers File > Export As uses.
+#[path = "formats/export_vector.rs"]
+pub mod export_vector;
+
 /// A decoded image in packed RGBA8, plus dimensions.
 ///
 /// The convenience shape: always 8 bits per channel, whatever the file held.
@@ -287,6 +291,30 @@ pub enum ImportFormat {
     Wmf,
     /// W13-D: Enhanced Metafile, common records ([`formats::metafile`]).
     Emf,
+    // ---- W16-L (appended): the readers in `formats::more_formats_w16`.
+    /// W16-L: JPEG 2000 (`.jp2` container or a raw `.j2k` codestream),
+    /// decoded by `hayro-jpeg2000`.
+    Jp2,
+    /// W16-L: Clip Studio Paint `.clip`: its stored canvas preview.
+    Clip,
+    /// W16-L: Pixelmator Pro `.pxd` (zipped package): its QuickLook preview.
+    Pxd,
+    /// W16-L: Valve Texture Format `.vtf`: the largest mip of frame 0.
+    Vtf,
+    /// W16-L: FITS 2D image HDU, auto-stretched.
+    Fits,
+    /// W16-L: DICOM, uncompressed or RLE, windowed.
+    Dicom,
+    /// W16-L: AutoCAD DXF (ASCII), its entities drawn.
+    Dxf,
+    /// W16-L: CorelDRAW `.cdr`: its embedded thumbnail only.
+    Cdr,
+    /// W16-L: Affinity Photo: **recognised, refused by name**.
+    AfPhoto,
+    /// W16-L: PaintTool SAI: **recognised, refused by name**.
+    Sai,
+    /// W16-L: InDesign `.indd`: its XMP thumbnail only.
+    Indd,
 }
 
 impl ImportFormat {
@@ -294,7 +322,7 @@ impl ImportFormat {
     ///
     /// Recognises, not decodes — see [`ImportFormat::Psd`] and
     /// [`ImportFormat::is_decodable_here`].
-    pub const ALL: [ImportFormat; 30] = [
+    pub const ALL: [ImportFormat; 41] = [
         ImportFormat::Png,
         ImportFormat::Jpeg,
         ImportFormat::WebP,
@@ -325,6 +353,18 @@ impl ImportFormat {
         ImportFormat::Fig,
         ImportFormat::Wmf,
         ImportFormat::Emf,
+        // W16-L.
+        ImportFormat::Jp2,
+        ImportFormat::Clip,
+        ImportFormat::Pxd,
+        ImportFormat::Vtf,
+        ImportFormat::Fits,
+        ImportFormat::Dicom,
+        ImportFormat::Dxf,
+        ImportFormat::Cdr,
+        ImportFormat::AfPhoto,
+        ImportFormat::Sai,
+        ImportFormat::Indd,
     ];
 
     /// Short stable name for logs and UI.
@@ -360,6 +400,18 @@ impl ImportFormat {
             ImportFormat::Fig => "Figma",
             ImportFormat::Wmf => "WMF",
             ImportFormat::Emf => "EMF",
+            // W16-L.
+            ImportFormat::Jp2 => "JPEG 2000",
+            ImportFormat::Clip => "Clip Studio",
+            ImportFormat::Pxd => "Pixelmator Pro",
+            ImportFormat::Vtf => "VTF",
+            ImportFormat::Fits => "FITS",
+            ImportFormat::Dicom => "DICOM",
+            ImportFormat::Dxf => "DXF",
+            ImportFormat::Cdr => "CorelDRAW",
+            ImportFormat::AfPhoto => "Affinity Photo",
+            ImportFormat::Sai => "PaintTool SAI",
+            ImportFormat::Indd => "InDesign",
         }
     }
 
@@ -384,7 +436,12 @@ impl ImportFormat {
         // W13-C: a proprietary camera RAW likewise.
         !matches!(
             self,
-            ImportFormat::Psd | ImportFormat::Avif | ImportFormat::CameraRaw
+            ImportFormat::Psd
+                | ImportFormat::Avif
+                | ImportFormat::CameraRaw
+                // W16-L: recognised so they are refused by name.
+                | ImportFormat::AfPhoto
+                | ImportFormat::Sai
         )
     }
 
@@ -429,6 +486,18 @@ impl ImportFormat {
             "fig" => ImportFormat::Fig,
             "wmf" => ImportFormat::Wmf,
             "emf" => ImportFormat::Emf,
+            // W16-L.
+            "jp2" | "j2k" | "j2c" | "jpf" | "jpx" | "jpc" => ImportFormat::Jp2,
+            "clip" => ImportFormat::Clip,
+            "pxd" => ImportFormat::Pxd,
+            "vtf" => ImportFormat::Vtf,
+            "fits" | "fit" | "fts" => ImportFormat::Fits,
+            "dcm" | "dicom" => ImportFormat::Dicom,
+            "dxf" => ImportFormat::Dxf,
+            "cdr" => ImportFormat::Cdr,
+            "afphoto" | "afdesign" => ImportFormat::AfPhoto,
+            "sai" | "sai2" => ImportFormat::Sai,
+            "indd" => ImportFormat::Indd,
             _ => return None,
         })
     }
@@ -482,7 +551,19 @@ impl ImportFormat {
             | ImportFormat::Xd
             | ImportFormat::Fig
             | ImportFormat::Wmf
-            | ImportFormat::Emf => return None,
+            | ImportFormat::Emf
+            // W16-L.
+            | ImportFormat::Jp2
+            | ImportFormat::Clip
+            | ImportFormat::Pxd
+            | ImportFormat::Vtf
+            | ImportFormat::Fits
+            | ImportFormat::Dicom
+            | ImportFormat::Dxf
+            | ImportFormat::Cdr
+            | ImportFormat::AfPhoto
+            | ImportFormat::Sai
+            | ImportFormat::Indd => return None,
         })
     }
 
@@ -510,6 +591,18 @@ impl ImportFormat {
                 | ImportFormat::Fig
                 | ImportFormat::Wmf
                 | ImportFormat::Emf
+                // W16-L.
+                | ImportFormat::Jp2
+                | ImportFormat::Clip
+                | ImportFormat::Pxd
+                | ImportFormat::Vtf
+                | ImportFormat::Fits
+                | ImportFormat::Dicom
+                | ImportFormat::Dxf
+                | ImportFormat::Cdr
+                | ImportFormat::AfPhoto
+                | ImportFormat::Sai
+                | ImportFormat::Indd
         )
     }
 }
@@ -1281,6 +1374,19 @@ pub enum ExportFormat {
     /// H.264). A still export writes one frame; an animated export
     /// (`raster::animation::encode_animation`) writes every frame in AV1.
     Mp4Av1(u8),
+    // ---- W16-K (appended): vector formats ([`export_vector`]).
+    /// W16-K: PDF. Here, from pixels alone, one page carrying the image;
+    /// the application's Export As rewrites a 100% row from the layers
+    /// (vector shapes and text, one page per artboard).
+    Pdf,
+    /// W16-K: Enhanced Metafile. From pixels alone, one `StretchDIBits` of
+    /// the image flattened onto white; the application rewrites a 100% row
+    /// with the vector layers as GDI paths.
+    Emf,
+    /// W16-K: AutoCAD DXF (R12 ASCII). Vectors only: from pixels alone it
+    /// is an empty drawing of the canvas extent; the application rewrites a
+    /// 100% row with the vector layers as polylines.
+    Dxf,
 }
 
 /// The square sizes an [`ExportFormat::Ico`] file carries, smallest first.
@@ -1289,7 +1395,8 @@ pub const ICO_SIZES: [u32; 4] = [16, 32, 48, 256];
 impl ExportFormat {
     /// Every format the exporter can write **and this crate can read back**
     /// (the Export As preview decodes what it encodes). W10-F: AVIF is
-    /// written but cannot be read back, so it is in
+    /// written but this crate alone cannot read it back (W15-A: only the
+    /// application's decode worker can, [`formats::heif`]), so it is in
     /// [`ExportFormat::WRITE_ONLY`] instead.
     pub const ALL: [ExportFormat; 15] = [
         ExportFormat::Png,
@@ -1309,8 +1416,11 @@ impl ExportFormat {
         ExportFormat::Exr,
     ];
 
-    /// W10-F: formats the exporter writes that no decoder here reads back:
-    /// AVIF (see [`formats::avif`] for why there is no AVIF reader).
+    /// W10-F: formats the exporter writes that no decoder here reads back
+    /// by itself: AVIF. W15-A: an AVIF *is* read, but only through the
+    /// isolated decoder the application installs ([`formats::heif`]: its
+    /// AV1 decoder runs in a worker process); with none installed it is
+    /// refused by name, so the Export As preview cannot decode it here.
     pub const WRITE_ONLY: [ExportFormat; 1] = [ExportFormat::Avif(80)];
 
     /// W11-H: formats written and read back, but only at **2x2 pixels or
@@ -1326,6 +1436,10 @@ impl ExportFormat {
     /// codec; [`ExportFormat::Mp4Av1`] is chosen in Export As' Codec field).
     pub const VIDEO: [ExportFormat; 1] = [ExportFormat::Mp4(80)];
 
+    /// W16-K: the vector formats File > Export As lists after the raster
+    /// ones: PDF, EMF and DXF ([`export_vector`]).
+    pub const VECTOR: [ExportFormat; 3] = [ExportFormat::Pdf, ExportFormat::Emf, ExportFormat::Dxf];
+
     /// W10-F: every format the exporter can write: [`ExportFormat::ALL`]
     /// followed by [`ExportFormat::WRITE_ONLY`] and (W11-H)
     /// [`ExportFormat::MIN_TWO_PIXELS`].
@@ -1336,6 +1450,8 @@ impl ExportFormat {
             .chain(&Self::MIN_TWO_PIXELS)
             .chain(&Self::LOSSY_READ_BACK)
             .chain(&Self::VIDEO)
+            // W16-K.
+            .chain(&Self::VECTOR)
             .copied()
             .collect()
     }
@@ -1344,7 +1460,13 @@ impl ExportFormat {
     pub fn reads_back(self) -> bool {
         !matches!(
             self,
-            ExportFormat::Avif(_) | ExportFormat::Mp4(_) | ExportFormat::Mp4Av1(_)
+            ExportFormat::Avif(_)
+                | ExportFormat::Mp4(_)
+                | ExportFormat::Mp4Av1(_)
+                // W16-K: the preview does not rasterise its own vectors.
+                | ExportFormat::Pdf
+                | ExportFormat::Emf
+                | ExportFormat::Dxf
         )
     }
 
@@ -1406,14 +1528,19 @@ impl ExportFormat {
             | ExportFormat::Avif(_)
             | ExportFormat::Exr
             | ExportFormat::Jxl
-            | ExportFormat::WebPLossy(_) => AlphaSupport::Full,
+            | ExportFormat::WebPLossy(_)
+            // W16-K: a soft mask carries it.
+            | ExportFormat::Pdf => AlphaSupport::Full,
             ExportFormat::Gif => AlphaSupport::Binary,
             ExportFormat::Jpeg(_)
             | ExportFormat::Ppm
             | ExportFormat::Pgm
             | ExportFormat::Pbm
             | ExportFormat::Mp4(_)
-            | ExportFormat::Mp4Av1(_) => AlphaSupport::None,
+            | ExportFormat::Mp4Av1(_)
+            // W16-K: GDI's StretchDIBits has no alpha; DXF carries no pixels.
+            | ExportFormat::Emf
+            | ExportFormat::Dxf => AlphaSupport::None,
         }
     }
 
@@ -1462,6 +1589,10 @@ impl ExportFormat {
             ExportFormat::Jxl => "jxl",
             ExportFormat::WebPLossy(_) => "webp",
             ExportFormat::Mp4(_) | ExportFormat::Mp4Av1(_) => "mp4",
+            // W16-K.
+            ExportFormat::Pdf => "pdf",
+            ExportFormat::Emf => "emf",
+            ExportFormat::Dxf => "dxf",
         }
     }
 
@@ -1486,6 +1617,10 @@ impl ExportFormat {
             ExportFormat::Jxl => "image/jxl",
             ExportFormat::WebPLossy(_) => "image/webp",
             ExportFormat::Mp4(_) | ExportFormat::Mp4Av1(_) => "video/mp4",
+            // W16-K.
+            ExportFormat::Pdf => "application/pdf",
+            ExportFormat::Emf => "image/emf",
+            ExportFormat::Dxf => "image/vnd.dxf",
         }
     }
 }
@@ -1794,6 +1929,29 @@ pub fn encode_into<W: Write + Seek>(
                 formats::mp4::Mp4Codec::H264
             };
             let bytes = formats::mp4::encode_with(width, height, &[frame], quality, codec)?;
+            out.write_all(&bytes).map_err(image::ImageError::IoError)?;
+        }
+        // W16-K: from pixels alone, the vector writers' one-image page (an
+        // empty drawing for DXF); the application rewrites a 100% Export As
+        // row from the layers.
+        ExportFormat::Pdf | ExportFormat::Emf | ExportFormat::Dxf => {
+            let rgba = pixels.require_rgba8(format)?;
+            let doc = export_vector::VectorDoc {
+                pages: vec![export_vector::Page::raster(width, height, rgba)],
+                title: String::new(),
+            };
+            let bytes = match format {
+                ExportFormat::Pdf => export_vector::encode_pdf(&doc)?,
+                ExportFormat::Emf => export_vector::encode_emf(&doc)?,
+                _ => export_vector::encode_dxf(&export_vector::VectorDoc {
+                    pages: vec![export_vector::Page {
+                        width,
+                        height,
+                        items: Vec::new(),
+                    }],
+                    title: String::new(),
+                })?,
+            };
             out.write_all(&bytes).map_err(image::ImageError::IoError)?;
         }
     }
@@ -2276,6 +2434,10 @@ mod tests {
                 ExportFormat::Mp4(_) | ExportFormat::Mp4Av1(_) => {
                     unreachable!("MP4 is not in ExportFormat::ALL")
                 }
+                // W16-K: not in `ALL` either.
+                ExportFormat::Pdf | ExportFormat::Emf | ExportFormat::Dxf => {
+                    unreachable!("the vector formats are not in ExportFormat::ALL")
+                }
                 // Lossy and alpha-free.
                 ExportFormat::Jpeg(_) => {
                     for (got, want) in decoded
@@ -2463,13 +2625,15 @@ mod tests {
         // W13-C: + DNG (decodable) and camera RAW (refused by name).
         // W13-D: + PDF, EPS, PDN, Sketch, XD, FIG, WMF and EMF, all eight
         // decodable (a bare FIG is refused by its reader, by name).
-        assert_eq!(ImportFormat::ALL.len(), 20 + 2 + 8);
+        // W16-L: + JPEG 2000, CLIP, PXD, VTF, FITS, DICOM, DXF, CDR and
+        // INDD (decodable) and Affinity Photo and SAI (refused by name).
+        assert_eq!(ImportFormat::ALL.len(), 20 + 2 + 8 + 11);
         assert_eq!(
             ImportFormat::ALL
                 .iter()
                 .filter(|f| f.is_decodable_here())
                 .count(),
-            18 + 1 + 8
+            18 + 1 + 8 + 9
         );
     }
 

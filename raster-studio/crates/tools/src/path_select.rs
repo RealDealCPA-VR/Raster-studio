@@ -241,34 +241,233 @@ pub fn combine_shape_layers(
     Ok(svg::to_svg(&merged.transform(&affine(back))))
 }
 
-/// Path Select: click a path to select the shape layer that owns it.
+/// W16-F: what Path Select's options-bar Arrange and Delete buttons do to the
+/// selected path components (Photopea learn/vg-manipulation: "delete them by
+/// pressing Delete ... reorder paths with the Up and Down button"). A
+/// component's place in the path is its stacking order: the first drawn is
+/// at the bottom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentOp {
+    BringToFront,
+    BringForward,
+    SendBackward,
+    SendToBack,
+    Delete,
+}
+
+impl ComponentOp {
+    /// Every operation, in the options bar's order.
+    pub const ALL: [ComponentOp; 5] = [
+        ComponentOp::BringToFront,
+        ComponentOp::BringForward,
+        ComponentOp::SendBackward,
+        ComponentOp::SendToBack,
+        ComponentOp::Delete,
+    ];
+}
+
+thread_local! {
+    /// W16-F: an Arrange / Delete button press, parked by the options bar
+    /// ([`request_component_op`]) for the live Path Select tool to perform
+    /// at the confirm the same press raises (`Intent::ConfirmTool`, the
+    /// road Enter takes into [`Tool::commit`]).
+    static PENDING_COMPONENT_OP: std::cell::Cell<Option<ComponentOp>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// W16-F: park `op` for the Path Select tool's next confirm.
+pub fn request_component_op(op: ComponentOp) {
+    PENDING_COMPONENT_OP.with(|slot| slot.set(Some(op)));
+}
+
+/// W16-F: the parked Arrange / Delete operation, if any (not taken).
+pub fn pending_component_op() -> Option<ComponentOp> {
+    PENDING_COMPONENT_OP.with(|slot| slot.get())
+}
+
+fn take_component_op() -> Option<ComponentOp> {
+    PENDING_COMPONENT_OP.with(|slot| slot.take())
+}
+
+/// W16-F: apply `op` to the components `picked` (indices into
+/// [`components`]) of `path`. Returns the new path and where the picked
+/// components now sit; `None` when nothing changes, an index is out of
+/// range, or a Delete would leave the path empty (the layer keeps at least
+/// one component; Layer > Delete removes a layer).
+pub fn apply_component_op(
+    path: &vector::Path,
+    picked: &[usize],
+    op: ComponentOp,
+) -> Option<(vector::Path, Vec<usize>)> {
+    let parts = components(path);
+    let n = parts.len();
+    if picked.is_empty() || picked.iter().any(|i| *i >= n) {
+        return None;
+    }
+    let is_picked = |i: usize| picked.contains(&i);
+    let mut order: Vec<usize> = (0..n).collect();
+    match op {
+        ComponentOp::Delete => {
+            order.retain(|i| !is_picked(*i));
+            if order.is_empty() {
+                return None;
+            }
+        }
+        ComponentOp::BringToFront => {
+            order.sort_by_key(|i| is_picked(*i));
+        }
+        ComponentOp::SendToBack => {
+            order.sort_by_key(|i| !is_picked(*i));
+        }
+        ComponentOp::BringForward => {
+            for k in (0..n.saturating_sub(1)).rev() {
+                if is_picked(order[k]) && !is_picked(order[k + 1]) {
+                    order.swap(k, k + 1);
+                }
+            }
+        }
+        ComponentOp::SendBackward => {
+            for k in 1..n {
+                if is_picked(order[k]) && !is_picked(order[k - 1]) {
+                    order.swap(k, k - 1);
+                }
+            }
+        }
+    }
+    if order == (0..n).collect::<Vec<_>>() {
+        return None;
+    }
+    let mut out = vector::Path::new();
+    for i in &order {
+        out.extend(&parts[*i]);
+    }
+    let now: Vec<usize> = order
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| is_picked(**i))
+        .map(|(k, _)| k)
+        .collect();
+    Some((out, now))
+}
+
+/// W16-F: `path` with the components `picked` moved by `(dx, dy)`.
+pub fn translate_components(
+    path: &vector::Path,
+    picked: &[usize],
+    dx: f64,
+    dy: f64,
+) -> vector::Path {
+    let mut out = vector::Path::new();
+    for (i, part) in components(path).iter().enumerate() {
+        if picked.contains(&i) {
+            out.extend(&part.transform(&vector::Affine::translate(dx, dy)));
+        } else {
+            out.extend(part);
+        }
+    }
+    out
+}
+
+/// Path Select: click a path component to select it (Photopea: "Click on the
+/// path to select it, or hold Shift to select multiple paths").
 ///
-/// Layers are tested top-most first (the same order the shell fills
-/// [`ToolContext::shape_paths`] in), and a hit is a click within
-/// [`HIT_TOLERANCE`] of the path's outline or inside its fill. W9-F: with a
-/// `combine` or `align` option set, the click also merges or aligns that
-/// path's components.
+/// W16-F: the selection is per COMPONENT of a shape layer's path (one
+/// `MoveTo` run), not the whole layer. Layers are tested top-most first (the
+/// order the shell fills [`ToolContext::shape_paths`] in) and components top
+/// (last drawn) first; a hit is a click within [`HIT_TOLERANCE`] of the
+/// component's outline or inside its fill. The click also selects the layer
+/// that owns it. A drag moves the selected components as ONE
+/// [`Command::SetLayerKind`] step; the arrow keys nudge them (`nudge_x` /
+/// `nudge_y`, then [`Tool::commit`]); the options bar's Arrange and Delete
+/// buttons reorder or delete them ([`ComponentOp`]). W9-F: with a `combine`
+/// or `align` option set, the click merges or aligns the whole path's
+/// components instead.
 #[derive(Default)]
 pub struct PathSelectTool {
     pub combine: PathCombine,
     pub align: PathAlign,
+    /// W16-F: the selected components: the layer, and indices into
+    /// [`components`] of its path.
+    selected: Option<(LayerId, Vec<usize>)>,
+    /// W16-F: the running drag: where it was pressed and where it is now.
+    drag: Option<(Vec2, Vec2)>,
+    /// W16-F: an arrow nudge waiting for [`Tool::commit`].
+    pending_nudge: Vec2,
 }
 
 impl PathSelectTool {
-    /// The topmost shape layer whose path sits under `p`.
-    fn path_under(&self, ctx: &ToolContext<'_>, p: Vec2) -> Option<LayerId> {
+    /// W16-F: the topmost path component under `p`: its layer and its index.
+    pub fn component_under(&self, ctx: &ToolContext<'_>, p: Vec2) -> Option<(LayerId, usize)> {
         let point = Point::new(p.x as f64, p.y as f64);
         for (id, shape) in &ctx.shape_paths {
             let Ok(path) = svg::parse(&shape.path_svg) else {
                 continue;
             };
-            if vector::hit_stroke(&path, point, HIT_TOLERANCE)
-                || vector::hit::contains(&path, point, FillRule::NonZero)
-            {
-                return Some(*id);
+            for (i, part) in components(&path).iter().enumerate().rev() {
+                if vector::hit_stroke(part, point, HIT_TOLERANCE)
+                    || vector::hit::contains(part, point, FillRule::NonZero)
+                {
+                    return Some((*id, i));
+                }
             }
         }
         None
+    }
+
+    /// W16-F: the selected components, as `(layer, indices)`.
+    pub fn selected_components(&self) -> Option<(LayerId, &[usize])> {
+        self.selected
+            .as_ref()
+            .map(|(layer, picked)| (*layer, picked.as_slice()))
+    }
+
+    /// W16-F: rewrite the selected components' layer with `edit` (given the
+    /// parsed path and the picked indices, answering the new path and the new
+    /// indices), as ONE `SetLayerKind`. A selection the path no longer has
+    /// (an undo removed a component) is dropped rather than applied.
+    fn edit_selected(
+        &mut self,
+        ctx: &mut ToolContext<'_>,
+        edit: impl FnOnce(&vector::Path, &[usize]) -> Option<(vector::Path, Vec<usize>)>,
+    ) -> bool {
+        let Some((layer, picked)) = self.selected.clone() else {
+            return false;
+        };
+        let Some((_, shape)) = ctx.shape_paths.iter().find(|(l, _)| *l == layer) else {
+            self.selected = None;
+            return false;
+        };
+        let Ok(path) = svg::parse(&shape.path_svg) else {
+            return false;
+        };
+        if picked.iter().any(|i| *i >= components(&path).len()) {
+            self.selected = None;
+            return false;
+        }
+        let Some((next, now)) = edit(&path, &picked) else {
+            return false;
+        };
+        let mut shape = shape.clone();
+        shape.path_svg = svg::to_svg(&next);
+        self.selected = (!now.is_empty()).then_some((layer, now));
+        ctx.emit(Command::SetLayerKind {
+            layer_id: layer,
+            kind: Box::new(LayerKind::Shape(shape)),
+        });
+        true
+    }
+
+    /// W16-F: move the selected components by `d` document pixels.
+    fn move_selected(&mut self, ctx: &mut ToolContext<'_>, d: Vec2) -> bool {
+        if !d.is_finite() || d == Vec2::ZERO {
+            return false;
+        }
+        self.edit_selected(ctx, |path, picked| {
+            Some((
+                translate_components(path, picked, d.x as f64, d.y as f64),
+                picked.to_vec(),
+            ))
+        })
     }
 }
 
@@ -282,9 +481,38 @@ impl Tool for PathSelectTool {
         ctx: &mut ToolContext<'_>,
         event: PointerEvent,
     ) -> Result<(), ToolError> {
-        if let Some(id) = self.path_under(ctx, event.pos) {
-            ctx.emit_request(crate::tool::ToolRequest::SelectLayer(id));
-            self.apply_component_ops(ctx, id)?;
+        // A button pressed with nothing selected must not fire later.
+        take_component_op();
+        let Some((id, part)) = self.component_under(ctx, event.pos) else {
+            if !event.modifiers.shift {
+                self.selected = None;
+            }
+            return Ok(());
+        };
+        ctx.emit_request(crate::tool::ToolRequest::SelectLayer(id));
+        if self.combine.op().is_some() || self.align != PathAlign::None {
+            // W9-F: the whole path's components merge or align; the indices
+            // change under them, so nothing stays selected.
+            self.selected = None;
+            return self.apply_component_ops(ctx, id);
+        }
+        match &mut self.selected {
+            Some((layer, picked)) if *layer == id && event.modifiers.shift => {
+                if let Some(at) = picked.iter().position(|i| *i == part) {
+                    picked.remove(at);
+                    if picked.is_empty() {
+                        self.selected = None;
+                    }
+                    // Shift-clicking a selected component deselects it; no drag.
+                    return Ok(());
+                }
+                picked.push(part);
+            }
+            Some((layer, picked)) if *layer == id && picked.contains(&part) => {}
+            _ => self.selected = Some((id, vec![part])),
+        }
+        if event.pos.is_finite() {
+            self.drag = Some((event.pos, event.pos));
         }
         Ok(())
     }
@@ -292,26 +520,63 @@ impl Tool for PathSelectTool {
     fn on_pointer_move(
         &mut self,
         _ctx: &mut ToolContext<'_>,
-        _event: PointerEvent,
+        event: PointerEvent,
     ) -> Result<(), ToolError> {
+        if let Some((_, now)) = &mut self.drag {
+            if event.pos.is_finite() {
+                *now = event.pos;
+            }
+        }
         Ok(())
     }
 
     fn on_pointer_up(
         &mut self,
-        _ctx: &mut ToolContext<'_>,
-        _event: PointerEvent,
+        ctx: &mut ToolContext<'_>,
+        event: PointerEvent,
     ) -> Result<(), ToolError> {
+        let Some((start, now)) = self.drag.take() else {
+            return Ok(());
+        };
+        let end = if event.pos.is_finite() {
+            event.pos
+        } else {
+            now
+        };
+        self.move_selected(ctx, end - start);
         Ok(())
     }
 
-    fn cancel(&mut self, _ctx: &mut ToolContext<'_>) {}
-
-    fn is_active(&self) -> bool {
-        false
+    fn cancel(&mut self, _ctx: &mut ToolContext<'_>) {
+        self.drag = None;
+        self.pending_nudge = Vec2::ZERO;
     }
 
-    /// W9-F: `combine` and `align`, the two options the registry declares.
+    fn is_active(&self) -> bool {
+        self.drag.is_some()
+    }
+
+    /// W16-F: an arrow nudge ([`Self::pending_nudge`]) or a parked Arrange /
+    /// Delete ([`request_component_op`]) waits on selected components.
+    fn has_pending_commit(&self) -> bool {
+        self.selected.is_some()
+            && (self.pending_nudge != Vec2::ZERO || pending_component_op().is_some())
+    }
+
+    /// W16-F: perform the waiting nudge, then the parked Arrange / Delete,
+    /// on the selected components — each ONE `SetLayerKind` step.
+    fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
+        let nudge = std::mem::take(&mut self.pending_nudge);
+        self.move_selected(ctx, nudge);
+        if let Some(op) = take_component_op() {
+            self.edit_selected(ctx, |path, picked| apply_component_op(path, picked, op));
+        }
+        Ok(())
+    }
+
+    /// W9-F: `combine` and `align`, the two options the registry declares;
+    /// W16-F: and `nudge_x` / `nudge_y`, an arrow key's nudge (not options:
+    /// the shell sends them, then [`Tool::commit`] applies them).
     fn set_setting(
         &mut self,
         key: &str,
@@ -326,7 +591,15 @@ impl Tool for PathSelectTool {
                 self.align = PathAlign::from_choice(i);
                 Ok(())
             }
-            ("combine" | "align", _) => Err(ToolError::OptionKindMismatch {
+            (NUDGE_X, crate::tool::ToolSetting::Float(v)) => {
+                self.pending_nudge.x += crate::error::finite("nudge", v)?;
+                Ok(())
+            }
+            (NUDGE_Y, crate::tool::ToolSetting::Float(v)) => {
+                self.pending_nudge.y += crate::error::finite("nudge", v)?;
+                Ok(())
+            }
+            ("combine" | "align" | NUDGE_X | NUDGE_Y, _) => Err(ToolError::OptionKindMismatch {
                 key: key.to_owned(),
             }),
             _ => Err(ToolError::UnknownOption {
@@ -335,6 +608,12 @@ impl Tool for PathSelectTool {
         }
     }
 }
+
+/// W16-F: the keys an arrow key's nudge reaches Path Select and Direct
+/// Selection under (document pixels), applied by [`Tool::commit`]. The same
+/// spelling as Free Transform's ([`crate::transform::keys::NUDGE_X`]).
+pub const NUDGE_X: &str = crate::transform::keys::NUDGE_X;
+pub const NUDGE_Y: &str = crate::transform::keys::NUDGE_Y;
 
 impl PathSelectTool {
     /// W9-F: merge then align the clicked layer's path components, as one
@@ -369,78 +648,148 @@ impl PathSelectTool {
     }
 }
 
-/// Direct Selection: drag an anchor of the active shape layer's path.
+/// How long after a press a second press on the same knot or handle counts
+/// as a double-click.
+const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// W16-F: what a Direct Selection press grabbed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Grab {
+    /// A knot: the drag moves every selected knot.
+    Knot(anchors::AnchorRef),
+    /// A knot's incoming handle.
+    HandleIn(anchors::AnchorRef),
+    /// A knot's outgoing handle.
+    HandleOut(anchors::AnchorRef),
+}
+
+/// W16-F: a Direct Selection drag: the layer, its knots at the press, what
+/// was grabbed, where the press was and where the pointer is now.
+struct KnotDrag {
+    layer: LayerId,
+    base: Vec<anchors::AnchorPath>,
+    grab: Grab,
+    start: Point,
+    now: Point,
+}
+
+/// Direct Selection: select knots of the active shape layer's path and drag
+/// them or their handles (Photopea learn/vg-manipulation).
 ///
-/// The gesture holds a working copy of the path elements from press to
-/// release; every move rewrites the grabbed point in that copy, and release
-/// commits the whole path as one [`Command::SetLayerKind`] — one undo step
-/// returns the old path, and the layer re-rasterises from the new one.
+/// W16-F: a click on a knot selects it; Shift-click adds or removes a knot
+/// (knots of different components may be selected together); a drag moves
+/// every selected knot, and the arrow keys nudge them (`nudge_x` / `nudge_y`,
+/// then [`Tool::commit`]). A drag on a handle moves that handle.
+/// Double-clicking a handle collapses it; double-clicking a knot converts it
+/// ([`anchors::convert_anchor`]: a smooth knot's handles collapse, a corner
+/// grows a pair back). Each release, nudge or double-click is ONE
+/// [`Command::SetLayerKind`] step. Shift-click on the outline away from a
+/// knot adds a knot there; Ctrl-click deletes a knot, Alt-click converts one.
 #[derive(Default)]
 pub struct DirectSelectionTool {
-    /// The working path elements while an anchor is grabbed.
-    elements: Option<(LayerId, Vec<PathEl>, usize, usize)>,
-}
-
-/// Which point of which element an anchor index names, and the point itself.
-fn anchor_at(elements: &[PathEl], index: usize) -> Option<(usize, usize, Point)> {
-    let mut seen = 0;
-    for (i, el) in elements.iter().enumerate() {
-        let points: &[Point] = match el {
-            PathEl::MoveTo(p) | PathEl::LineTo(p) => std::slice::from_ref(p),
-            PathEl::QuadTo(c, p) => &[*c, *p],
-            PathEl::CurveTo(c1, c2, p) => &[*c1, *c2, *p],
-            PathEl::ClosePath => &[],
-        };
-        for (slot, p) in points.iter().enumerate() {
-            if seen == index {
-                return Some((i, slot, *p));
-            }
-            seen += 1;
-        }
-    }
-    None
-}
-
-fn anchor_count(elements: &[PathEl]) -> usize {
-    elements
-        .iter()
-        .map(|el| match el {
-            PathEl::MoveTo(_) | PathEl::LineTo(_) => 1,
-            PathEl::QuadTo(..) => 2,
-            PathEl::CurveTo(..) => 3,
-            PathEl::ClosePath => 0,
-        })
-        .sum()
-}
-
-/// Replace one point of one element, leaving the rest of the path alone.
-fn with_anchor(mut elements: Vec<PathEl>, el: usize, slot: usize, p: Point) -> Vec<PathEl> {
-    elements[el] = match (elements[el], slot) {
-        (PathEl::MoveTo(_), _) | (PathEl::LineTo(_), _) => PathEl::LineTo(p),
-        (PathEl::QuadTo(_, end), _) if slot == 0 => PathEl::QuadTo(p, end),
-        (PathEl::QuadTo(c, _), _) => PathEl::QuadTo(c, p),
-        (PathEl::CurveTo(_, c2, end), 0) => PathEl::CurveTo(p, c2, end),
-        (PathEl::CurveTo(c1, _, end), 1) => PathEl::CurveTo(c1, p, end),
-        (PathEl::CurveTo(c1, c2, _), _) => PathEl::CurveTo(c1, c2, p),
-        (other, _) => other,
-    };
-    if el == 0 {
-        // A moved first anchor of an open subpath is a move, not a line.
-        if let PathEl::LineTo(_) = elements[0] {
-            elements[0] = PathEl::MoveTo(p);
-        }
-    }
-    elements
+    /// The selected knots of the active shape layer's path.
+    selected: Option<(LayerId, Vec<anchors::AnchorRef>)>,
+    drag: Option<KnotDrag>,
+    /// The last press that has not moved: what it grabbed and when, for the
+    /// double-click.
+    last_press: Option<(Grab, std::time::Instant)>,
+    /// An arrow nudge waiting for [`Tool::commit`].
+    pending_nudge: Vec2,
 }
 
 impl DirectSelectionTool {
-    /// The active shape layer's parsed elements, if it has a path.
-    fn active_elements(&self, ctx: &ToolContext<'_>) -> Option<(LayerId, Vec<PathEl>)> {
+    /// The active shape layer's parsed knots, if it has a path.
+    fn active_knots(&self, ctx: &ToolContext<'_>) -> Option<(LayerId, Vec<anchors::AnchorPath>)> {
         let active = ctx.active_layer?;
         let shape = ctx.shape_paths.iter().find(|(id, _)| *id == active)?;
         let path = svg::parse(&shape.1.path_svg).ok()?;
-        Some((active, path.elements().to_vec()))
+        Some((active, anchors::from_path(&path)))
     }
+
+    /// W16-F: the selected knots, as `(layer, knots)`.
+    pub fn selected_knots(&self) -> Option<(LayerId, &[anchors::AnchorRef])> {
+        self.selected
+            .as_ref()
+            .map(|(layer, knots)| (*layer, knots.as_slice()))
+    }
+}
+
+/// W16-F: the knot or handle nearest `p` within [`ANCHOR_RADIUS`]; a knot
+/// wins a tie with a handle over it.
+fn grab_at(subpaths: &[anchors::AnchorPath], p: Point) -> Option<Grab> {
+    let mut best: Option<(Grab, f64)> = None;
+    let mut consider = |grab: Grab, at: Point| {
+        let d = at.distance(p);
+        if d <= ANCHOR_RADIUS && best.is_none_or(|(_, bd)| d < bd) {
+            best = Some((grab, d));
+        }
+    };
+    for (s, sp) in subpaths.iter().enumerate() {
+        for (i, a) in sp.anchors.iter().enumerate() {
+            let r = anchors::AnchorRef {
+                subpath: s,
+                index: i,
+            };
+            consider(Grab::Knot(r), a.pos);
+        }
+    }
+    for (s, sp) in subpaths.iter().enumerate() {
+        for (i, a) in sp.anchors.iter().enumerate() {
+            let r = anchors::AnchorRef {
+                subpath: s,
+                index: i,
+            };
+            if a.handle_in != Point::ZERO {
+                consider(Grab::HandleIn(r), a.pos + a.handle_in);
+            }
+            if a.handle_out != Point::ZERO {
+                consider(Grab::HandleOut(r), a.pos + a.handle_out);
+            }
+        }
+    }
+    best.map(|(g, _)| g)
+}
+
+fn knot_mut(
+    subpaths: &mut [anchors::AnchorPath],
+    r: anchors::AnchorRef,
+) -> Option<&mut anchors::Anchor> {
+    subpaths.get_mut(r.subpath)?.anchors.get_mut(r.index)
+}
+
+/// W16-F: emit `subpaths` as the new path of shape layer `layer`, ONE
+/// `SetLayerKind`; nothing when the path would not change.
+fn emit_knots(ctx: &mut ToolContext<'_>, layer: LayerId, subpaths: &[anchors::AnchorPath]) -> bool {
+    let Some((_, shape)) = ctx.shape_paths.iter().find(|(id, _)| *id == layer) else {
+        return false;
+    };
+    let svg = svg::to_svg(&anchors::to_path(subpaths));
+    if svg == shape.path_svg {
+        return false;
+    }
+    let mut shape = shape.clone();
+    shape.path_svg = svg;
+    ctx.emit(Command::SetLayerKind {
+        layer_id: layer,
+        kind: Box::new(LayerKind::Shape(shape)),
+    });
+    true
+}
+
+/// W16-F: `base` with the knots `knots` moved by `d` (their handles ride
+/// along: they are offsets from the knot).
+fn moved_knots(
+    base: &[anchors::AnchorPath],
+    knots: &[anchors::AnchorRef],
+    d: Point,
+) -> Vec<anchors::AnchorPath> {
+    let mut out = base.to_vec();
+    for r in knots {
+        if let Some(a) = knot_mut(&mut out, *r) {
+            a.pos += d;
+        }
+    }
+    out
 }
 
 /// Apply one anchor edit to the active shape layer's path and emit it as one
@@ -486,15 +835,14 @@ impl Tool for DirectSelectionTool {
         event: PointerEvent,
     ) -> Result<(), ToolError> {
         let p = Point::new(event.pos.x as f64, event.pos.y as f64);
+        if !p.is_finite() {
+            return Ok(());
+        }
         let m = event.modifiers;
-        if m.shift || m.ctrl || m.alt {
-            if !p.is_finite() {
-                return Ok(());
-            }
+        if m.ctrl || m.alt {
+            self.last_press = None;
             edit_anchors(ctx, |sps| {
-                if m.shift {
-                    anchors::insert_anchor(sps, p, HIT_TOLERANCE).is_some()
-                } else if let Some(at) = anchors::anchor_near(sps, p, ANCHOR_RADIUS) {
+                if let Some(at) = anchors::anchor_near(sps, p, ANCHOR_RADIUS) {
                     if m.ctrl {
                         anchors::delete_anchor(sps, at)
                     } else {
@@ -504,27 +852,94 @@ impl Tool for DirectSelectionTool {
                     false
                 }
             });
+            // The knot indices may have shifted under a delete.
+            self.selected = None;
             return Ok(());
         }
-        let Some((layer, elements)) = self.active_elements(ctx) else {
+        let Some((layer, subpaths)) = self.active_knots(ctx) else {
             return Ok(());
         };
-        let mut best: Option<(usize, f64)> = None;
-        for index in 0..anchor_count(&elements) {
-            let Some((_, _, a)) = anchor_at(&elements, index) else {
-                continue;
+        let grab = grab_at(&subpaths, p);
+        // W16-F: a second press on the same knot or handle within the
+        // double-click time, with no drag in between.
+        let now = std::time::Instant::now();
+        let double = grab.is_some()
+            && self
+                .last_press
+                .is_some_and(|(g, at)| Some(g) == grab && now.duration_since(at) <= DOUBLE_CLICK);
+        if double {
+            self.last_press = None;
+            let mut next = subpaths.clone();
+            let changed = match grab {
+                Some(Grab::Knot(r)) => anchors::convert_anchor(&mut next, r),
+                Some(Grab::HandleIn(r)) => knot_mut(&mut next, r)
+                    .map(|a| a.handle_in = Point::ZERO)
+                    .is_some(),
+                Some(Grab::HandleOut(r)) => knot_mut(&mut next, r)
+                    .map(|a| a.handle_out = Point::ZERO)
+                    .is_some(),
+                None => false,
             };
-            let d = ((a.x - p.x).powi(2) + (a.y - p.y).powi(2)).sqrt();
-            if d <= ANCHOR_RADIUS && best.is_none_or(|(_, bd)| d < bd) {
-                best = Some((index, d));
+            if changed {
+                emit_knots(ctx, layer, &next);
             }
-        }
-        let Some((index, _)) = best else {
             return Ok(());
+        }
+        self.last_press = grab.map(|g| (g, now));
+        let same_layer = |sel: &Option<(LayerId, Vec<anchors::AnchorRef>)>| {
+            sel.as_ref().is_some_and(|(l, _)| *l == layer)
         };
-        let (el, slot, _) = anchor_at(&elements, index).expect("index just measured");
-        let elements = with_anchor(elements, el, slot, p);
-        self.elements = Some((layer, elements, el, slot));
+        match grab {
+            None if m.shift => {
+                // Shift on the outline away from a knot adds a knot there.
+                self.last_press = None;
+                edit_anchors(ctx, |sps| {
+                    anchors::insert_anchor(sps, p, HIT_TOLERANCE).is_some()
+                });
+                self.selected = None;
+                return Ok(());
+            }
+            None => {
+                self.selected = None;
+                return Ok(());
+            }
+            Some(Grab::Knot(r)) if m.shift => {
+                // Shift-click adds a knot to the selection, or takes it out;
+                // it never counts toward a double-click.
+                self.last_press = None;
+                if same_layer(&self.selected) {
+                    let knots = &mut self.selected.as_mut().expect("same layer").1;
+                    if let Some(at) = knots.iter().position(|k| *k == r) {
+                        knots.remove(at);
+                        if knots.is_empty() {
+                            self.selected = None;
+                        }
+                        return Ok(());
+                    }
+                    knots.push(r);
+                } else {
+                    self.selected = Some((layer, vec![r]));
+                }
+            }
+            Some(Grab::Knot(r)) => {
+                let kept = same_layer(&self.selected)
+                    && self
+                        .selected
+                        .as_ref()
+                        .is_some_and(|(_, knots)| knots.contains(&r));
+                if !kept {
+                    self.selected = Some((layer, vec![r]));
+                }
+            }
+            Some(Grab::HandleIn(_) | Grab::HandleOut(_)) => {}
+        }
+        self.drag = Some(KnotDrag {
+            layer,
+            base: subpaths,
+            grab: grab.expect("a grab was matched"),
+            start: p,
+            now: p,
+        });
         Ok(())
     }
 
@@ -533,48 +948,120 @@ impl Tool for DirectSelectionTool {
         _ctx: &mut ToolContext<'_>,
         event: PointerEvent,
     ) -> Result<(), ToolError> {
-        let Some((_, elements, el, slot)) = &mut self.elements else {
-            return Ok(());
-        };
         let p = Point::new(event.pos.x as f64, event.pos.y as f64);
-        let snapshot = elements.clone();
-        *elements = with_anchor(snapshot, *el, *slot, p);
+        if let Some(drag) = &mut self.drag {
+            if p.is_finite() {
+                drag.now = p;
+            }
+        }
         Ok(())
     }
 
     fn on_pointer_up(
         &mut self,
         ctx: &mut ToolContext<'_>,
-        _event: PointerEvent,
+        event: PointerEvent,
     ) -> Result<(), ToolError> {
-        let Some((layer, elements, ..)) = self.elements.take() else {
+        let Some(mut drag) = self.drag.take() else {
             return Ok(());
         };
-        let svg = svg::to_svg(&vector::Path::from_elements(elements));
-        // Rebuild the layer's kind with only the path replaced: the fill,
-        // stroke and fill rule survive, and SetLayerKind is the one undo step
-        // an anchor drag costs.
-        let Some((_, shape)) = ctx.shape_paths.iter().find(|(id, _)| *id == layer) else {
-            return Ok(());
-        };
-        if shape.path_svg == svg {
-            return Ok(()); // a click on an anchor without a drag moved nothing
+        let p = Point::new(event.pos.x as f64, event.pos.y as f64);
+        if p.is_finite() {
+            drag.now = p;
         }
-        let mut new_shape = shape.clone();
-        new_shape.path_svg = svg;
-        ctx.emit(Command::SetLayerKind {
-            layer_id: layer,
-            kind: Box::new(LayerKind::Shape(new_shape)),
-        });
+        let d = drag.now - drag.start;
+        if d == Point::ZERO {
+            return Ok(()); // a click on a knot without a drag moved nothing
+        }
+        self.last_press = None;
+        let next = match drag.grab {
+            Grab::Knot(_) => {
+                let knots = self
+                    .selected
+                    .as_ref()
+                    .filter(|(l, _)| *l == drag.layer)
+                    .map(|(_, k)| k.clone())
+                    .unwrap_or_default();
+                moved_knots(&drag.base, &knots, d)
+            }
+            Grab::HandleIn(r) => {
+                let mut next = drag.base.clone();
+                if let Some(a) = knot_mut(&mut next, r) {
+                    a.handle_in += d;
+                }
+                next
+            }
+            Grab::HandleOut(r) => {
+                let mut next = drag.base.clone();
+                if let Some(a) = knot_mut(&mut next, r) {
+                    a.handle_out += d;
+                }
+                next
+            }
+        };
+        emit_knots(ctx, drag.layer, &next);
         Ok(())
     }
 
     fn cancel(&mut self, _ctx: &mut ToolContext<'_>) {
-        self.elements = None;
+        self.drag = None;
+        self.last_press = None;
+        self.pending_nudge = Vec2::ZERO;
     }
 
     fn is_active(&self) -> bool {
-        self.elements.is_some()
+        self.drag.is_some()
+    }
+
+    /// W16-F: an arrow nudge waits on the selected knots.
+    fn has_pending_commit(&self) -> bool {
+        self.selected.is_some() && self.pending_nudge != Vec2::ZERO
+    }
+
+    /// W16-F: move the selected knots by the waiting nudge, ONE step.
+    fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
+        let d = std::mem::take(&mut self.pending_nudge);
+        if d == Vec2::ZERO || !d.is_finite() {
+            return Ok(());
+        }
+        let Some((layer, knots)) = self.selected.clone() else {
+            return Ok(());
+        };
+        let Some((active, subpaths)) = self.active_knots(ctx) else {
+            return Ok(());
+        };
+        if active != layer {
+            self.selected = None;
+            return Ok(());
+        }
+        let next = moved_knots(&subpaths, &knots, Point::new(d.x as f64, d.y as f64));
+        emit_knots(ctx, layer, &next);
+        Ok(())
+    }
+
+    /// W16-F: `nudge_x` / `nudge_y`, an arrow key's nudge of the selected
+    /// knots (the shell sends them, then [`Tool::commit`] applies them).
+    fn set_setting(
+        &mut self,
+        key: &str,
+        setting: crate::tool::ToolSetting,
+    ) -> Result<(), ToolError> {
+        match (key, setting) {
+            (NUDGE_X, crate::tool::ToolSetting::Float(v)) => {
+                self.pending_nudge.x += crate::error::finite("nudge", v)?;
+                Ok(())
+            }
+            (NUDGE_Y, crate::tool::ToolSetting::Float(v)) => {
+                self.pending_nudge.y += crate::error::finite("nudge", v)?;
+                Ok(())
+            }
+            (NUDGE_X | NUDGE_Y, _) => Err(ToolError::OptionKindMismatch {
+                key: key.to_owned(),
+            }),
+            _ => Err(ToolError::UnknownOption {
+                key: key.to_owned(),
+            }),
+        }
     }
 }
 
@@ -846,5 +1333,212 @@ mod tests {
         click(&mut tool, &mut ctx, 60.0, 60.0, Modifiers::shift());
         click(&mut tool, &mut ctx, 60.0, 60.0, Modifiers::alt());
         assert!(ctx.commands().is_empty(), "{:?}", ctx.commands());
+    }
+}
+
+/// W16-F: Path Select works per path component, Direct Selection keeps a
+/// multi-knot selection, and a double-click collapses handles — each through
+/// the tools' own pointer route.
+#[cfg(test)]
+mod w16f_tests {
+    use super::*;
+    use crate::tiles::MemoryTiles;
+    use crate::tool::{Modifiers, ToolSetting};
+    use layer_model::ShapeLayer;
+    use raster::PixelRect;
+
+    /// Two squares: component 0 at 10..20, component 1 at 40..50.
+    const TWO: &str = "M10 10 L20 10 L20 20 L10 20 Z M40 40 L50 40 L50 50 L40 50 Z";
+
+    fn ctx_with<'a>(tiles: &'a mut MemoryTiles, svg_path: &str) -> (ToolContext<'a>, LayerId) {
+        let mut ctx = ToolContext::new(tiles, PixelRect::new(0, 0, 128, 128));
+        let id = LayerId::new();
+        ctx.active_layer = Some(id);
+        ctx.shape_paths = vec![(id, ShapeLayer::from_svg(svg_path))];
+        (ctx, id)
+    }
+
+    fn gesture(tool: &mut dyn Tool, ctx: &mut ToolContext<'_>, pts: &[(f32, f32)], m: Modifiers) {
+        let (x, y) = pts[0];
+        tool.on_pointer_down(ctx, PointerEvent::at(x, y).with_modifiers(m))
+            .unwrap();
+        for (x, y) in &pts[1..] {
+            tool.on_pointer_move(ctx, PointerEvent::at(*x, *y).with_modifiers(m))
+                .unwrap();
+        }
+        let (x, y) = *pts.last().unwrap();
+        tool.on_pointer_up(ctx, PointerEvent::at(x, y).with_modifiers(m))
+            .unwrap();
+    }
+
+    /// The one `SetLayerKind` drained from `ctx`, its path parsed; the
+    /// context's shape is updated to it, as the shell's apply would.
+    fn landed(ctx: &mut ToolContext<'_>) -> vector::Path {
+        let cmds = ctx.drain();
+        let [Command::SetLayerKind { kind, .. }] = &cmds[..] else {
+            panic!("expected one SetLayerKind: {cmds:?}");
+        };
+        let LayerKind::Shape(shape) = kind.as_ref() else {
+            panic!("{kind:?}");
+        };
+        ctx.shape_paths[0].1 = shape.clone();
+        svg::parse(&shape.path_svg).unwrap()
+    }
+
+    fn min_of(part: &vector::Path) -> (f64, f64) {
+        let b = part.bounds();
+        (b.min.x, b.min.y)
+    }
+
+    #[test]
+    fn path_select_picks_one_component_and_a_drag_moves_only_it() {
+        let mut tiles = MemoryTiles::new();
+        let (mut ctx, id) = ctx_with(&mut tiles, TWO);
+        let mut tool = PathSelectTool::default();
+        gesture(
+            &mut tool,
+            &mut ctx,
+            &[(45.0, 45.0), (50.0, 47.0)],
+            Modifiers::NONE,
+        );
+        assert_eq!(tool.selected_components(), Some((id, &[1usize][..])));
+        let parts = components(&landed(&mut ctx));
+        assert_eq!(parts.len(), 2);
+        assert_eq!(min_of(&parts[0]), (10.0, 10.0), "component 0 stays");
+        assert_eq!(min_of(&parts[1]), (45.0, 42.0), "component 1 moved");
+    }
+
+    #[test]
+    fn shift_click_selects_two_components_and_a_nudge_moves_both() {
+        let mut tiles = MemoryTiles::new();
+        let (mut ctx, id) = ctx_with(&mut tiles, TWO);
+        let mut tool = PathSelectTool::default();
+        gesture(&mut tool, &mut ctx, &[(15.0, 15.0)], Modifiers::NONE);
+        gesture(&mut tool, &mut ctx, &[(45.0, 45.0)], Modifiers::shift());
+        assert_eq!(tool.selected_components(), Some((id, &[0usize, 1][..])));
+        assert!(ctx.commands().is_empty(), "clicks alone edit nothing");
+        tool.set_setting(NUDGE_X, ToolSetting::Float(10.0)).unwrap();
+        assert!(tool.has_pending_commit());
+        Tool::commit(&mut tool, &mut ctx).unwrap();
+        let parts = components(&landed(&mut ctx));
+        assert_eq!(min_of(&parts[0]), (20.0, 10.0));
+        assert_eq!(min_of(&parts[1]), (50.0, 40.0));
+        assert!(!tool.has_pending_commit(), "the nudge was spent");
+    }
+
+    #[test]
+    fn the_arrange_and_delete_ops_reorder_and_remove_the_selected_component() {
+        let mut tiles = MemoryTiles::new();
+        let (mut ctx, id) = ctx_with(&mut tiles, TWO);
+        let mut tool = PathSelectTool::default();
+        gesture(&mut tool, &mut ctx, &[(45.0, 45.0)], Modifiers::NONE);
+        request_component_op(ComponentOp::SendToBack);
+        assert!(tool.has_pending_commit());
+        Tool::commit(&mut tool, &mut ctx).unwrap();
+        let parts = components(&landed(&mut ctx));
+        assert_eq!(min_of(&parts[0]), (40.0, 40.0), "sent to the back");
+        assert_eq!(min_of(&parts[1]), (10.0, 10.0));
+        assert_eq!(
+            tool.selected_components(),
+            Some((id, &[0usize][..])),
+            "the selection follows the component"
+        );
+        request_component_op(ComponentOp::BringForward);
+        Tool::commit(&mut tool, &mut ctx).unwrap();
+        let parts = components(&landed(&mut ctx));
+        assert_eq!(min_of(&parts[1]), (40.0, 40.0), "one step forward");
+        request_component_op(ComponentOp::Delete);
+        Tool::commit(&mut tool, &mut ctx).unwrap();
+        let parts = components(&landed(&mut ctx));
+        assert_eq!(parts.len(), 1);
+        assert_eq!(min_of(&parts[0]), (10.0, 10.0), "the other one survives");
+        assert!(tool.selected_components().is_none());
+        assert!(pending_component_op().is_none(), "the op was spent");
+    }
+
+    #[test]
+    fn deleting_the_last_component_is_refused() {
+        let one = vector::Path::from_elements(
+            components(&svg::parse(TWO).unwrap())[0].elements().to_vec(),
+        );
+        assert!(apply_component_op(&one, &[0], ComponentOp::Delete).is_none());
+    }
+
+    /// A square 10..50 with its knots at the corners.
+    const SQUARE: &str = "M10 10 L50 10 L50 50 L10 50 Z";
+
+    #[test]
+    fn shift_click_selects_two_knots_and_a_drag_moves_both() {
+        let mut tiles = MemoryTiles::new();
+        let (mut ctx, _) = ctx_with(&mut tiles, SQUARE);
+        let mut tool = DirectSelectionTool::default();
+        gesture(&mut tool, &mut ctx, &[(10.0, 10.0)], Modifiers::NONE);
+        gesture(&mut tool, &mut ctx, &[(50.0, 10.0)], Modifiers::shift());
+        assert_eq!(tool.selected_knots().map(|(_, k)| k.len()), Some(2));
+        assert!(ctx.commands().is_empty(), "selecting edits nothing");
+        // Dragging either selected knot moves both.
+        gesture(
+            &mut tool,
+            &mut ctx,
+            &[(50.0, 10.0), (50.0, 20.0)],
+            Modifiers::NONE,
+        );
+        let pts = anchors::anchor_points(&landed(&mut ctx));
+        assert_eq!(
+            pts,
+            vec![
+                Point::new(10.0, 20.0),
+                Point::new(50.0, 20.0),
+                Point::new(50.0, 50.0),
+                Point::new(10.0, 50.0),
+            ]
+        );
+        // And an arrow nudge moves them both again.
+        tool.set_setting(NUDGE_Y, ToolSetting::Float(1.0)).unwrap();
+        Tool::commit(&mut tool, &mut ctx).unwrap();
+        let pts = anchors::anchor_points(&landed(&mut ctx));
+        assert_eq!(pts[0], Point::new(10.0, 21.0));
+        assert_eq!(pts[1], Point::new(50.0, 21.0));
+        assert_eq!(pts[2], Point::new(50.0, 50.0));
+    }
+
+    #[test]
+    fn double_clicking_a_smooth_knot_collapses_its_handles_and_again_restores_them() {
+        // The knot at (30, 10) is smooth: handles (-10, 0) and (10, 0).
+        let arc = "M10 30 C10 20 20 10 30 10 C40 10 50 20 50 30 Z";
+        let mut tiles = MemoryTiles::new();
+        let (mut ctx, _) = ctx_with(&mut tiles, arc);
+        let mut tool = DirectSelectionTool::default();
+        let knot = |path: &vector::Path| anchors::from_path(path)[0].anchors[1];
+        assert!(knot(&svg::parse(arc).unwrap()).is_smooth());
+        gesture(&mut tool, &mut ctx, &[(30.0, 10.0)], Modifiers::NONE);
+        assert!(ctx.commands().is_empty(), "one click only selects");
+        gesture(&mut tool, &mut ctx, &[(30.0, 10.0)], Modifiers::NONE);
+        let collapsed = knot(&landed(&mut ctx));
+        assert_eq!(collapsed.pos, Point::new(30.0, 10.0));
+        assert_eq!(collapsed.handle_in, Point::ZERO);
+        assert_eq!(collapsed.handle_out, Point::ZERO);
+        // Double-clicking the collapsed knot gives it a pair back.
+        gesture(&mut tool, &mut ctx, &[(30.0, 10.0)], Modifiers::NONE);
+        gesture(&mut tool, &mut ctx, &[(30.0, 10.0)], Modifiers::NONE);
+        assert!(knot(&landed(&mut ctx)).is_smooth());
+    }
+
+    #[test]
+    fn double_clicking_a_handle_collapses_only_that_handle() {
+        let arc = "M10 30 C10 20 20 10 30 10 C40 10 50 20 50 30 Z";
+        let mut tiles = MemoryTiles::new();
+        let (mut ctx, _) = ctx_with(&mut tiles, arc);
+        let mut tool = DirectSelectionTool::default();
+        // The knot's outgoing handle ends at (40, 10).
+        gesture(&mut tool, &mut ctx, &[(40.0, 10.0)], Modifiers::NONE);
+        gesture(&mut tool, &mut ctx, &[(40.0, 10.0)], Modifiers::NONE);
+        let a = anchors::from_path(&landed(&mut ctx))[0].anchors[1];
+        assert_eq!(a.handle_out, Point::ZERO);
+        assert_eq!(
+            a.handle_in,
+            Point::new(-10.0, 0.0),
+            "the other handle stays"
+        );
     }
 }

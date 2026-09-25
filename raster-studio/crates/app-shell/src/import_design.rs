@@ -312,6 +312,19 @@ pub fn document_from_design(
     title: &str,
     history_depth: usize,
 ) -> Result<DesignImport, String> {
+    document_from_design_on(design, None, title, history_depth)
+}
+
+/// W16-I: [`document_from_design`] on a canvas the file names itself (an
+/// SVG's size, an EPS bounding box, a PDF page): with `Some((w, h))` the
+/// design's space is the canvas's, unshifted; with `None` the canvas is the
+/// bounding box of what is drawn, as for a Sketch / XD / Figma page.
+pub fn document_from_design_on(
+    design: &DesignDocument,
+    canvas: Option<(u32, u32)>,
+    title: &str,
+    history_depth: usize,
+) -> Result<DesignImport, String> {
     // The canvas: everything drawn on the page (groups have no box of their
     // own; their contents count).
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
@@ -338,6 +351,10 @@ pub fn document_from_design(
         ((x1.ceil() - ox).max(1.0)).min(f64::from(u32::MAX)) as u32,
         ((y1.ceil() - oy).max(1.0)).min(f64::from(u32::MAX)) as u32,
     );
+    let (ox, oy, w, h) = match canvas {
+        Some((cw, ch)) => (0.0, 0.0, cw, ch),
+        None => (ox, oy, w, h),
+    };
     let limits = ImportLimits::default();
     if !editor_core::canvas_size_is_supported(w, h)
         || w > limits.max_width

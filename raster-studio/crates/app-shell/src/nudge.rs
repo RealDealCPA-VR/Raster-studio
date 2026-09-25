@@ -11,6 +11,13 @@
 //! * With a **selection tool** (the marquees, the lassos, the Magic Wand,
 //!   Quick and Object Selection) an arrow moves the selection OUTLINE only;
 //!   no pixel changes. Shift makes it ten pixels.
+//! * W16-F: with an open **Free Transform** an arrow moves the whole
+//!   transform box (1 px, 10 with Shift); nothing lands in history until the
+//!   session's Enter. With **Path Select** it moves the selected path
+//!   components, with **Direct Selection** the selected knots (Photopea
+//!   learn/vg-manipulation: "move them with a mouse or cursor keys"), and
+//!   with **Slice Select** the picked slice (learn/slices) — each press ONE
+//!   history step.
 //! * Any other tool: an arrow does nothing, as in Photopea.
 //!
 //! The Move half is not a second implementation of the move: a fresh
@@ -72,22 +79,73 @@ impl ToolPointer {
         big: bool,
         copy: bool,
     ) -> Result<usize, String> {
-        if editor.active().is_none()
-            || self.is_text_editing()
-            || self.is_gesture_active()
-            || self.is_tool_active()
-        {
+        if editor.active().is_none() || self.is_text_editing() || self.is_gesture_active() {
             return Ok(0);
         }
         let step = step_of(direction, big);
         let tool = editor.effective_tool();
+        // W16-F: an open Free Transform is a live tool session, and the
+        // arrows move its box.
+        if /*W16F_MUT*/ false && tool == ToolId::FreeTransform && self.is_tool_active() {
+            return Ok(self.nudge_transform(step));
+        }
+        if self.is_tool_active() {
+            return Ok(0);
+        }
         if tool == ToolId::Move {
             self.nudge_with_move(editor, step, copy)
         } else if moves_the_outline(tool) {
             Ok(nudge_outline(editor, step))
+        } else if /*W16F_MUT*/ false && matches!(tool, ToolId::PathSelect | ToolId::DirectSelection) {
+            self.nudge_path(editor, tool, step)
+        } else if tool == ToolId::SliceSelect {
+            Ok(nudge_slice(editor, step))
         } else {
             Ok(0)
         }
+    }
+
+    /// W16-F: an open Free Transform's half: the live quad moves `step`
+    /// (`tools::transform::keys::NUDGE_X` / `NUDGE_Y`). Answers 1 when the
+    /// published box moved (the shell repaints on it) — not a history step:
+    /// the session commits at Enter as it always does.
+    fn nudge_transform(&mut self, step: IVec2) -> usize {
+        use tools::transform::keys;
+        let Some((ToolId::FreeTransform, tool)) = self.current.as_mut() else {
+            return 0;
+        };
+        let before = tool.live_geometry();
+        let _ = tool.set_setting(keys::NUDGE_X, tools::ToolSetting::Float(step.x as f32));
+        let _ = tool.set_setting(keys::NUDGE_Y, tools::ToolSetting::Float(step.y as f32));
+        usize::from(tool.live_geometry() != before)
+    }
+
+    /// W16-F: Path Select's and Direct Selection's half: the live tool —
+    /// the instance holding the selected components or knots — takes the
+    /// step and commits it as ONE `SetLayerKind`. Nothing selected, nothing
+    /// moves (0 steps).
+    fn nudge_path(
+        &mut self,
+        editor: &mut Editor,
+        tool: ToolId,
+        step: IVec2,
+    ) -> Result<usize, String> {
+        use tools::path_select::{NUDGE_X, NUDGE_Y};
+        if self.current.as_ref().map(|(id, _)| *id) != Some(tool) {
+            return Ok(0);
+        }
+        let (result, commands, _) = self.off_pointer(editor, |tool: &mut dyn Tool, ctx| {
+            tool.set_setting(NUDGE_X, tools::ToolSetting::Float(step.x as f32))?;
+            tool.set_setting(NUDGE_Y, tools::ToolSetting::Float(step.y as f32))?;
+            tool.commit(ctx)
+        });
+        result.map_err(|e| e.to_string())?;
+        let before = editor.active().map(|d| d.history_depth()).unwrap_or(0);
+        for command in commands {
+            editor.apply_command(command);
+        }
+        let after = editor.active().map(|d| d.history_depth()).unwrap_or(0);
+        Ok(after.saturating_sub(before))
     }
 
     /// The Move tool's half: a press/release `step` apart through a fresh
@@ -156,6 +214,33 @@ impl ToolPointer {
     }
 }
 
+/// W16-F: Slice Select's half: the picked slice moves `step`, as ONE
+/// `SetSlices` step (`slices_export::remember_edited`, the road a Slice
+/// Select drag's release takes). No picked slice, nothing moves.
+fn nudge_slice(editor: &mut Editor, step: IVec2) -> usize {
+    let Some(id) = editor.active().map(|d| d.id()) else {
+        return 0;
+    };
+    let Some(picked) = editor.slices.picked(id) else {
+        return 0;
+    };
+    let mut slices = editor.slices.slices(id);
+    let Some(slice) = slices.get_mut(picked) else {
+        return 0;
+    };
+    slice.rect = raster::PixelRect::new(
+        slice.rect.x + i64::from(step.x),
+        slice.rect.y + i64::from(step.y),
+        slice.rect.width,
+        slice.rect.height,
+    );
+    let before = editor.active().map(|d| d.history_depth()).unwrap_or(0);
+    let status = crate::slices_export::remember_edited(editor, &slices);
+    editor.set_status(status);
+    let after = editor.active().map(|d| d.history_depth()).unwrap_or(0);
+    after.saturating_sub(before)
+}
+
 /// A selection tool's half: the outline moves `step`, the pixels stay. One
 /// `SetSelection` history step (its inverse is the outline as it was).
 fn nudge_outline(editor: &mut Editor, step: IVec2) -> usize {
@@ -195,3 +280,10 @@ fn nudge_outline(editor: &mut Editor, step: IVec2) -> usize {
     let after = editor.active().map(|d| d.history_depth()).unwrap_or(0);
     after.saturating_sub(before)
 }
+
+// W16-F: the arrows on an open transform, Path Select, Direct Selection and
+// Slice Select, Free Transform's Ctrl gestures and Show Transform Controls'
+// live handles, through the pointer's own routes.
+#[cfg(test)]
+#[path = "w16f_route_tests.rs"]
+mod w16f_route_tests;

@@ -22,6 +22,11 @@ use layer_model::{ShapeCap, ShapeFillPaint, ShapeJoin, ShapeStrokeAlign};
 use crate::intent::Intent;
 use crate::menu::{AdjustmentId, LayerClass};
 
+// W16-G: the shape page's Live Shape section.
+#[path = "live_shape_props.rs"]
+mod live_shape_props;
+pub use live_shape_props::{ids as live_ids, LiveShapeProperties};
+
 /// What the user last clicked, which decides what Properties talks about.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum PropertyFocus {

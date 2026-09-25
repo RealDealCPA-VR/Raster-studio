@@ -33,6 +33,13 @@
 //! bytes, followed by version-dependent trailers (a child document id from
 //! 5, a modification time from 6, a lock byte from 7).
 //!
+//! W16-J: a `liFE` entry (written in a `lnkE` block) follows the flag with a
+//! version word and a link descriptor (`originalPath`, `fullPath` as a
+//! `file://` URL, `relPath`, `Nm  `), then from version 4 the file's date
+//! (`u32` year, four bytes month/day/hour/minute, `f64` seconds), a `u64`
+//! file size, and from version 3 a cached copy of the data length's bytes —
+//! the layout psd-tools reads.
+//!
 //! # Untrusted input
 //!
 //! Every entry is carved into a sub-cursor from its own declared length, so a
@@ -49,8 +56,13 @@ use crate::error::{PsdError, PsdResult};
 use crate::limits::{Budget, ReadOptions};
 use crate::model::{PsdFile, PsdLayer, TaggedBlock};
 
-/// The document-level keys that carry placed files.
-pub const LINKED_FILE_KEYS: [[u8; 4]; 3] = [*b"lnk2", *b"lnk3", *b"lnkD"];
+/// The document-level keys that carry placed files. W16-J: `lnkE` holds the
+/// external (`liFE`) entries of linked smart objects.
+pub const LINKED_FILE_KEYS: [[u8; 4]; 4] = [*b"lnk2", *b"lnk3", *b"lnkD", *b"lnkE"];
+
+// W16-J: smart filters as Photoshop's `filterFX` descriptor on `SoLd`.
+#[path = "smart_filters.rs"]
+pub mod smart_filters;
 
 /// The layer-level keys that make a layer a placed (smart-object) layer.
 pub const PLACED_LAYER_KEYS: [[u8; 4]; 3] = [*b"SoLd", *b"SoLE", *b"PlLd"];
@@ -73,6 +85,10 @@ pub struct LinkedFile {
     pub data: Vec<u8>,
     /// `true` for `liFD`: [`LinkedFile::data`] is the whole file.
     pub embedded: bool,
+    /// W16-J: for an external (`liFE`) entry, the path of the file it links
+    /// to, from the entry's link descriptor (`originalPath`, else the
+    /// `fullPath` URL). `None` for an embedded entry.
+    pub path: Option<String>,
 }
 
 impl LinkedFile {
@@ -85,6 +101,27 @@ impl LinkedFile {
             creator: *b"8BIM",
             data,
             embedded: true,
+            path: None,
+        }
+    }
+
+    /// W16-J: an external file a linked smart object names by `path`; its
+    /// bytes stay where they are. `file_type` is taken from `head` (the
+    /// file's first bytes, when the caller could read them).
+    pub fn external(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        path: impl Into<String>,
+        head: &[u8],
+    ) -> Self {
+        LinkedFile {
+            id: id.into(),
+            name: name.into(),
+            file_type: file_type_of(head),
+            creator: *b"8BIM",
+            data: Vec::new(),
+            embedded: false,
+            path: Some(path.into()),
         }
     }
 }
@@ -113,7 +150,7 @@ pub struct LinkedFiles {
 }
 
 impl LinkedFiles {
-    /// Read `file`'s document-level `lnk2`/`lnk3`/`lnkD` blocks. Never fails:
+    /// Read `file`'s document-level `lnk2`/`lnk3`/`lnkD`/`lnkE` blocks. Never fails:
     /// a damaged entry is named in [`LinkedFiles::refused`] and the rest load.
     pub fn read(file: &PsdFile, opts: &ReadOptions) -> Self {
         let mut out = LinkedFiles::default();
@@ -194,18 +231,29 @@ fn read_entry(
         Descriptor::read(cur, opts)?;
     }
     let embedded = kind == *b"liFD";
+    let mut path = None;
     let data = if embedded {
-        let len = usize::try_from(len)
-            .ok()
-            .filter(|l| *l <= cur.remaining())
-            .ok_or(PsdError::Truncated {
-                needed: len.min(usize::MAX as u64) as usize,
-                available: cur.remaining(),
-                at: cur.offset(),
-            })?;
-        budget.take(len as u64)?;
-        cur.take(len)?.to_vec()
-    } else if kind == *b"liFE" || kind == *b"liFA" {
+        take_payload(cur, len, budget)?
+    } else if kind == *b"liFE" {
+        // W16-J: the link descriptor, then (version 4+) the file's date,
+        // its size, and (version 3+) a cached copy of `len` bytes.
+        let _version = cur.u32()?;
+        let link = Descriptor::read(cur, opts)?;
+        path = external_path_of(&link);
+        if version > 3 {
+            let _year = cur.u32()?;
+            for _ in 0..4 {
+                cur.u8()?;
+            }
+            let _seconds = cur.f64()?;
+        }
+        let _file_size = read_u64(cur)?;
+        if version > 2 {
+            take_payload(cur, len, budget)?
+        } else {
+            Vec::new()
+        }
+    } else if kind == *b"liFA" {
         Vec::new()
     } else {
         return Err(PsdError::InvalidDocument(format!(
@@ -220,7 +268,133 @@ fn read_entry(
         creator,
         data,
         embedded,
+        path,
     })
+}
+
+/// `len` payload bytes, drawn from `budget` before they are copied.
+fn take_payload(cur: &mut Cursor<'_>, len: u64, budget: &mut Budget) -> PsdResult<Vec<u8>> {
+    let len = usize::try_from(len)
+        .ok()
+        .filter(|l| *l <= cur.remaining())
+        .ok_or(PsdError::Truncated {
+            needed: len.min(usize::MAX as u64) as usize,
+            available: cur.remaining(),
+            at: cur.offset(),
+        })?;
+    budget.take(len as u64)?;
+    Ok(cur.take(len)?.to_vec())
+}
+
+/// W16-J: the linked file's path from a `liFE` link descriptor: the native
+/// `originalPath` when there is one, else the `fullPath` `file://` URL
+/// turned back into a path.
+fn external_path_of(link: &Descriptor) -> Option<String> {
+    let clean = |s: &str| s.trim_end_matches('\0').to_string();
+    if let Some(p) = link
+        .text("originalPath")
+        .map(clean)
+        .filter(|p| !p.is_empty())
+    {
+        return Some(p);
+    }
+    let url = link.text("fullPath").map(clean)?;
+    let rest = url.strip_prefix("file://").unwrap_or(&url);
+    // `file:///C:/x` is the Windows path `C:/x`.
+    let rest = match rest.as_bytes() {
+        [b'/', d, b':', ..] if d.is_ascii_alphabetic() => &rest[1..],
+        _ => rest,
+    };
+    let bytes = rest.as_bytes();
+    let hex = |b: u8| (b as char).to_digit(16);
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match (
+            bytes[i],
+            bytes.get(i + 1).copied().and_then(hex),
+            bytes.get(i + 2).copied().and_then(hex),
+        ) {
+            (b'%', Some(h), Some(l)) => {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+            }
+            (b, _, _) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    let path = String::from_utf8(out).ok()?;
+    (!path.is_empty()).then_some(path)
+}
+
+/// W16-J: `path` as the `file://` URL a link descriptor's `fullPath` holds.
+fn file_url(path: &str) -> String {
+    let slashed = path.replace('\\', "/");
+    let mut out = String::from("file://");
+    if !slashed.starts_with('/') {
+        out.push('/');
+    }
+    for ch in slashed.chars() {
+        match ch {
+            ' ' => out.push_str("%20"),
+            '%' => out.push_str("%25"),
+            '#' => out.push_str("%23"),
+            '?' => out.push_str("%3F"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// W16-J: encode external files as one `lnkE` payload (version-7 `liFE`
+/// entries, each naming its file by path) — the layout
+/// [`LinkedFiles::read_block`] reads. Embedded entries are not written here
+/// (they go through [`encode_linked_files`]); the files' bytes are not
+/// cached in the entry, and the file's date and size are written as unknown
+/// (2000-01-01, 0 bytes).
+pub fn encode_external_files(files: &[LinkedFile]) -> Vec<u8> {
+    let mut sink = Sink::new();
+    for file in files.iter().filter(|f| !f.embedded) {
+        let path = file.path.clone().unwrap_or_default();
+        let mut link = Descriptor::new("ExternalFileLink");
+        let mut push = |k: &str, v: Value| {
+            let _ = link.push(k, v);
+        };
+        push("descVersion", Value::Integer(2));
+        push("Nm  ", Value::Text(file.name.clone()));
+        push("fullPath", Value::Text(file_url(&path)));
+        push("originalPath", Value::Text(path.clone()));
+        push("relPath", Value::Text(file.name.clone()));
+        let mut entry = Sink::new();
+        entry.tag(b"liFE");
+        entry.u32(7);
+        entry.pascal_string(&file.id, 1);
+        entry.unicode_string(&file.name);
+        entry.tag(&file.file_type);
+        entry.tag(&file.creator);
+        write_u64(&mut entry, 0); // no cached copy
+        entry.u8(0); // no file-open descriptor
+        entry.u32(16);
+        // Every key above is non-empty, which is the only thing `write`
+        // refuses.
+        let _ = link.write(&mut entry);
+        entry.u32(2000); // the file's date: 2000-01-01 00:00:00
+        for v in [1u8, 1, 0, 0] {
+            entry.u8(v);
+        }
+        entry.f64(0.0);
+        write_u64(&mut entry, 0); // file size: not recorded
+        entry.unicode_string(""); // version 5: child document id
+        entry.f64(0.0); // version 6: asset modification time
+        entry.u8(0); // version 7: unlocked
+        let body = entry.into_inner();
+        write_u64(&mut sink, body.len() as u64);
+        sink.bytes(&body);
+        sink.align_to(4);
+    }
+    sink.into_inner()
 }
 
 /// Encode embedded files as one `lnk2` payload (version-7 `liFD` entries) —
@@ -286,6 +460,12 @@ impl PlacedLayer {
 
     /// The layer-level `SoLd` block for this placement.
     pub fn to_block(&self) -> TaggedBlock {
+        self.to_block_with(None)
+    }
+
+    /// W16-J: the `SoLd` block carrying the layer's smart filters as its
+    /// `filterFX` descriptor ([`smart_filters::encode_stack`]).
+    pub fn to_block_with(&self, filter_fx: Option<Descriptor>) -> TaggedBlock {
         let (w, h) = self.size.unwrap_or((0.0, 0.0));
         let corners = || Value::List(self.corners.iter().map(|v| Value::Double(*v)).collect());
         let mut d = Descriptor::new("null");
@@ -312,6 +492,9 @@ impl PlacedLayer {
             },
         );
         push("comp", Value::Integer(-1));
+        if let Some(fx) = filter_fx {
+            push(smart_filters::FILTER_FX_KEY, Value::Descriptor(fx));
+        }
         let mut s = Sink::new();
         s.tag(b"soLD");
         s.u32(4);
@@ -487,6 +670,39 @@ mod tests {
         legacy.extra.push(placed.to_legacy_block());
         let back = PlacedLayer::of(&legacy, &ReadOptions::default()).unwrap();
         assert_eq!((back.id, back.corners), (placed.id, placed.corners));
+    }
+
+    /// W16-J: a linked file travels as a `liFE` entry in `lnkE`, naming its
+    /// path natively and as a `file://` URL, and reads back linked.
+    #[test]
+    fn an_external_file_round_trips_its_path_through_lnke() {
+        let files = vec![LinkedFile::external(
+            "ext-id",
+            "art 1.png",
+            r"C:\art dir\art 1.png",
+            b"\x89PNG\r\n",
+        )];
+        let block = encode_external_files(&files);
+        assert_eq!(block.len() % 4, 0);
+        let mut file = PsdFile::new(PsdHeader::rgba8(2, 2));
+        file.extra.push(TaggedBlock::new(*b"lnkE", block));
+        let back = crate::read(&crate::write(&file).unwrap()).unwrap();
+        let read = LinkedFiles::read(&back, &ReadOptions::default());
+        assert!(read.refused.is_empty(), "{:?}", read.refused);
+        assert_eq!(read.files, files);
+        let one = read.find("ext-id").unwrap();
+        assert!(!one.embedded);
+        assert_eq!(one.file_type, *b"png ");
+
+        // Only the URL: the path comes back from it.
+        let mut link = Descriptor::new("ExternalFileLink");
+        link.push("fullPath", Value::Text(file_url(r"C:\a b\c%.png")))
+            .unwrap();
+        assert_eq!(external_path_of(&link).as_deref(), Some("C:/a b/c%.png"));
+        let mut unix = Descriptor::new("ExternalFileLink");
+        unix.push("fullPath", Value::Text(file_url("/Users/me/x.png")))
+            .unwrap();
+        assert_eq!(external_path_of(&unix).as_deref(), Some("/Users/me/x.png"));
     }
 
     #[test]

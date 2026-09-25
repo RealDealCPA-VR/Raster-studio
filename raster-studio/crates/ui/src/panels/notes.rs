@@ -20,7 +20,7 @@
 
 use design::{current_tokens, Space, TextRole};
 use editor_core::extras;
-use editor_core::Document;
+use editor_core::{Command, Document};
 use egui::{Align, Layout, Ui, Vec2};
 
 use crate::intent::Intent;
@@ -35,6 +35,7 @@ const NO_NOTES: &str = "ui.notes.none";
 const NEW: &str = "ui.notes.new";
 const SHOW: &str = "ui.notes.show";
 const DELETE: &str = "ui.notes.delete";
+const AUTHOR: &str = "ui.w16.notes.author";
 /// The text a fresh note starts with.
 pub const NEW_NOTE_TEXT: &str = "Note";
 
@@ -46,6 +47,10 @@ pub mod ids {
     /// The text field of the note with document id `note`.
     pub fn text(note: u64) -> egui::Id {
         egui::Id::new(("raster-notes-text", note))
+    }
+    /// W16-E: the author field of the note with document id `note`.
+    pub fn author(note: u64) -> egui::Id {
+        crate::panels::panel_menus_w16::ids::note_author(note)
     }
     pub fn show(note: u64) -> egui::Id {
         egui::Id::new(("raster-notes-show", note))
@@ -79,6 +84,18 @@ pub(crate) fn notes_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
                     design::TypeRole::Caption,
                 ));
                 let buttons = (t.metrics.min_hit_target + Space::XSmall.pt()) * 2.0;
+                // W16-E: Photopea's Author field, beside the note's text and
+                // committed like it (Enter or leaving the field; one undo
+                // step): a third of the room, the text the rest.
+                let room = (ui.available_width() - buttons).max(t.metrics.min_hit_target * 2.0);
+                let author_width = (room / 3.0).max(t.metrics.min_hit_target);
+                let author = text_field_sized(ui, ids::author(note.id), &note.author, author_width);
+                if let Some(name) = author.committed.clone() {
+                    if let Some(command) = set_author(doc, note.id, name) {
+                        w.emit(Intent::Document(command));
+                    }
+                }
+                author.response.on_hover_text(tr(AUTHOR));
                 let width = (ui.available_width() - buttons).max(t.metrics.min_hit_target);
                 let field = text_field_sized(ui, ids::text(note.id), &note.text, width);
                 if let Some(committed) = field.committed {
@@ -134,6 +151,17 @@ pub(crate) fn notes_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     );
 }
 
+/// W16-E: the Notes panel's Author field: set note `id`'s author, as one
+/// undo step. `None` when there is no such note or nothing changes.
+pub fn set_author(doc: &Document, id: u64, author: impl Into<String>) -> Option<Command> {
+    let index = doc.extras.notes.iter().position(|n| n.id == id)?;
+    let author = author.into().trim().to_string();
+    if doc.extras.notes[index].author == author {
+        return None;
+    }
+    Some(extras::edit_extras(doc, |x| x.notes[index].author = author))
+}
+
 /// Where New Note pins: the centre of the view, clamped into the canvas so a
 /// view scrolled off the page still pins on it.
 pub fn pin_point(w: &Workspace, doc: &Document) -> (f32, f32) {
@@ -155,7 +183,7 @@ mod tests {
     /// W10-B: every string the panel shows is a catalogue key that resolves.
     #[test]
     fn every_string_resolves_through_the_catalogue() {
-        for key in [NO_DOCUMENT, NO_NOTES, NEW, SHOW, DELETE] {
+        for key in [NO_DOCUMENT, NO_NOTES, NEW, SHOW, DELETE, AUTHOR] {
             assert!(!tr(key).is_empty(), "{key} is not in the catalogue");
         }
     }

@@ -28,45 +28,84 @@ pub const VERSION_PSB: u16 = 2;
 
 /// The colour models this crate handles.
 ///
-/// The rejected modes are rejected *by name* rather than approximated, because
-/// reading CMYK or Lab samples as if they were RGB produces pixels that are
-/// silently, confidently wrong — the worst possible failure for an image tool.
+/// W16-B: every mode Photoshop defines is read. Greyscale and RGB samples are
+/// what they say; the others are *not* RGB and must never be interpreted as
+/// such — [`crate::colour_modes`] decodes them (CMYK inverted per Adobe, Lab
+/// offset-encoded, Indexed through the palette in the colour mode data,
+/// Bitmap unpacked from 1 bit, Duotone as its greyscale base). Variants are
+/// appended, never reordered (serde). Codes Photoshop never assigned are
+/// refused by name.
+///
+/// A [`ColorMode::Bitmap`] header is held **expanded**: its [`PsdHeader::depth`]
+/// is [`Depth::Eight`] in memory and its one channel holds `0` (black) or
+/// `255` (white); on disk the depth is 1 and the rows are packed bits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ColorMode {
     Grayscale,
     Rgb,
+    Bitmap,
+    Indexed,
+    Cmyk,
+    Multichannel,
+    Duotone,
+    Lab,
 }
 
 impl ColorMode {
     /// The code stored in the header.
     pub const fn code(self) -> u16 {
         match self {
+            ColorMode::Bitmap => 0,
             ColorMode::Grayscale => 1,
+            ColorMode::Indexed => 2,
             ColorMode::Rgb => 3,
+            ColorMode::Cmyk => 4,
+            ColorMode::Multichannel => 7,
+            ColorMode::Duotone => 8,
+            ColorMode::Lab => 9,
         }
     }
 
     /// How many colour channels a layer or the composite carries, before any
     /// alpha channel.
+    ///
+    /// A Multichannel document's channels are all colour (inks); `1` is the
+    /// least one can hold.
     pub const fn color_channels(self) -> u16 {
         match self {
-            ColorMode::Grayscale => 1,
-            ColorMode::Rgb => 3,
+            ColorMode::Grayscale
+            | ColorMode::Bitmap
+            | ColorMode::Indexed
+            | ColorMode::Multichannel
+            | ColorMode::Duotone => 1,
+            ColorMode::Rgb | ColorMode::Lab => 3,
+            ColorMode::Cmyk => 4,
         }
     }
 
     /// Channel ids for the colour channels, in the order Photoshop stores them.
     pub const fn channel_ids(self) -> &'static [i16] {
         match self {
-            ColorMode::Grayscale => &[0],
-            ColorMode::Rgb => &[0, 1, 2],
+            ColorMode::Grayscale
+            | ColorMode::Bitmap
+            | ColorMode::Indexed
+            | ColorMode::Multichannel
+            | ColorMode::Duotone => &[0],
+            ColorMode::Rgb | ColorMode::Lab => &[0, 1, 2],
+            ColorMode::Cmyk => &[0, 1, 2, 3],
         }
     }
 
     pub fn from_code(code: u16) -> PsdResult<Self> {
         match code {
+            0 => Ok(ColorMode::Bitmap),
             1 => Ok(ColorMode::Grayscale),
+            2 => Ok(ColorMode::Indexed),
             3 => Ok(ColorMode::Rgb),
+            4 => Ok(ColorMode::Cmyk),
+            7 => Ok(ColorMode::Multichannel),
+            8 => Ok(ColorMode::Duotone),
+            9 => Ok(ColorMode::Lab),
             other => Err(PsdError::UnsupportedColorMode {
                 code: other,
                 name: mode_name(other),
@@ -151,8 +190,11 @@ impl PsdHeader {
     }
 
     /// `true` when the merged composite carries an alpha channel.
+    ///
+    /// W16-B: never for Multichannel, whose every channel is an ink.
     pub fn has_alpha(&self) -> bool {
-        self.channels > self.color_mode.color_channels()
+        self.color_mode != ColorMode::Multichannel
+            && self.channels > self.color_mode.color_channels()
     }
 
     /// Samples in one channel of the composite.
@@ -206,8 +248,18 @@ impl PsdHeader {
         if width == 0 || height == 0 {
             return Err(PsdError::EmptyCanvas { width, height });
         }
-        let depth = Depth::from_bits(cur.u16()?)?;
+        let bits = cur.u16()?;
         let color_mode = ColorMode::from_code(cur.u16()?)?;
+        // W16-B: a Bitmap file is 1 bit per sample on disk and is held
+        // expanded to 8 in memory (see [`ColorMode`]); 1 bit is legal for no
+        // other mode, and Bitmap for no other depth. Indexed is 8-bit only.
+        let depth = match (color_mode, bits) {
+            (ColorMode::Bitmap, 1) => Depth::Eight,
+            (ColorMode::Bitmap, other) => return Err(PsdError::UnsupportedDepth(other)),
+            (ColorMode::Indexed, 8) => Depth::Eight,
+            (ColorMode::Indexed, other) => return Err(PsdError::UnsupportedDepth(other)),
+            (_, bits) => Depth::from_bits(bits)?,
+        };
         let min = color_mode.color_channels();
         if channels < min {
             return Err(PsdError::ChannelCountTooSmall {
@@ -240,7 +292,12 @@ impl PsdHeader {
         sink.u16(self.channels);
         sink.u32(self.height);
         sink.u32(self.width);
-        sink.u16(self.depth.bits());
+        // W16-B: a Bitmap header is 1 bit on disk (see [`ColorMode`]).
+        sink.u16(if self.color_mode == ColorMode::Bitmap {
+            1
+        } else {
+            self.depth.bits()
+        });
         sink.u16(self.color_mode.code());
     }
 }
@@ -286,25 +343,93 @@ mod tests {
         }
     }
 
+    /// W16-B: every mode Photoshop defines is recognised; only codes it
+    /// never assigned (5, 6, 10+) are refused by name.
     #[test]
-    fn cmyk_lab_indexed_and_bitmap_are_refused_by_name() {
-        for (code, name) in [(0, "Bitmap"), (2, "Indexed"), (4, "CMYK"), (9, "Lab")] {
-            let err = ColorMode::from_code(code).unwrap_err();
-            match err {
-                PsdError::UnsupportedColorMode { code: c, name: n } => {
-                    assert_eq!((c, n), (code, name));
-                }
-                other => panic!("wrong error for {name}: {other}"),
-            }
+    fn every_photoshop_mode_code_is_recognised_and_unknown_codes_are_refused() {
+        for (code, mode) in [
+            (0, ColorMode::Bitmap),
+            (1, ColorMode::Grayscale),
+            (2, ColorMode::Indexed),
+            (3, ColorMode::Rgb),
+            (4, ColorMode::Cmyk),
+            (7, ColorMode::Multichannel),
+            (8, ColorMode::Duotone),
+            (9, ColorMode::Lab),
+        ] {
+            assert_eq!(ColorMode::from_code(code).unwrap(), mode);
+            assert_eq!(mode.code(), code);
+            assert_eq!(mode.channel_ids().len(), mode.color_channels() as usize);
+        }
+        for code in [5u16, 6, 10, 0xffff] {
+            assert!(matches!(
+                ColorMode::from_code(code).unwrap_err(),
+                PsdError::UnsupportedColorMode { code: c, .. } if c == code
+            ));
         }
     }
 
+    /// W16-B: the CMYK, Lab, Indexed, Multichannel and Duotone headers
+    /// round-trip; a Bitmap one is 1 bit on disk and 8 in memory.
     #[test]
-    fn one_bit_depth_is_refused() {
+    fn the_print_modes_round_trip_and_bitmap_is_one_bit_on_disk() {
+        for (mode, depth) in [
+            (ColorMode::Cmyk, Depth::Eight),
+            (ColorMode::Cmyk, Depth::Sixteen),
+            (ColorMode::Lab, Depth::Sixteen),
+            (ColorMode::Indexed, Depth::Eight),
+            (ColorMode::Multichannel, Depth::Eight),
+            (ColorMode::Duotone, Depth::Sixteen),
+            (ColorMode::Bitmap, Depth::Eight),
+        ] {
+            let h = PsdHeader {
+                channels: mode.color_channels(),
+                width: 9,
+                height: 2,
+                depth,
+                color_mode: mode,
+            };
+            assert_eq!(round_trip(h), h, "{mode:?} {depth:?}");
+        }
+        let mut s = Sink::new();
+        PsdHeader {
+            channels: 1,
+            width: 9,
+            height: 2,
+            depth: Depth::Eight,
+            color_mode: ColorMode::Bitmap,
+        }
+        .write(&mut s);
+        assert_eq!(&s.into_inner()[22..26], &[0, 1, 0, 0], "1 bit, mode 0");
+    }
+
+    #[test]
+    fn one_bit_depth_is_refused_outside_bitmap_and_indexed_is_eight_bit_only() {
         assert!(matches!(
             Depth::from_bits(1).unwrap_err(),
             PsdError::UnsupportedDepth(1)
         ));
+        let header = |bits: u16, mode: u16| {
+            let mut s = Sink::new();
+            s.tag(&SIGNATURE);
+            s.u16(VERSION_PSD);
+            s.zeros(6);
+            s.u16(4);
+            s.u32(2);
+            s.u32(2);
+            s.u16(bits);
+            s.u16(mode);
+            s.into_inner()
+        };
+        for (bits, mode) in [(1u16, 3u16), (1, 4), (8, 0), (16, 2)] {
+            let bytes = header(bits, mode);
+            let err =
+                PsdHeader::read(&mut Cursor::new(&bytes), &ReadOptions::default()).unwrap_err();
+            assert!(
+                matches!(err, PsdError::UnsupportedDepth(b) if b == bits),
+                "{bits}-bit mode {mode}: {err}"
+            );
+        }
     }
 
     #[test]

@@ -1,0 +1,1609 @@
+# Raster Studio interface strings, tr. One row per line: the English source, a TAB,
+# the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
+# Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
+@name	Türkçe
+ fps	 fps
+ frames	 kare
+ ms	 ms
+ px	 px
+0 bytes	0 bayt
+16 Bits/Channel	16 Bit/Kanal
+16 bit	16 bit
+32 Bits/Channel	32 Bit/Kanal
+3D	3B
+50% Grey	%50 Gri
+50% Threshold	%50 Eşik
+8 Bits/Channel	8 Bit/Kanal
+8 bit	8 bit
+90° Clockwise	90° Saat Yönünde
+90° Counter Clockwise	90° Saat Yönünün Tersine
+A CSV row has the wrong number of fields, at line	Bir CSV satırında alan sayısı yanlış, satır
+A blank canvas at any size	Her boyutta boş bir tuval
+A colour channel cannot be deleted	Bir renk kanalı silinemez
+A layered raster editor	Katmanlı bir raster düzenleyici
+A palette holds 2 to 256 colours	Bir palet 2 ile 256 arasında renk içerir
+A saved selection already has that name	Bu ada sahip kayıtlı bir seçim zaten var
+A saved selection: click to open Select > Load Selection, then choose it by name there	Kayıtlı bir seçim: Seç > Seçimi Yükle'yi açmak için tıklayın, sonra orada adıyla seçin
+A slice needs a name	Bir dilimin adı olmalı
+AV1 (smaller, newer players)	AV1 (daha küçük, daha yeni oynatıcılar)
+About Raster Studio	Raster Studio Hakkında
+Absolute Colorimetric	Mutlak Kolorimetrik
+Action sets	Eylem setleri
+Actions	Eylemler
+Adaptive (median cut)	Uyarlamalı (medyan kesim)
+Add "copy" to copied layers	Kopyalanan katmanlara "kopya" ekle
+Add Artboard Above	Üste Çalışma Yüzeyi Ekle
+Add Artboard Below	Alta Çalışma Yüzeyi Ekle
+Add Artboard Left	Sola Çalışma Yüzeyi Ekle
+Add Artboard Right	Sağa Çalışma Yüzeyi Ekle
+Add Filter Mask	Filtre Maskesi Ekle
+Add Media	Medya Ekle
+Add Noise…	Gürültü Ekle…
+Add a layer mask	Katman maskesi ekle
+Add a smart filter mask	Akıllı filtre maskesi ekle
+Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read	Oynatma kafasına video katmanı olarak bir video dosyası (MP4: H.264 veya AV1) ekle; ses okunmaz
+Add an adjustment layer	Ayarlama katmanı ekle
+Add another instance of this effect	Bu efektin başka bir örneğini ekle
+Add current colour	Geçerli rengi ekle
+Add export	Dışa aktarma ekle
+Add frame	Kare ekle
+Add or remove room around the image. Pixels are not resampled.	Görüntünün çevresine alan ekleyin veya kaldırın. Pikseller yeniden örneklenmez.
+Add shortcut	Kısayol ekle
+Add to Selection	Seçime Ekle
+Adds one guide at a document coordinate, in pixels.	Belge koordinatına piksel cinsinden bir kılavuz ekler.
+Adjustments	Ayarlamalar
+Advanced	Gelişmiş
+Again	Yinele
+Again with Copy	Kopyayla Yinele
+Aliased (pencil)	Yumuşatmasız (kurşun kalem)
+Align	Hizala
+Align the bottom edge to the canvas	Alt kenarı tuvale hizala
+Align the left edge to the canvas	Sol kenarı tuvale hizala
+Align the right edge to the canvas	Sağ kenarı tuvale hizala
+Align the top edge to the canvas	Üst kenarı tuvale hizala
+Align with layer	Katmanla hizala
+All	Tümü
+All Caps	Tümü Büyük Harf
+All Caps shapes every lowercase letter as its capital; Small Caps shapes it as a capital at 70 % size. The stored text keeps the case you typed.	Tümü Büyük Harf her küçük harfi büyük harf olarak şekillendirir; Küçük Büyük Harf onu %70 boyutta büyük harf olarak şekillendirir. Kayıtlı metin yazdığınız büyük/küçük harfi korur.
+All Layers	Tüm Katmanlar
+Alpha	Alfa
+Already used by	Zaten kullanan:
+Alt Tag	Alt Etiketi
+Amount	Miktar
+An export needs at least one output	Bir dışa aktarmanın en az bir çıktısı olmalı
+An image or project from this computer	Bu bilgisayardan bir görüntü veya proje
+Angle	Açı
+Angle (degrees)	Açı (derece)
+Angle jitter	Açı titreşimi
+Animation	Animasyon
+Another slice already has this name	Başka bir dilim zaten bu ada sahip
+Appearance	Görünüm
+Applied	Uygulandı
+Apply	Uygula
+Apply Guides	Kılavuzları Uygula
+Apply Image	Görüntü Uygula
+Apply Image…	Görüntü Uygula…
+Apply Mask	Maskeyi Uygula
+Apply Style	Stil Uygula
+Apply Style 1	Stil 1'i Uygula
+Apply Style Preset…	Stil Ön Ayarı Uygula…
+Apply the next comp	Sonraki kompozisyonu uygula
+Apply the previous comp	Önceki kompozisyonu uygula
+Apply this mask	Bu maskeyi uygula
+Approximate. The composited result is what the canvas shows.	Yaklaşık. Birleştirilmiş sonuç, tuvalin gösterdiğidir.
+Arbitrary…	Rastgele…
+Arc	Yay
+Arc Lower	Alt Yay
+Arc Upper	Üst Yay
+Arch	Kemer
+Arrange	Düzenle
+Artboard	Çalışma Yüzeyi
+Artboard from Layers	Katmanlardan Çalışma Yüzeyi
+Artboards in one document	Tek belgede çalışma yüzeyleri
+Artboards to Files…	Çalışma Yüzeylerini Dosyalara…
+Assign Profile	Profil Ata
+Assigned {name}: the pixel numbers are unchanged, so the colours look different	{name} atandı: piksel değerleri değişmedi, bu yüzden renkler farklı görünür
+Author	Yazar
+Auto Color	Otomatik Renk
+Auto Contrast	Otomatik Kontrast
+Auto Tone	Otomatik Ton
+Auto leading	Otomatik satır aralığı
+Auto-Align Layers…	Katmanları Otomatik Hizala…
+Auto-Blend Layers…	Katmanları Otomatik Karıştır…
+Automate	Otomatikleştir
+Autosaves of never-saved documents go here; empty uses the default	Hiç kaydedilmemiş belgelerin otomatik kayıtları buraya gider; boş bırakılırsa varsayılan kullanılır
+Average	Ortalama
+BMP…	BMP…
+Back to the colour this opened on	Açıldığı renge geri dön
+Background — double-click for the picker	Arka plan — seçici için çift tıklayın
+Based On	Temel alınan
+Baseline shift	Taban çizgisi kayması
+Baseline to baseline. Auto leading follows the type size.	Taban çizgisinden taban çizgisine. Otomatik satır aralığı yazı boyutunu izler.
+Batch	Toplu İş
+Batch…	Toplu İş…
+Bend	Bükme
+Bevel	Eğim
+Bevel & Emboss	Eğim ve Kabartma
+Bevel & Emboss…	Eğim ve Kabartma…
+Bind a text replacement variable to a text layer, or a visibility variable to any layer.	Bir metin katmanına metin değiştirme değişkeni ya da herhangi bir katmana görünürlük değişkeni bağlayın.
+Bitmap	Bitmap
+Bitmap…	Bitmap…
+Black	Siyah
+Black & White	Siyah Beyaz
+Black & White…	Siyah Beyaz…
+Black to Transparent	Siyahtan Saydama
+Black to White	Siyahtan Beyaza
+Black to white through the inks	Mürekkepler üzerinden siyahtan beyaza
+Blacks	Siyahlar
+Blend If	Karıştırma Koşulu
+Blend Mode: Color	Karışım Modu: Renk
+Blend Mode: Color Burn	Karışım Modu: Renk Yanması
+Blend Mode: Color Dodge	Karışım Modu: Renk Soldurma
+Blend Mode: Darken	Karışım Modu: Koyulaştır
+Blend Mode: Difference	Karışım Modu: Fark
+Blend Mode: Dissolve	Karışım Modu: Çözülme
+Blend Mode: Exclusion	Karışım Modu: Dışlama
+Blend Mode: Hard Light	Karışım Modu: Sert Işık
+Blend Mode: Hard Mix	Karışım Modu: Sert Karışım
+Blend Mode: Hue	Karışım Modu: Ton
+Blend Mode: Lighten	Karışım Modu: Aydınlat
+Blend Mode: Linear Burn	Karışım Modu: Doğrusal Yanma
+Blend Mode: Linear Dodge (Add)	Karışım Modu: Doğrusal Soldurma (Ekle)
+Blend Mode: Linear Light	Karışım Modu: Doğrusal Işık
+Blend Mode: Luminosity	Karışım Modu: Parlaklık
+Blend Mode: Multiply	Karışım Modu: Çarp
+Blend Mode: Normal	Karışım Modu: Normal
+Blend Mode: Overlay	Karışım Modu: Kaplama
+Blend Mode: Pin Light	Karışım Modu: Sabit Işık
+Blend Mode: Saturation	Karışım Modu: Doygunluk
+Blend Mode: Screen	Karışım Modu: Ekran
+Blend Mode: Soft Light	Karışım Modu: Yumuşak Işık
+Blend Mode: Vivid Light	Karışım Modu: Canlı Işık
+Blending	Karıştırma
+Blending Options	Karıştırma Seçenekleri
+Blending Options…	Karıştırma Seçenekleri…
+Blending options	Karıştırma seçenekleri
+Blends a source document, layer or channel into the active layer as one step.	Kaynak belgeyi, katmanı veya kanalı tek adımda etkin katmana karıştırır.
+Blends one channel of each of two sources into a new channel, a selection or a new document.	İki kaynağın her birinden bir kanalı yeni bir kanala, seçime veya yeni belgeye karıştırır.
+Blue	Mavi
+Blues	Maviler
+Blur	Bulanıklaştır
+Blur Gallery	Bulanıklaştırma Galerisi
+Blur More	Daha Fazla Bulanıklaştır
+Bold	Kalın
+Border Selection	Kenarlık Seçimi
+Border…	Kenarlık…
+Both axes	Her iki eksen
+Bottom	Alt
+Bottom Edges	Alt Kenarlar
+Bottom Left	Sol Alt
+Bottom Right	Sağ Alt
+Bottom Right Pixel Color	Sağ Alt Piksel Rengi
+Bottom left	Sol alt
+Bottom right	Sağ alt
+Box Blur…	Kutu Bulanıklaştırma…
+Box height	Kutu yüksekliği
+Brightness	Parlaklık
+Brightness jitter	Parlaklık titreşimi
+Brightness/Contrast	Parlaklık/Kontrast
+Brightness/Contrast…	Parlaklık/Kontrast…
+Bring Forward	Öne Getir
+Bring to Front	En Öne Getir
+Brush Editor	Fırça Düzenleyici
+Brush: Background	Fırça: Arka Plan
+Brush: Foreground	Fırça: Ön Plan
+Brushes	Fırçalar
+Bulge	Şişkinlik
+Butt	Düz
+CMYK Color	CMYK Renk
+Calculations	Hesaplamalar
+Calculations…	Hesaplamalar…
+Camera Raw…	Camera Raw…
+Canvas Size	Tuval Boyutu
+Canvas Size…	Tuval Boyutu…
+Canvas extension	Tuval uzantısı
+Caps	Büyük Harf
+Carries the XMP; the source's EXIF goes into JPEG only	XMP'yi taşır; kaynağın EXIF'i yalnızca JPEG'e gider
+Cell size (pixels)	Hücre boyutu (piksel)
+Center	Merkez
+Center horizontally on the canvas	Tuvalde yatay olarak ortala
+Center vertically on the canvas	Tuvalde dikey olarak ortala
+Centimeters	Santimetre
+Centre	Merkez
+Centre the view on this note	Görünümü bu notta ortala
+Change Bit Depth	Bit Derinliğini Değiştir
+Change Colour Mode	Renk Modunu Değiştir
+Change Layer Properties	Katman Özelliklerini Değiştir
+Change how many pixels the document has, or how large it prints.	Belgenin kaç pikseli olduğunu veya ne kadar büyük basılacağını değiştirin.
+Channel	Kanal
+Channel Mixer	Kanal Karıştırıcı
+Channel Mixer…	Kanal Karıştırıcı…
+Channel thumbnail	Kanal küçük resmi
+Channels	Kanallar
+Character	Karakter
+Character Style	Karakter Stili
+Character Styles	Karakter Stilleri
+Checkerboard	Dama Tahtası
+Choose 2 to 256 colours	2 ile 256 arasında renk seçin
+Choose a colour profile	Bir renk profili seçin
+Choose a destination folder	Bir hedef klasör seçin
+Choose a source folder	Bir kaynak klasör seçin
+Choose at least one page to open	Açmak için en az bir sayfa seçin
+Choose at least one side to trim	Kırpmak için en az bir kenar seçin
+Choose the Action to play	Oynatılacak eylemi seçin
+Choose the open grayscale document each channel of the new RGB document comes from.	Yeni RGB belgesinin her kanalının geleceği açık gri tonlamalı belgeyi seçin.
+Choose the pages to open, their resolution and how they open.	Açılacak sayfaları, çözünürlüklerini ve nasıl açılacaklarını seçin.
+Choose the source and the destination folders.	Kaynak ve hedef klasörleri seçin.
+Choose…	Seç…
+Clear	Temizle
+Clear All	Tümünü Temizle
+Clear Guides	Kılavuzları Temizle
+Clear History	Geçmişi Temizle
+Clear Layer Style	Katman Stilini Temizle
+Clear Slices	Dilimleri Temizle
+Clear Strokes	Konturları Temizle
+Clear existing guides	Mevcut kılavuzları temizle
+Clear the {noun} from the active text layer	{noun} öğesini etkin metin katmanından kaldır
+Cleared {n} slice(s)	{n} dilim temizlendi
+Click an item in the panel first	Önce panelde bir öğeye tıklayın
+Click anywhere to sample a colour	Renk örneklemek için herhangi bir yere tıklayın
+Click anywhere to sample a colour, or press Escape.	Renk örneklemek için herhangi bir yere tıklayın veya Esc tuşuna basın.
+Click the graph to add a point, drag a point to bend the curve, drag it off the graph to remove it	Nokta eklemek için grafiğe tıklayın, eğriyi bükmek için bir noktayı sürükleyin, kaldırmak için grafiğin dışına sürükleyin
+Click the preview to sample a colour from it	Önizlemeden renk örneklemek için önizlemeye tıklayın
+Click the preview to sample the colour to replace	Değiştirilecek rengi örneklemek için önizlemeye tıklayın
+Click the ramp to edit its stops.	Duraklarını düzenlemek için rampaya tıklayın.
+Clip to layer below	Alttaki katmana kırp
+Clipboard	Pano
+Clipping	Kırpma
+Close	Kapat
+Close All	Tümünü Kapat
+Close Alpha Channel	Alfa Kanalını Kapat
+Close Others	Diğerlerini Kapat
+Close panel	Paneli kapat
+Clouds	Bulutlar
+Codec	Codec
+Color	Renk
+Color Balance	Renk Dengesi
+Color Balance…	Renk Dengesi…
+Color Burn	Renk Yanması
+Color Dodge	Renk Soldurma
+Color Dynamics	Renk Dinamikleri
+Color Halftone…	Renkli Yarım Ton…
+Color Intensity	Renk Yoğunluğu
+Color Label	Renk Etiketi
+Color Lookup	Renk Arama
+Color Lookup Tables…	Renk Arama Tabloları…
+Color Lookup…	Renk Arama…
+Color Overlay	Renk Kaplaması
+Color Overlay…	Renk Kaplaması…
+Color Picker	Renk Seçici
+Color Range	Renk Aralığı
+Color Range…	Renk Aralığı…
+Color fringe cleanup: pulls the boundary pixels' color toward the nearby interior ink — a separate edit from mask refinement.	Renk saçağı temizliği: kenar piksellerinin rengini yakındaki iç mürekkebe doğru çeker — maske iyileştirmeden ayrı bir düzenleme.
+Color to Alpha…	Renkten Alfaya…
+Colors	Renkler
+Colour	Renk
+Colour varies once per stroke.	Renk her fırça darbesinde bir kez değişir.
+Colours	Renkler
+Colours must be 1 to 64, the tolerance above 0 and the corner length at least 1	Renkler 1 ile 64 arasında, tolerans 0'dan büyük ve köşe uzunluğu en az 1 olmalı
+Columns	Sütunlar
+Columns and rows with gutters between them, inside optional margins, in pixels.	Aralarında oluklar olan sütunlar ve satırlar, isteğe bağlı kenar boşlukları içinde, piksel cinsinden.
+Combine Shapes	Şekilleri Birleştir
+Commit (Enter)	Uygula (Enter)
+Commit Contents	İçeriği Onayla
+Composite	Bileşik
+Condensed	Dar
+Cone	Koni
+Constant	Sabit
+Constrain proportions	Oranları koru
+Content-Aware	İçeriğe Duyarlı
+Content-Aware Scale	İçeriğe Duyarlı Ölçekleme
+Contour	Kontur
+Contract Selection	Seçimi Daralt
+Contract by	Daraltma miktarı
+Contract…	Daralt…
+Contrast	Kontrast
+Conversion Options	Dönüştürme Seçenekleri
+Convert Formats	Biçimleri Dönüştür
+Convert Formats…	Biçimleri Dönüştür…
+Convert for Smart Filters	Akıllı Filtreler İçin Dönüştür
+Convert to Layers	Katmanlara Dönüştür
+Convert to Linked…	Bağlantılıya Dönüştür…
+Convert to Paragraph Text	Paragraf Metnine Dönüştür
+Convert to Point Text	Nokta Metne Dönüştür
+Convert to Profile	Profile Dönüştür
+Convert to Profile works on 8- and 16-bit documents	Profile Dönüştür 8 ve 16 bit belgelerde çalışır
+Convert to Profile…	Profile Dönüştür…
+Convert to Shape	Şekle Dönüştür
+Convert to Smart Object	Akıllı Nesneye Dönüştür
+Converted to {name} ({intent}): the numbers changed so the colours look the same	{name} profiline dönüştürüldü ({intent}): renkler aynı görünsün diye değerler değişti
+Cool	Soğuk
+Copper	Bakır
+Copy	Kopyala
+Copy Layer Style	Katman Stilini Kopyala
+Copy Merged	Birleştirilmiş Kopyala
+Copyright Notice	Telif Hakkı Bildirimi
+Corner length	Köşe uzunluğu
+Corner radius	Köşe yarıçapı
+Corner radius applies to rectangles; this path has no corners to round	Köşe yarıçapı dikdörtgenlere uygulanır; bu yolun yuvarlanacak köşesi yok
+Corners	Köşeler
+Count jitter	Sayı titreşimi
+Create Clipping Mask	Kırpma Maskesi Oluştur
+Create Layer	Katman Oluştur
+Create Layers	Katmanlar Oluştur
+Crop	Kırp
+Crop and Straighten Photos	Fotoğrafları Kırp ve Düzelt
+Crops the canvas to the content, judged by the basis below.	Tuvali, aşağıdaki ölçüte göre içeriğe kırpar.
+Crystallize…	Kristalize Et…
+Current Layer	Geçerli Katman
+Current Path	Geçerli Yol
+Curve tolerance	Eğri toleransı
+Curves	Eğriler
+Curves…	Eğriler…
+Custom	Özel
+Custom Brush	Özel Fırça
+Custom: with the Move tool, drag the 16 mesh handles on the canvas	Özel: Taşıma aracıyla tuvaldeki 16 ağ tutamacını sürükleyin
+Custom…	Özel…
+Cut	Kes
+Cyan	Camgöbeği
+Cyan / Red	Camgöbeği / Kırmızı
+Cyans	Camgöbekleri
+DDS…	DDS…
+DXF…	DXF…
+Dark	Koyu
+Dark Blue	Koyu Mavi
+Dark Grey	Koyu Gri
+Darken	Koyulaştır
+Darker Color	Daha Koyu Renk
+Dash	Kesik çizgi
+Data Set	Veri Kümesi
+Data Sets	Veri Kümeleri
+Data Sets…	Veri Kümeleri…
+Default	Varsayılan
+Default colours  (D)	Varsayılan renkler  (D)
+Default colours (D)	Varsayılan renkler (D)
+Define	Tanımla
+Define Brush Preset…	Fırça Ön Ayarı Tanımla…
+Define Custom Shape…	Özel Şekil Tanımla…
+Define New	Yeni Tanımla
+Define Pattern…	Desen Tanımla…
+Define…	Tanımla…
+Delete	Sil
+Delete Filter Mask	Filtre Maskesini Sil
+Delete Layer	Katmanı Sil
+Delete Mask	Maskeyi Sil
+Delete Vector Mask	Vektör Maskesini Sil
+Delete action	Eylemi sil
+Delete channel	Kanalı sil
+Delete frame	Kareyi sil
+Delete path	Yolu sil
+Delete selected layers	Seçili katmanları sil
+Delete set and its actions	Seti ve eylemlerini sil
+Delete stop	Durağı sil
+Delete the applied comp	Uygulanan kompozisyonu sil
+Delete the selected keyframe	Seçili ana kareyi sil
+Delete the selected tool preset	Seçili araç ön ayarını sil
+Delete the selected {noun}	Seçili {noun} öğesini sil
+Delete the smart filter mask	Akıllı filtre maskesini sil
+Delete this note	Bu notu sil
+Delete this smart filter	Bu akıllı filtreyi sil
+Delete this spot channel	Bu spot kanalı sil
+Density	Yoğunluk
+Dents…	Göçükler…
+Desaturate	Doygunluğu Azalt
+Description	Açıklama
+Deselect	Seçimi Kaldır
+Deselect Layers	Katman Seçimini Kaldır
+Despeckle	Benek Temizle
+Destination	Hedef
+Destination Space	Hedef Alan
+Detail	Ayrıntı
+Detail scales	Ayrıntı ölçekleri
+Diamond	Elmas
+Difference	Fark
+Difference Clouds	Fark Bulutları
+Diffuse…	Dağıt…
+Diffusion	Yayılma
+Diffusion Dither	Yayılma Taklidi
+Disable / Enable Filter Mask	Filtre Maskesini Devre Dışı Bırak / Etkinleştir
+Disable / Enable Mask	Maskeyi Devre Dışı Bırak / Etkinleştir
+Disable / Enable Vector Mask	Vektör Maskesini Devre Dışı Bırak / Etkinleştir
+Disable Mask	Maskeyi Devre Dışı Bırak
+Disable Vector Mask	Vektör Maskesini Devre Dışı Bırak
+Displace…	Yer Değiştir…
+Dissolve	Çözülme
+Distance	Uzaklık
+Distort	Bozulma
+Distribute	Dağıt
+Dither	Taklit
+Dither…	Taklit…
+Divide	Böl
+Dock this panel here	Bu paneli buraya yerleştir
+Document	Belge
+Document Bounds	Belge Sınırları
+Document Info	Belge Bilgisi
+Document Title	Belge Başlığı
+Document size	Belge boyutu
+Double-click to edit in Layer Style; drag to the trash to delete	Katman Stili'nde düzenlemek için çift tıklayın; silmek için çöpe sürükleyin
+Double-click to edit this filter's settings	Bu filtrenin ayarlarını düzenlemek için çift tıklayın
+Double-click to rename	Yeniden adlandırmak için çift tıklayın
+Drag a line with the Ruler first	Önce Cetvel ile bir çizgi sürükleyin
+Drag to zoom the view	Görünümü yakınlaştırmak için sürükleyin
+Drop Shadow	Gölge Düşür
+Drop Shadow…	Gölge Düşür…
+Duotone	Çift Ton
+Duotone Options	Çift Ton Seçenekleri
+Duotone…	Çift Ton…
+Duplicate	Çoğalt
+Duplicate Layer	Katmanı Çoğalt
+Duplicate Layer…	Katmanı Çoğalt…
+Duplicate frame	Kareyi çoğalt
+Dust & Scratches…	Toz ve Çizikler…
+EMF…	EMF…
+EXIF and XMP writing is not implemented — only ICC is embedded	EXIF ve XMP yazma uygulanmadı — yalnızca ICC gömülür
+EXR…	EXR…
+Ease In	Yavaş Başla
+Ease Out	Yavaş Bitir
+Edge Glow	Kenar Parlaması
+Edge refinement: feather, shift, smooth, and contrast over the mask's existing coverage — not subject recognition.	Kenar iyileştirme: maskenin mevcut kapsamı üzerinde yumuşatma, kaydırma, düzleştirme ve kontrast — konu tanıma değil.
+Edges	Kenarlar
+Edit	Düzen
+Edit Adjustment	Ayarlamayı Düzenle
+Edit Adjustment…	Ayarlamayı Düzenle…
+Edit Alpha Channel	Alfa Kanalını Düzenle
+Edit Contents…	İçeriği Düzenle…
+Edit Document Records	Belge Kayıtlarını Düzenle
+Edit Fill	Dolguyu Düzenle
+Edit Filter Mask	Filtre Maskesini Düzenle
+Edit Generator	Oluşturucuyu Düzenle
+Edit Group	Grubu Düzenle
+Edit Guides	Kılavuzları Düzenle
+Edit Raster	Raster Katmanı Düzenle
+Edit Saved Selection	Kayıtlı Seçimi Düzenle
+Edit Shape	Şekli Düzenle
+Edit Slices	Dilimleri Düzenle
+Edit Smart object	Akıllı Nesneyi Düzenle
+Edit Text	Metni Düzenle
+Edit Timeline	Zaman Çizelgesini Düzenle
+Edit brush…	Fırçayı düzenle…
+Edit fill	Dolguyu düzenle
+Edit gradient stops — click to open the editor	Degrade duraklarını düzenle — düzenleyiciyi açmak için tıklayın
+Edit in Quick Mask Mode	Hızlı Maske Modunda Düzenle
+Edit this ramp	Bu rampayı düzenle
+Effects	Efektler
+Effects apply to the whole layer and undo as one step.	Efektler tüm katmana uygulanır ve tek adımda geri alınır.
+Embed EXIF and XMP	EXIF ve XMP göm
+Embed Linked	Bağlantılıyı Göm
+Embed colour profile	Renk profilini göm
+Embedded source	Gömülü kaynak
+Emboss…	Kabartma…
+Enable / disable the smart filter mask	Akıllı filtre maskesini etkinleştir / devre dışı bırak
+Enable Mask	Maskeyi Etkinleştir
+Enable Vector Mask	Vektör Maskesini Etkinleştir
+Enable at least one export	En az bir dışa aktarmayı etkinleştirin
+Enabled	Etkin
+Enlarge smaller images	Küçük görüntüleri büyüt
+Enter a colour like #3366CC	#3366CC gibi bir renk girin
+Entropy	Entropi
+Equalize	Eşitle
+Essentials	Temel Öğeler
+Every enabled row is written when you export.	Dışa aktardığınızda etkin her satır yazılır.
+Every image in the source folder is fitted into the box and written to the destination folder in its own format.	Kaynak klasördeki her görüntü kutuya sığdırılır ve kendi biçiminde hedef klasöre yazılır.
+Every parameter is at its neutral value — there is nothing to clean	Tüm parametreler nötr değerinde — temizlenecek bir şey yok
+Every parameter is at its neutral value — there is nothing to refine	Tüm parametreler nötr değerinde — iyileştirilecek bir şey yok
+Every variable needs a name	Her değişkenin bir adı olmalı
+Exact	Tam
+Exclude Overlapping Shapes	Çakışan Şekilleri Hariç Tut
+Exclusion	Dışlama
+Expand Selection	Seçimi Genişlet
+Expand by	Genişletme miktarı
+Expand the dock	Yuvayı genişlet
+Expanded	Geniş
+Expand…	Genişlet…
+Export	Dışa Aktar
+Export As	Farklı Dışa Aktar
+Export Color Lookup	Renk Aramasını Dışa Aktar
+Export Contents…	İçeriği Dışa Aktar…
+Export Diagnostics…	Tanılamayı Dışa Aktar…
+Export Layers…	Katmanları Dışa Aktar…
+Export PDF	PDF Dışa Aktar
+Export as .ABR…	.ABR Olarak Dışa Aktar…
+Export as .ACO…	.ACO Olarak Dışa Aktar…
+Export as .ASL…	.ASL Olarak Dışa Aktar…
+Export set as .atn	Seti .atn olarak dışa aktar
+Export…	Dışa Aktar…
+Exposure	Pozlama
+Exposure…	Pozlama…
+Extra Bold	Ekstra Kalın
+Extra Condensed	Ekstra Dar
+Extra Expanded	Ekstra Geniş
+Extra Light	Ekstra İnce
+Extras	Ekstralar
+Extrude…	Kabart…
+Eyedropper	Damlalık
+Face	Yazı Biçimi
+Facet	Faset
+Fade	Soldur
+Fade…	Soldur…
+Family	Aile
+Feather	Yumuşat
+Feather Selection	Seçimi Yumuşat
+Feather radius	Yumuşatma yarıçapı
+Feather…	Yumuşat…
+Fibers…	Lifler…
+Field Blur…	Alan Bulanıklaştırma…
+File	Dosya
+File Info	Dosya Bilgisi
+File Info…	Dosya Bilgisi…
+File name	Dosya adı
+Files that fail are listed in batch-errors.txt in the destination.	Başarısız dosyalar hedefteki batch-errors.txt dosyasında listelenir.
+Fill	Dolgu
+Fill Filter Mask	Filtre Maskesini Doldur
+Fill Mask	Maskeyi Doldur
+Fill Screen	Ekranı Doldur
+Fill in File Info, or open a file that has EXIF, to embed metadata	Meta verileri gömmek için Dosya Bilgisi'ni doldurun veya EXIF içeren bir dosya açın
+Fill path with the foreground colour, on a new shape layer	Yolu ön plan rengiyle yeni bir şekil katmanında doldur
+Fill type	Dolgu türü
+Fills the active selection with the chosen contents.	Etkin seçimi seçilen içerikle doldurur.
+Fill…	Doldur…
+Filter	Filtre
+Filter Gallery	Filtre Galerisi
+Filter Gallery…	Filtre Galerisi…
+Find Edges	Kenarları Bul
+First line	İlk satır
+Fish	Balık
+Fisheye	Balık Gözü
+Fit on Screen	Ekrana Sığdır
+Fit the whole image in the window	Tüm görüntüyü pencereye sığdır
+Fixed height	Sabit yükseklik
+Flag	Bayrak
+Flame…	Alev…
+Flat Angled 40	Düz Açılı 40
+Flatten Image	Görüntüyü Düzleştir
+Flip Canvas Horizontal	Tuvali Yatay Çevir
+Flip Canvas Vertical	Tuvali Dikey Çevir
+Flip Horizontal	Yatay Çevir
+Flip Vertical	Dikey Çevir
+Flip View Horizontal	Görünümü Yatay Çevir
+Flip View Vertical	Görünümü Dikey Çevir
+Flow jitter	Akış titreşimi
+Folders	Klasörler
+Font: 	Yazı tipi: 
+Foreground strokes mark what to keep, background strokes what to drop; Preview shows the cut.	Ön plan darbeleri tutulacakları, arka plan darbeleri atılacakları işaretler; önizleme kesimi gösterir.
+Foreground — double-click for the picker	Ön plan — seçici için çift tıklayın
+Foreground/background jitter	Ön plan/arka plan titreşimi
+Format	Biçim
+Fourier	Fourier
+Fourier Transform	Fourier Dönüşümü
+Fragment	Parçala
+Frame	Çerçeve
+Frames	Kareler
+Free Transform	Serbest Dönüştür
+Free Transform a Copy	Bir Kopyayı Serbest Dönüştür
+From Transparency	Saydamlıktan
+Fullscreen	Tam ekran
+Fuzziness	Bulanıklık
+GIF…	GIF…
+Gamma	Gama
+Gamut Warning	Gamut Uyarısı
+Gaussian	Gauss
+Gaussian Blur…	Gauss Bulanıklığı…
+Generate Mockups	Maket Oluştur
+Generate Mockups…	Maket Oluştur…
+Give the brush a name	Fırçaya bir ad verin
+Give the export a file name	Dışa aktarmaya bir dosya adı verin
+Glass Menus	Cam Menüler
+Global light	Genel ışık
+Glyphs	Glifler
+Gradient	Degrade
+Gradient Editor	Degrade Düzenleyici
+Gradient Map	Degrade Haritası
+Gradient Map…	Degrade Haritası…
+Gradient Overlay	Degrade Kaplaması
+Gradient Overlay…	Degrade Kaplaması…
+Gradient…	Degrade…
+Gray	Gri
+Grayscale	Gri Tonlama
+Green	Yeşil
+Greens	Yeşiller
+Grid	Izgara
+Grid points	Izgara noktaları
+Group	Grup
+Group Layers	Katmanları Grupla
+Grow	Büyüt
+Guide Guy	Guide Guy
+Guides	Kılavuzlar
+Gutter	Oluk
+H	H
+H.264 (plays everywhere)	H.264 (her yerde oynatılır)
+HDR Toning	HDR Tonlama
+HDR Toning…	HDR Tonlama…
+HSB/HSL…	HSB/HSL…
+Halftone Screen	Yarım Ton Ekranı
+Hard Light	Sert Işık
+Hard Mix	Sert Karışım
+Hard Round 24	Sert Yuvarlak 24
+Hard Round 4	Sert Yuvarlak 4
+Hard edges, no blending. Pixel art only — it aliases on downscale.	Sert kenarlar, karıştırma yok. Yalnızca piksel sanatı için — küçültmede tırtıklanır.
+Harder Brush	Daha Sert Fırça
+Height	Yükseklik
+Height to 110%	Yüksekliği %110 yap
+Height to 125%	Yüksekliği %125 yap
+Height to 80%	Yüksekliği %80 yap
+Height to 90%	Yüksekliği %90 yap
+Help	Yardım
+Hide All	Tümünü Gizle
+Hide Layers	Katmanları Gizle
+Hide Selection	Seçimi Gizle
+Hide the source layer	Kaynak katmanı gizle
+High Contrast	Yüksek Kontrast
+High Pass…	Yüksek Geçiş…
+Highlights	Vurgular
+Histogram	Histogram
+Histories	Geçmişler
+History	Geçmiş
+Hold	Tut
+Horizontal Centers	Yatay Merkezler
+Horizontal Distortion	Yatay Bozulma
+Horizontal center guide	Yatay merkez kılavuzu
+Horizontal scale, in percent: widens or narrows the glyphs and their spacing	Yüzde olarak yatay ölçek: glifleri ve aralıklarını genişletir veya daraltır
+Horizontally	Yatay olarak
+Hue	Ton
+Hue jitter	Ton titreşimi
+Hue/Saturation	Ton/Doygunluk
+Hue/Saturation…	Ton/Doygunluk…
+ICC profile	ICC profili
+ICO…	ICO…
+Image	Görüntü
+Image Options	Görüntü Seçenekleri
+Image Rotation	Görüntü Döndürme
+Image Size	Görüntü Boyutu
+Image Size…	Görüntü Boyutu…
+Image size	Görüntü boyutu
+Import CSV…	CSV İçe Aktar…
+Import PDF	PDF İçe Aktar
+Import a CSV of data sets first	Önce veri kümelerinden oluşan bir CSV içe aktarın
+Import a CSV: the first row names the variables, every further row is one data set.	Bir CSV içe aktarın: ilk satır değişkenleri adlandırır, sonraki her satır bir veri kümesidir.
+In use	Kullanımda
+Inches	İnç
+Indexed Color	Dizinlenmiş Renk
+Indexed Color…	Dizinlenmiş Renk…
+Inflate	Şişir
+Info	Bilgi
+Ink	Mürekkep
+Ink Color	Mürekkep Rengi
+Ink printed at 0, 25, 50, 75 and 100% tint	%0, 25, 50, 75 ve 100 tonla basılan mürekkep
+Inner Glow	İç Parlama
+Inner Glow…	İç Parlama…
+Inner Radius	İç Yarıçap
+Inner Shadow	İç Gölge
+Inner Shadow…	İç Gölge…
+Inside	İçeride
+Intent	Amaç
+Intersect Shape Areas	Şekil Alanlarını Kesiştir
+Intersect with Selection	Seçimle Kesiştir
+Inverse	Ters Çevir
+Inverse Fourier Transform	Ters Fourier Dönüşümü
+Invert	Negatif
+Invert coverage	Kapsamı ters çevir
+Invert has no parameters	Negatif'in parametresi yok
+Iris Blur…	İris Bulanıklaştırma…
+Italic	İtalik
+JPEG carries the XMP and the source's EXIF	JPEG, XMP'yi ve kaynağın EXIF'ini taşır
+JPG…	JPG…
+Justify	İki Yana Yasla
+Kaleidoscope…	Kaleydoskop…
+Keep as it was	Olduğu gibi bırak
+Kept when a comp is first applied	Bir kompozisyon ilk uygulandığında korunur
+Kerning	Karakter aralığı
+Keyboard Shortcut Sheet…	Klavye Kısayolları Sayfası…
+Keyboard Shortcuts…	Klavye Kısayolları…
+Keywords	Anahtar sözcükler
+Kind	Tür
+Kurtosis	Basıklık
+Lab Color	Lab Renk
+Landscape	Yatay
+Language	Dil
+Large	Büyük
+Last Document State	Son Belge Durumu
+Last Filter	Son Filtre
+Last line	Son satır
+Layer	Katman
+Layer Comps	Katman Kompozisyonları
+Layer Edges	Katman Kenarları
+Layer Mask	Katman Maskesi
+Layer Style	Katman Stili
+Layer knocks out drop shadow	Katman gölgeyi dışarıda bırakır
+Layer via Copy	Kopyalayarak Katman
+Layer via Cut	Keserek Katman
+Layers	Katmanlar
+Layers panel options	Katmanlar paneli seçenekleri
+Left	Sol
+Left Edges	Sol Kenarlar
+Left indent	Sol girinti
+Length	Uzunluk
+Lens Blur…	Mercek Bulanıklaştırma…
+Lens Correction…	Mercek Düzeltme…
+Lens Flare…	Mercek Parlaması…
+Level	Düzey
+Levels	Düzeyler
+Levels…	Düzeyler…
+Light	İnce
+Light Grey	Açık Gri
+Lighten	Aydınlat
+Lighter Color	Daha Açık Renk
+Lighting Effects…	Işık Efektleri…
+Lightness	Açıklık
+Line	Çizgi
+Linear	Doğrusal
+Linear Burn	Doğrusal Yanma
+Linear Dodge (Add)	Doğrusal Soldurma (Ekle)
+Linear Light	Doğrusal Işık
+Link / Unlink Mask	Maskeyi Bağla / Bağlantıyı Kaldır
+Link Layers	Katmanları Bağla
+Link selected layers	Seçili katmanları bağla
+Link with layer	Katmanla bağla
+Linked	Bağlantılı
+Linked file	Bağlantılı dosya
+Liquify…	Sıvılaştır…
+Live Shape	Canlı Şekil
+Live preview	Canlı önizleme
+Live preview is off.	Canlı önizleme kapalı.
+Load	Yükle
+Load .atn	.atn yükle
+Load .cube file…	.cube dosyası yükle…
+Load Selection	Seçimi Yükle
+Load Selection…	Seçimi Yükle…
+Load actions	Eylemleri yükle
+Load channel as selection	Kanalı seçim olarak yükle
+Load path as a selection	Yolu seçim olarak yükle
+Loaded file	Yüklenen dosya
+Lock	Kilitle
+Lock All	Tümünü Kilitle
+Lock Guides	Kılavuzları Kilitle
+Lock Image Pixels	Görüntü Piksellerini Kilitle
+Lock Position	Konumu Kilitle
+Lock Transparent Pixels	Saydam Pikselleri Kilitle
+Lock all	Tümünü kilitle
+Lock pixels	Pikselleri kilitle
+Lock position	Konumu kilitle
+Lock transparent pixels	Saydam pikselleri kilitle
+Lookup table	Arama tablosu
+Luminance	Parlaklık
+Luminance of the preview source; the markers are the black and white points.	Önizleme kaynağının parlaklığı; işaretçiler siyah ve beyaz noktalardır.
+Luminosity	Parlaklık
+MP4…	MP4…
+Magenta	Macenta
+Magenta / Green	Macenta / Yeşil
+Magentas	Macentalar
+Magic Cut	Sihirli Kesim
+Magic Cut…	Sihirli Kesim…
+Make Frames	Kare Oluştur
+Make a selection first	Önce bir seçim yapın
+Make work path from selection	Seçimden çalışma yolu oluştur
+Manual	Elle
+Maps every colour onto one palette. The document keeps RGBA pixels; GIF and PNG export write this palette.	Her rengi tek bir palete eşler. Belge RGBA piksellerini korur; GIF ve PNG dışa aktarma bu paleti yazar.
+Maps the active layer onto a palette as one undo step; the document stays RGB.	Etkin katmanı tek bir geri alma adımında bir palete eşler; belge RGB kalır.
+Margins	Kenar boşlukları
+Mark this state so you can come back to it	Geri dönebilmek için bu durumu işaretle
+Mask	Maske
+Mask source	Maske kaynağı
+Match Color	Rengi Eşle
+Match Color…	Rengi Eşle…
+Matting	Kenar Ayıklama
+Maximum	Maksimum
+Maximum…	Maksimum…
+Mean	Ortalama
+Median	Medyan
+Median…	Medyan…
+Medium	Orta
+Memory	Bellek
+Menu Bar and Canvas	Menü Çubuğu ve Tuval
+Merge	Birleştir
+Merge Channels	Kanalları Birleştir
+Merge Channels…	Kanalları Birleştir…
+Merge Down	Aşağı Birleştir
+Merge Layers	Katmanları Birleştir
+Merge Visible	Görünenleri Birleştir
+Merged	Birleştirilmiş
+Method	Yöntem
+Metrics	Metrik
+Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.	Metrik, yazı tipinin kendi çift aralığını kullanır; 0 aralığı kapatır; Elle, şimdiki metnin her çiftinin arasına tek bir değer (1/1000 em) koyar ve sonradan yazılan karakterler aralıksız başlar; en az iki karakter gerekir, bu yüzden daha kısa metin ve Metin aracının varsayılanları bunu sunmaz. Şekillendiricide optik aralık yoktur, bu yüzden o mod sunulmaz.
+Mezzotint…	Mezotint…
+Midtones	Orta tonlar
+Millimeters	Milimetre
+Min diameter	Min. çap
+Min roundness	Min. yuvarlaklık
+Min size	Min. boyut
+Minimal	Minimal
+Minimum	Minimum
+Minimum size only applies when pressure controls size.	Minimum boyut yalnızca basınç boyutu denetlediğinde uygulanır.
+Minimum…	Minimum…
+Miter	Gönye
+Mode	Mod
+Modify	Değiştir
+Monochrome	Tek renkli
+Monotone	Tek ton
+More readouts	Diğer göstergeler
+More tabs	Diğer sekmeler
+Mosaic…	Mozaik…
+Motion Blur…	Hareket Bulanıklığı…
+Move Layer	Katmanı Taşı
+Move a control first: these settings would change nothing	Önce bir denetimi değiştirin: bu ayarlar hiçbir şeyi değiştirmez
+Move this panel	Bu paneli taşı
+Move this panel within its dock	Bu paneli yuvası içinde taşı
+Move to	Şuraya taşı
+Move with the layer	Katmanla birlikte taşı
+Multiply	Çarp
+Name	Ad
+Name Change	Ad Değişikliği
+Name the channel first.	Önce kanalı adlandırın.
+Navigator	Gezgin
+Nearest Neighbour	En Yakın Komşu
+Neutralize	Nötrleştir
+Neutrals	Nötrler
+New	Yeni
+New Adjustment Layer	Yeni Ayarlama Katmanı
+New Channel	Yeni Kanal
+New Document	Yeni Belge
+New Fill Layer	Yeni Dolgu Katmanı
+New Guide	Yeni Kılavuz
+New Guide Layout	Yeni Kılavuz Düzeni
+New Guide Layout…	Yeni Kılavuz Düzeni…
+New Guides from Shape	Şekilden Yeni Kılavuzlar
+New Guide…	Yeni Kılavuz…
+New Layer	Yeni Katman
+New Layer Based Slice	Katman Tabanlı Yeni Dilim
+New Selection	Yeni Seçim
+New Smart Object via Copy	Kopyalayarak Yeni Akıllı Nesne
+New Snapshot	Yeni Anlık Görüntü
+New Spot Channel	Yeni Spot Kanal
+New Spot Channel…	Yeni Spot Kanal…
+New Style Preset	Yeni Stil Ön Ayarı
+New channel	Yeni kanal
+New group	Yeni grup
+New layer	Yeni katman
+New layer comp	Yeni katman kompozisyonu
+New note at the centre of the view	Görünümün ortasında yeni not
+New path (saves the Work Path when it is selected)	Yeni yol (seçiliyken Çalışma Yolu'nu kaydeder)
+New set	Yeni set
+New size	Yeni boyut
+New style from the active layer	Etkin katmandan yeni stil
+New tool preset from the active tool	Etkin araçtan yeni araç ön ayarı
+New {noun} from the active text layer	Etkin metin katmanından yeni {noun}
+New…	Yeni…
+Next Blend Mode	Sonraki Karışım Modu
+No Color	Renk Yok
+No character styles yet. New records the active text layer's font, size and look.	Henüz karakter stili yok. Yeni, etkin metin katmanının yazı tipini, boyutunu ve görünümünü kaydeder.
+No command loads a channel as the selection in this build; the Select menu's Load Selection restores a saved selection instead	Bu sürümde hiçbir komut bir kanalı seçim olarak yüklemez; Seç menüsündeki Seçimi Yükle bunun yerine kayıtlı bir seçimi geri yükler
+No commands to bind	Bağlanacak komut yok
+No document	Belge yok
+No document is open	Açık belge yok
+No export selected	Dışa aktarma seçilmedi
+No faces listed for this family name	Bu aile adı için listelenen yazı biçimi yok
+No frames yet. Add frame makes an _a_ layer: each one is a frame, bottom first.	Henüz kare yok. Kare ekle bir _a_ katmanı oluşturur: her biri bir karedir, en alttaki önce gelir.
+No guide crosses the canvas	Tuvali kesen kılavuz yok
+No installed family matches	Eşleşen yüklü aile yok
+No layer comps yet. New Layer Comp records every layer's visibility, position and appearance.	Henüz katman kompozisyonu yok. Yeni Katman Kompozisyonu her katmanın görünürlüğünü, konumunu ve görünüşünü kaydeder.
+No layers yet. Add one with the + button below.	Henüz katman yok. Aşağıdaki + düğmesiyle bir tane ekleyin.
+No layers yet: each top-level layer gets a bar on the timeline.	Henüz katman yok: en üst düzeydeki her katman zaman çizelgesinde bir çubuk alır.
+No notes yet. Click the canvas with the Note tool (I), or New Note pins one at the centre of the view; notes are saved with the document and never exported.	Henüz not yok. Not aracıyla (I) tuvale tıklayın ya da Yeni Not görünümün ortasına bir tane iğneler; notlar belgeyle kaydedilir ve asla dışa aktarılmaz.
+No open document is the same size as this one	Açık belgelerin hiçbiri bununla aynı boyutta değil
+No paragraph styles yet. New records the active text layer's alignment, indents and spacing.	Henüz paragraf stili yok. Yeni, etkin metin katmanının hizalamasını, girintilerini ve aralığını kaydeder.
+No pattern chosen — the overlay paints nothing.	Desen seçilmedi — kaplama hiçbir şey boyamaz.
+No patterns are defined yet	Henüz tanımlı desen yok
+No profile file was chosen	Profil dosyası seçilmedi
+No recent files yet	Henüz son kullanılan dosya yok
+No selection has been saved	Kayıtlı seçim yok
+No source recorded for this object	Bu nesne için kayıtlı kaynak yok
+No stop selected	Seçili durak yok
+No style presets yet. Define one with Layer > Layer Style > Define Style Preset, or add a Photoshop library with File > Open (.asl).	Henüz stil ön ayarı yok. Katman > Katman Stili > Stil Ön Ayarı Tanımla ile bir tane tanımlayın ya da Dosya > Aç (.asl) ile bir Photoshop kitaplığı ekleyin.
+No styles yet. The + button saves the active layer's style; File > Open loads an .asl style library.	Henüz stil yok. + düğmesi etkin katmanın stilini kaydeder; Dosya > Aç bir .asl stil kitaplığı yükler.
+No such command	Böyle bir komut yok
+No tool presets yet. New Tool Preset saves the active tool with its current options.	Henüz araç ön ayarı yok. Yeni Araç Ön Ayarı, etkin aracı geçerli seçenekleriyle kaydeder.
+Noise	Gürültü
+None	Yok
+Normal	Normal
+Normal Map…	Normal Haritası…
+Not a hex colour	Onaltılık bir renk değil
+Not installed — shaping with	Yüklü değil — şununla şekillendiriliyor:
+Not saved yet	Henüz kaydedilmedi
+Notes	Notlar
+Nothing has changed	Hiçbir şey değişmedi
+Nothing in this submenu is available right now	Bu alt menüdeki hiçbir şey şu anda kullanılamıyor
+Nothing is left to learn the background from: paint over it with the background brush.	Arka planı öğrenecek bir şey kalmadı: arka plan fırçasıyla üzerini boyayın.
+Nothing to measure yet — paint or place something on this layer first	Henüz ölçülecek bir şey yok — önce bu katmana bir şey boyayın veya yerleştirin
+Nothing to preview.	Önizlenecek bir şey yok.
+OK	Tamam
+Oblique	Eğik
+Off: the wheel pans the view and Ctrl+wheel zooms	Kapalı: tekerlek görünümü kaydırır, Ctrl+tekerlek yakınlaştırır
+Offset…	Kaydır…
+Oil Paint…	Yağlı Boya…
+One page holding the flattened image; no vector content.	Düzleştirilmiş görüntüyü içeren tek sayfa; vektör içerik yok.
+Onion skin	Soğan kabuğu
+Only English is available in this build	Bu sürümde yalnızca İngilizce kullanılabilir
+Only a mask channel can be loaded as a selection here	Burada yalnızca bir maske kanalı seçim olarak yüklenebilir
+Only web-safe colours	Yalnızca web güvenli renkler
+Opacity	Opaklık
+Opacity 10%	Opaklık %10
+Opacity 100%	Opaklık %100
+Opacity 20%	Opaklık %20
+Opacity 30%	Opaklık %30
+Opacity 40%	Opaklık %40
+Opacity 50%	Opaklık %50
+Opacity 60%	Opaklık %60
+Opacity 70%	Opaklık %70
+Opacity 80%	Opaklık %80
+Opacity 90%	Opaklık %90
+Opacity jitter	Opaklık titreşimi
+Opacity key	Opaklık ana karesi
+Opacity must be between 0% and 100%	Opaklık %0 ile %100 arasında olmalı
+Opacity scales the layer and its effects; Fill scales the layer's own pixels only.	Opaklık katmanı ve efektlerini ölçekler; Dolgu yalnızca katmanın kendi piksellerini ölçekler.
+Opacity stops sit above the bar, colour stops below it.	Opaklık durakları çubuğun üstünde, renk durakları altında durur.
+Open	Aç
+Open .ABR…	.ABR Aç…
+Open .ACO…	.ACO Aç…
+Open .ASL…	.ASL Aç…
+Open Recent	Son Kullanılanı Aç
+Open a document first	Önce bir belge açın
+Open a document to animate it.	Canlandırmak için bir belge açın.
+Open a document to apply styles to its layers.	Katmanlarına stil uygulamak için bir belge açın.
+Open a document to insert glyphs into its text.	Metnine glif eklemek için bir belge açın.
+Open a document to keep text styles in it.	Metin stillerini içinde tutmak için bir belge açın.
+Open a document to lay guides out on it.	Üzerine kılavuz yerleştirmek için bir belge açın.
+Open a document to pin notes on it.	Üzerine not iğnelemek için bir belge açın.
+Open a document to record layer comps.	Katman kompozisyonları kaydetmek için bir belge açın.
+Open a document to see its CSS	CSS'ini görmek için bir belge açın
+Open a document to see its facts.	Bilgilerini görmek için bir belge açın.
+Open a document to see its histogram	Histogramını görmek için bir belge açın
+Open a document to see its history	Geçmişini görmek için bir belge açın
+Open a document to see its properties	Özelliklerini görmek için bir belge açın
+Open another document, or add another pixel layer, to match its colours.	Renklerini eşlemek için başka bir belge açın veya başka bir piksel katmanı ekleyin.
+Open as	Farklı aç
+Open editor…	Düzenleyiciyi aç…
+Open the Adjustments panel	Ayarlamalar panelini aç
+Open…	Aç…
+Operation	İşlem
+Orange	Turuncu
+Other	Diğer
+Out of gamut	Gamut dışı
+Outer Glow	Dış Parlama
+Outer Glow…	Dış Parlama…
+Outline the path	Yolun konturunu çiz
+Output	Çıktı
+Output channel	Çıktı kanalı
+Outside	Dışarıda
+Overlay	Kaplama
+PBM…	PBM…
+PDF Presentation…	PDF Sunusu…
+PDF…	PDF…
+PGM…	PGM…
+PNG…	PNG…
+PPM…	PPM…
+Page	Sayfa
+Page {n}	Sayfa {n}
+Page {page} opens at {w} x {h} px	Sayfa {page}, {w} x {h} px olarak açılır
+Pages	Sayfalar
+Paint	Boya
+Paint Filter Mask	Filtre Maskesini Boya
+Paint Mask	Maskeyi Boya
+Paint over the part to keep with the foreground brush first.	Önce tutulacak kısmı ön plan fırçasıyla boyayın.
+Paint over what to keep and over what to drop	Tutulacak ve atılacak kısımların üzerini boyayın
+Paint the inside of the path	Yolun içini boya
+Painting	Boyama
+Paints a band along the active selection's border.	Etkin seçimin kenarı boyunca bir şerit boyar.
+Pair kerning	Çift aralığı
+Palette	Palet
+Paragraph	Paragraf
+Paragraph Style	Paragraf Stili
+Paragraph Styles	Paragraf Stilleri
+Particles…	Parçacıklar…
+Paste	Yapıştır
+Paste Into	İçine Yapıştır
+Paste Layer Style	Katman Stilini Yapıştır
+Paste Outside	Dışına Yapıştır
+Paste Special	Özel Yapıştır
+Paste in Place	Yerinde Yapıştır
+Path	Yol
+Path Blur…	Yol Bulanıklaştırma…
+Path editing lives in the Paths panel	Yol düzenleme Yollar panelindedir
+Paths	Yollar
+Pattern	Desen
+Pattern Dither	Desen Taklidi
+Pattern Overlay	Desen Kaplaması
+Pattern Overlay…	Desen Kaplaması…
+Pattern Preview	Desen Önizlemesi
+Pattern…	Desen…
+Pencil 1px	Kurşun Kalem 1 px
+Percent	Yüzde
+Perceptual	Algısal
+Perspective	Perspektif
+Perspective Warp	Perspektif Çarpıtma
+Photo Filter	Fotoğraf Filtresi
+Photo Filter…	Fotoğraf Filtresi…
+Photography	Fotoğrafçılık
+Picas	Pika
+Pick a filter; it applies at its default settings.	Bir filtre seçin; varsayılan ayarlarıyla uygulanır.
+Pin Light	Sabit Işık
+Pinch…	Sıkıştır…
+Pixel Grid	Piksel Izgarası
+Pixel dimensions	Piksel boyutları
+Pixel mask	Piksel maskesi
+Pixelate	Pikselleştir
+Pixels	Piksel
+Place Embedded…	Gömülü Yerleştir…
+Place Linked…	Bağlantılı Yerleştir…
+Play	Oynat
+Play from step	Adımdan itibaren oynat
+Play selection	Seçimi oynat
+Play this step (unchecked steps are passed over)	Bu adımı oynat (işaretsiz adımlar atlanır)
+Plays a recorded Action on every image in the source folder and saves each result to the destination.	Kaynak klasördeki her görüntüde kayıtlı bir eylemi oynatır ve her sonucu hedefe kaydeder.
+Pointer	İşaretçi
+Pointillize…	Noktacılık…
+Points	Punto
+Polar Coordinates…	Kutupsal Koordinatlar…
+Position	Konum
+Position is locked — unlock it in the Layers panel to move or resize	Konum kilitli — taşımak veya boyutlandırmak için Katmanlar panelinde kilidi açın
+Position key	Konum ana karesi
+Posterize	Posterleştir
+Posterize…	Posterleştir…
+Precise Cursor	Hassas İmleç
+Preferences…	Tercihler…
+Preserve Transparency	Saydamlığı Koru
+Preserve luminosity	Parlaklığı koru
+Preset Manager…	Ön Ayar Yöneticisi…
+Press a key…	Bir tuşa basın…
+Pressure controls flow	Basınç akışı denetler
+Pressure controls size	Basınç boyutu denetler
+Preview	Önizleme
+Preview against	Şuna karşı önizle
+Preview is off.	Önizleme kapalı.
+Previewed on the active layer; applied to its pixels as one undoable step.	Etkin katmanda önizlenir; piksellerine geri alınabilir tek bir adımda uygulanır.
+Previous Blend Mode	Önceki Karışım Modu
+Print Size	Baskı Boyutu
+Print as PDF…	PDF Olarak Yazdır…
+Print size	Baskı boyutu
+Prints the grayscale image through one to four inks, each through its own curve. The inks are applied to the pixels when the mode changes.	Gri tonlamalı görüntüyü her biri kendi eğrisinden geçen bir ile dört mürekkeple basar. Mürekkepler mod değişince piksellere uygulanır.
+Print…	Yazdır…
+Profile	Profil
+Profile from File…	Dosyadan Profil…
+Profiles are assigned to RGB documents	Profiller RGB belgelere atanır
+Profiles are converted between in RGB documents	Profiller arası dönüştürme RGB belgelerde yapılır
+Profiles belong to RGB documents; convert to RGB first	Profiller RGB belgelere aittir; önce RGB'ye dönüştürün
+Proof Colors	Renk Provası
+Properties	Özellikler
+Puppet Warp	Kukla Çarpıtma
+Purge	Temizle
+Purple	Mor
+Quadtone	Dört Ton
+Quality	Kalite
+Quick Export Layer as PNG…	Katmanı PNG Olarak Hızlı Dışa Aktar…
+Quit	Çık
+RGB Color	RGB Renk
+Radial Blur…	Radyal Bulanıklaştırma…
+Radius	Yarıçap
+Radius (px)	Yarıçap (px)
+Range	Aralık
+Raster Studio Help	Raster Studio Yardımı
+Rasterize	Rasterleştir
+Reassign anyway	Yine de yeniden ata
+Recent	Son Kullanılanlar
+Record	Kaydet
+Record Source Size	Kaynak Boyutunu Kaydet
+Record an Action in the Actions panel first	Önce Eylemler panelinde bir eylem kaydedin
+Record an edit, then replay the whole sequence on any document with at least as many layers.	Bir düzenleme kaydedin, sonra tüm diziyi en az bu kadar katmanı olan herhangi bir belgede oynatın.
+Record into set	Sete kaydet
+Recording: every edit is captured until Stop	Kaydediliyor: Durdur'a kadar her düzenleme yakalanır
+Red	Kırmızı
+Redefine the selected {noun} from the active text layer, restyling every layer that uses it	Seçili {noun} öğesini etkin metin katmanından yeniden tanımla ve onu kullanan her katmanın stilini yenile
+Redo	Yinele
+Reds	Kırmızılar
+Reduce Colors	Renkleri Azalt
+Reduce Colors changed nothing: the layer already uses only colours of that palette	Renkleri Azalt hiçbir şeyi değiştirmedi: katman zaten yalnızca o paletin renklerini kullanıyor
+Reduce Colors: the layer now uses at most {n} colours	Renkleri Azalt: katman artık en fazla {n} renk kullanıyor
+Reduce Colors…	Renkleri Azalt…
+Reduce Noise…	Gürültüyü Azalt…
+Reduces the grayscale image to pure black and white. The layers are flattened into one, over white.	Gri tonlamalı görüntüyü saf siyah ve beyaza indirger. Katmanlar beyaz üzerinde teke düzleştirilir.
+Reference point: Bottom	Başvuru noktası: Alt
+Reference point: Bottom Left	Başvuru noktası: Sol Alt
+Reference point: Bottom Right	Başvuru noktası: Sağ Alt
+Reference point: Centre	Başvuru noktası: Merkez
+Reference point: Left	Başvuru noktası: Sol
+Reference point: Right	Başvuru noktası: Sağ
+Reference point: Top	Başvuru noktası: Üst
+Reference point: Top Left	Başvuru noktası: Sol Üst
+Reference point: Top Right	Başvuru noktası: Sağ Üst
+Refine	İyileştir
+Refine Edge…	Kenarı İyileştir…
+Refine Mask	Maskeyi İyileştir
+Refine Mask…	Maskeyi İyileştir…
+Regular	Normal
+Relative	Göreli
+Relative Colorimetric	Göreli Kolorimetrik
+Release Clipping Mask	Kırpma Maskesini Serbest Bırak
+Release Notes	Sürüm Notları
+Relink to File…	Dosyaya Yeniden Bağla…
+Remove Black Matte	Siyah Kenarı Kaldır
+Remove Color Fringe	Renk Saçağını Kaldır
+Remove Color Fringe…	Renk Saçağını Kaldır…
+Remove Fringe	Saçağı Kaldır
+Remove White Matte	Beyaz Kenarı Kaldır
+Remove export	Dışa aktarmayı kaldır
+Remove this instance of the effect	Efektin bu örneğini kaldır
+Remove this shortcut	Bu kısayolu kaldır
+Rename Layer	Katmanı Yeniden Adlandır
+Rename Layer…	Katmanı Yeniden Adlandır…
+Rename set	Seti yeniden adlandır
+Render	Oluştur
+Rendering the preview…	Önizleme oluşturuluyor…
+Repeat…	Yinele…
+Replace Color	Rengi Değiştir
+Replace Color…	Rengi Değiştir…
+Replace Contents	İçeriği Değiştir
+Replace Contents…	İçeriği Değiştir…
+Replace existing guides	Mevcut kılavuzları değiştir
+Replay	Yeniden oynat
+Report an Issue	Sorun Bildir
+Reselect	Yeniden Seç
+Reset	Sıfırla
+Reset Transform	Dönüştürmeyi Sıfırla
+Reset View Rotation	Görünüm Döndürmeyi Sıfırla
+Reset all shortcuts	Tüm kısayolları sıfırla
+Resize Canvas	Tuvali Yeniden Boyutlandır
+Resize Images	Görüntüleri Yeniden Boyutlandır
+Resize Images…	Görüntüleri Yeniden Boyutlandır…
+Resolution	Çözünürlük
+Resolution must be greater than zero	Çözünürlük sıfırdan büyük olmalı
+Restore Layer	Katmanı Geri Yükle
+Result	Sonuç
+Return this tool to its defaults	Bu aracı varsayılanlarına döndür
+Reveal All	Tümünü Göster
+Reveal Selection	Seçimi Göster
+Reverse	Tersine Çevir
+Revert	Geri Döndür
+Rewrites every pixel layer's numbers so the picture looks the same under the destination profile, as one undo step.	Görüntü hedef profil altında aynı görünsün diye her piksel katmanının değerlerini tek bir geri alma adımında yeniden yazar.
+Right	Sağ
+Right (narrow)	Sağ (dar)
+Right (wide)	Sağ (geniş)
+Right Edges	Sağ Kenarlar
+Right indent	Sağ girinti
+Right-click a swatch to remove it	Kaldırmak için bir renk örneğine sağ tıklayın
+Ring	Halka
+Ripple…	Dalgalanma…
+Rise	Yükseliş
+Rotate	Döndür
+Rotate 180°	180° Döndür
+Rotate 90° Clockwise	90° Saat Yönünde Döndür
+Rotate 90° Counter Clockwise	90° Saat Yönünün Tersine Döndür
+Rotate Canvas	Tuvali Döndür
+Rotate the active layer so the measured line is level (Enter)	Ölçülen çizgi düz olsun diye etkin katmanı döndür (Enter)
+Rotates the canvas and every layer. Right angles are pixel-exact; other angles resample.	Tuvali ve her katmanı döndürür. Dik açılar piksel tam; diğer açılar yeniden örneklenir.
+Rotation key	Döndürme ana karesi
+Round	Yuvarlak
+Round (computed)	Yuvarlak (hesaplanan)
+Rounded Steps	Yuvarlatılmış Adımlar
+Roundness jitter	Yuvarlaklık titreşimi
+Rows	Satırlar
+Rulers	Cetveller
+Run	Çalıştır
+SVG…	SVG…
+Same Radii	Aynı Yarıçaplar
+Sample a colour from the canvas	Tuvalden bir renk örnekle
+Sample radius	Örnek yarıçapı
+Sampled	Örneklenmiş
+Sampled colour	Örneklenen renk
+Sampled tip not loaded; painting round	Örneklenen uç yüklenmedi; yuvarlak boyanıyor
+Satin…	Saten…
+Saturation	Doygunluk
+Saturation jitter	Doygunluk titreşimi
+Save	Kaydet
+Save As	Farklı Kaydet
+Save As…	Farklı Kaydet…
+Save Brush	Fırçayı Kaydet
+Save Selection	Seçimi Kaydet
+Save Selection…	Seçimi Kaydet…
+Save actions	Eylemleri kaydet
+Save as PSD…	PSD Olarak Kaydet…
+Save current brush	Geçerli fırçayı kaydet
+Save selection as channel	Seçimi kanal olarak kaydet
+Saves every image in the source folder to the destination in another format, quality or size.	Kaynak klasördeki her görüntüyü başka bir biçim, kalite veya boyutta hedefe kaydeder.
+Scale	Ölçekle
+Scale %	Ölçek %
+Scale Effects	Efektleri Ölçekle
+Scale Effects…	Efektleri Ölçekle…
+Scale H	Ölçek Y
+Scale V	Ölçek D
+Scale key	Ölçek ana karesi
+Scale:	Ölçek:
+Scales every size and distance of the active layer's style as one undo step.	Etkin katmanın stilindeki her boyutu ve uzaklığı tek bir geri alma adımında ölçekler.
+Scaling by 100% changes nothing	%100 ölçekleme hiçbir şeyi değiştirmez
+Scratch directory	Geçici dizin
+Screen	Ekran
+Screen, print and social presets	Ekran, baskı ve sosyal medya ön ayarları
+Script…	Komut Dosyası…
+Scroll wheel zooms instead of scrolling	Kaydırma tekerleği kaydırmak yerine yakınlaştırır
+Search Commands…	Komut Ara…
+Search layers	Katman ara
+Search layers by name	Katmanları ada göre ara
+Select	Seç
+Select All	Tümünü Seç
+Select Bottom Layer	En Alttaki Katmanı Seç
+Select Layer Above	Üstteki Katmanı Seç
+Select Layer Below	Alttaki Katmanı Seç
+Select Linked Layers	Bağlantılı Katmanları Seç
+Select None	Hiçbirini Seçme
+Select Top Layer	En Üstteki Katmanı Seç
+Select a layer first	Önce bir katman seçin
+Select a layer to see its CSS	CSS'ini görmek için bir katman seçin
+Select a layer to see its properties	Özelliklerini görmek için bir katman seçin
+Select a layer: a click on a style applies it to the active layer.	Bir katman seçin: bir stile tıklamak onu etkin katmana uygular.
+Select a path first	Önce bir yol seçin
+Select a text layer, or type into one: a click inserts the glyph at the caret.	Bir metin katmanı seçin veya birine yazın: tıklama glifi imleç konumuna ekler.
+Select every pixel near one colour	Bir renge yakın her pikseli seç
+Selection	Seçim
+Selection Edges	Seçim Kenarları
+Selection: white is replaced, black is kept.	Seçim: beyaz değiştirilir, siyah korunur.
+Selective Color	Seçici Renk
+Selective Color…	Seçici Renk…
+Selects a band of this width along the selection's edge	Seçimin kenarı boyunca bu genişlikte bir şerit seçer
+Semi Condensed	Yarı Dar
+Semi Expanded	Yarı Geniş
+Semibold	Yarı Kalın
+Send Backward	Geri Gönder
+Send to Back	En Arkaya Gönder
+Separate documents	Ayrı belgeler
+Separate keywords with commas or semicolons.	Anahtar sözcükleri virgül veya noktalı virgülle ayırın.
+Sepia	Sepya
+Set	Set
+Set the History Brush to paint from this state (the marked row)	Geçmiş Fırçasını bu durumdan boyayacak şekilde ayarla (işaretli satır)
+Shadows	Gölgeler
+Shadows/Highlights	Gölgeler/Vurgular
+Shadows/Highlights…	Gölgeler/Vurgular…
+Shape	Şekil
+Shape Dynamics	Şekil Dinamikleri
+Shape Mosaic…	Şekil Mozaiği…
+Sharpen	Keskinleştir
+Sharpen Edges	Kenarları Keskinleştir
+Sharpen More	Daha Fazla Keskinleştir
+Sharpest, with a little ringing on hard edges.	En keskin; sert kenarlarda biraz halka oluşur.
+Shear…	Makaslama…
+Shift Edge	Kenarı Kaydır
+Show	Göster
+Show / Hide Layer	Katmanı Göster / Gizle
+Show / hide layer	Katmanı göster / gizle
+Show / hide the effects list	Efekt listesini göster / gizle
+Show / hide the layer style	Katman stilini göster / gizle
+Show / hide this channel	Bu kanalı göster / gizle
+Show / hide this effect	Bu efekti göster / gizle
+Show / hide this path	Bu yolu göster / gizle
+Show / hide this smart filter	Bu akıllı filtreyi göster / gizle
+Show Layers	Katmanları Göster
+Show every layer	Her katmanı göster
+Show or hide the position, size and alignment fields	Konum, boyut ve hizalama alanlarını göster veya gizle
+Show or hide the recorded steps	Kaydedilen adımları göster veya gizle
+Show or hide the set's actions	Setin eylemlerini göster veya gizle
+Show this alpha channel alone in grayscale and paint into it; click again to store it	Bu alfa kanalını tek başına gri tonlamada göster ve içine boya; saklamak için yeniden tıklayın
+Sides	Kenarlar
+Similar	Benzer
+Size	Boyut
+Size jitter	Boyut titreşimi
+Skew	Eğ
+Skewness	Çarpıklık
+Slice Options	Dilim Seçenekleri
+Slice Options…	Dilim Seçenekleri…
+Slices	Dilimler
+Slices from Guides	Kılavuzlardan Dilimler
+Slices…	Dilimler…
+Small	Küçük
+Small Caps	Küçük Büyük Harf
+Smart Blur…	Akıllı Bulanıklaştırma…
+Smart Filter	Akıllı Filtre
+Smart Filters	Akıllı Filtreler
+Smart Guides	Akıllı Kılavuzlar
+Smart Object	Akıllı Nesne
+Smart Sharpen…	Akıllı Keskinleştirme…
+Smart filter mask: click to paint on it	Akıllı filtre maskesi: üzerine boyamak için tıklayın
+Smooth	Yumuşak
+Smooth Selection	Seçimi Düzleştir
+Smooth draws grey-scale edges; None draws hard, aliased edges. The glyph scaler has one smooth mode, so Sharp, Crisp and Strong are not offered.	Yumuşak gri tonlamalı kenarlar çizer; Yok sert, tırtıklı kenarlar çizer. Glif ölçekleyicinin tek bir yumuşak modu vardır, bu yüzden Keskin, Net ve Güçlü sunulmaz.
+Smooth…	Düzleştir…
+Snap	Yasla
+Snap To	Şuna Yasla
+Soft Light	Yumuşak Işık
+Soft Round 100	Yumuşak Yuvarlak 100
+Soft Round 24	Yumuşak Yuvarlak 24
+Soft and cheap. Good for a small enlargement.	Yumuşak ve ucuz. Küçük bir büyütme için iyi.
+Softer Brush	Daha Yumuşak Fırça
+Solarize	Solarize
+Solid Color…	Düz Renk…
+Solidity	Katılık
+Source	Kaynak
+Source 1	Kaynak 1
+Source 2	Kaynak 2
+Source Space	Kaynak Alan
+Spectrum	Spektrum
+Spherize…	Küreselleştir…
+Spin Blur…	Dönme Bulanıklığı…
+Splits the active layer into Linear Light detail layers over a residual, finest on top; together they recomposite to the layer.	Etkin katmanı bir artığın üzerinde Doğrusal Işık ayrıntı katmanlarına böler, en ince olan üstte; birlikte katmanı yeniden oluştururlar.
+Spot Channel	Spot Kanal
+Spot Channel Options…	Spot Kanal Seçenekleri…
+Spot channel: composited over the image as its ink	Spot kanal: görüntünün üzerine mürekkebi olarak birleştirilir
+Square	Kare
+Squeeze	Sıkıştır
+Stack Mode	Yığın Modu
+Stamp Visible	Görüneni Damgala
+Standard	Standart
+Standard Deviation	Standart Sapma
+Standard ligatures	Standart bitişik harfler
+Step Backward	Geri Adım
+Step Forward	İleri Adım
+Stop	Durdur
+Straighten Layer	Katmanı Düzelt
+Strength	Güç
+Stroke	Kontur
+Stroke path with the foreground colour at the brush size, on a new shape layer	Yolun konturunu ön plan rengiyle fırça boyutunda yeni bir şekil katmanında çiz
+Stroke…	Kontur…
+Style	Stil
+Styles	Stiller
+Styles enabled	Stiller etkin
+Stylize	Stilize Et
+Sub	Alt
+Subject	Konu
+Subtract	Çıkar
+Subtract Front Shape	Öndeki Şekli Çıkar
+Subtract from Selection	Seçimden Çıkar
+Summation	Toplam
+Sunset	Gün Batımı
+Super	Üst
+Superscript raises and shrinks the text; subscript lowers and shrinks it.	Üst simge metni yükseltir ve küçültür; alt simge alçaltır ve küçültür.
+Surface Blur…	Yüzey Bulanıklaştırma…
+Swap colours  (X)	Renkleri değiştir  (X)
+Swap foreground and background (X)	Ön plan ve arka planı değiştir (X)
+Swatches	Renk Örnekleri
+TGA…	TGA…
+TIF…	TIF…
+Templates	Şablonlar
+Text	Metin
+Text overflows the box	Metin kutudan taşıyor
+Text replacement	Metin değiştirme
+Texture Dilation…	Doku Genişletme…
+That channel is no longer in the document	O kanal artık belgede değil
+That file could not be used:	Bu dosya kullanılamadı:
+The CSV ends inside a quoted field	CSV tırnak içindeki bir alanın içinde bitiyor
+The CSV has a header but no data sets	CSV'de başlık var ama veri kümesi yok
+The CSV is empty	CSV boş
+The CSV names a variable that is not defined:	CSV tanımlanmamış bir değişkeni adlandırıyor:
+The active layer has no layer style to save	Etkin katmanın kaydedilecek katman stili yok
+The active layer is not in the document	Etkin katman belgede değil
+The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	Etkin akıllı nesne kaynak klasördeki her görüntüyü sırayla gösterir; her sonuç hedef klasöre PNG olarak dışa aktarılır.
+The amount must be within	Miktar şu aralıkta olmalı:
+The angle must be a finite number of degrees	Açı sonlu bir derece sayısı olmalı
+The balanced default for photographs.	Fotoğraflar için dengeli varsayılan.
+The canvas grows to fit the rotated image.	Tuval, döndürülen görüntüyü sığdıracak kadar büyür.
+The canvas must be at least 1 x 1 pixel	Tuval en az 1 x 1 piksel olmalı
+The cell size must be 2 to 200 pixels	Hücre boyutu 2 ile 200 piksel arasında olmalı
+The cut is empty: paint more of the part to keep.	Kesim boş: tutulacak kısımdan daha fazlasını boyayın.
+The destination is the profile the document already has	Hedef, belgenin zaten sahip olduğu profil
+The destination must be another folder than the source.	Hedef, kaynaktan farklı bir klasör olmalı.
+The document has no layers	Belgede katman yok
+The document is already in {name}	Belge zaten {name} içinde
+The document is already tagged with this profile	Belge zaten bu profille etiketli
+The document is already tagged {name}	Belge zaten {name} ile etiketli
+The document's own profile: {error}	Belgenin kendi profili: {error}
+The first {shown} of {n} pages are listed; a longer file opens only those.	{n} sayfanın ilk {shown} tanesi listelenir; daha uzun bir dosya yalnızca bunları açar.
+The image has no opaque pixels to count	Görüntüde sayılacak opak piksel yok
+The ink is laid over the image; the selection, if there is one, is where it prints.	Mürekkep görüntünün üzerine serilir; seçim varsa basıldığı yer orasıdır.
+The last stop has no segment after it.	Son duraktan sonra segment yok.
+The layer has no pixels to cut.	Katmanda kesilecek piksel yok.
+The layer's pixels are locked	Katmanın pikselleri kilitli
+The list is empty	Liste boş
+The margins and gutters leave no room for a column or a row	Kenar boşlukları ve oluklar bir sütun ya da satır için yer bırakmıyor
+The margins and gutters leave no room for a column or a row.	Kenar boşlukları ve oluklar bir sütun ya da satır için yer bırakmıyor.
+The name cannot be empty	Ad boş olamaz
+The name has not changed	Ad değişmedi
+The name is the file File > Export > Slices writes this slice as. The URL and Alt Tag go into the HTML page it writes beside the images.	Ad, Dosya > Dışa Aktar > Dilimler'in bu dilimi yazdığı dosyadır. URL ve Alt Etiketi, görüntülerin yanına yazdığı HTML sayfasına girer.
+The new canvas is smaller — content outside it will be clipped.	Yeni tuval daha küçük — dışında kalan içerik kırpılacak.
+The next text layer the Type tool creates starts with this style.	Metin aracının oluşturacağı bir sonraki metin katmanı bu stille başlar.
+The panel is already on this side	Panel zaten bu tarafta
+The path encloses no pixel of the canvas	Yol tuvalin hiçbir pikselini çevrelemiyor
+The position must be a finite number	Konum sonlu bir sayı olmalı
+The preview runs the real brush engine.	Önizleme gerçek fırça motorunu çalıştırır.
+The resolution must be 1 to 2400 ppi	Çözünürlük 1 ile 2400 ppi arasında olmalı
+The resolution must be {min} to {max} dpi	Çözünürlük {min} ile {max} dpi arasında olmalı
+The rulers and the size readouts use this unit	Cetveller ve boyut göstergeleri bu birimi kullanır
+The scale must be between 1% and 1000%	Ölçek %1 ile %1000 arasında olmalı
+The selection is kept with the document under this name	Seçim bu adla belgeyle birlikte saklanır
+The source and destination must be different folders	Kaynak ve hedef farklı klasörler olmalı
+The steps this snapshot named have been discarded	Bu anlık görüntünün adlandırdığı adımlar atıldı
+The table needs a name	Tablonun bir adı olmalı
+The warp has not changed	Çarpıtma değişmedi
+There are no guides to slice along	Boyunca dilimlenecek kılavuz yok
+There are no slices to clear	Temizlenecek dilim yok
+There is no history to clear	Temizlenecek geçmiş yok
+There is no live selection to combine with	Birleştirilecek canlı bir seçim yok
+These are matrix-shaper profiles, which carry no perceptual or saturation tables: those two intents convert as Relative Colorimetric.	Bunlar algısal veya doygunluk tabloları taşımayan matris-şekillendirici profillerdir: bu iki amaç Göreli Kolorimetrik olarak dönüştürülür.
+Thin	İnce
+Third-party notices	Üçüncü taraf bildirimleri
+This Layer	Bu Katman
+This adjustment has no panel controls	Bu ayarlamanın panel denetimi yok
+This adjustment has no settings.	Bu ayarlamanın ayarı yok.
+This build keeps channels on layers; it has no free-standing alpha channels yet	Bu sürüm kanalları katmanlarda tutar; henüz bağımsız alfa kanalları yok
+This effect is off. Tick it in the list to edit it.	Bu efekt kapalı. Düzenlemek için listede işaretleyin.
+This format cannot store CMYK, so the document is written as RGB. Choose JPEG or TIFF for CMYK.	Bu biçim CMYK saklayamaz, bu yüzden belge RGB olarak yazılır. CMYK için JPEG veya TIFF seçin.
+This format could not be previewed.	Bu biçim önizlenemedi.
+This format has no metadata slot: nothing is embedded	Bu biçimde meta veri yuvası yok: hiçbir şey gömülmez
+This format has no palette, so the indexed colours are written as RGB. Choose PNG or GIF for the palette.	Bu biçimde palet yok, bu yüzden dizinlenmiş renkler RGB olarak yazılır. Palet için PNG veya GIF seçin.
+This format stores 8 bits per channel	Bu biçim kanal başına 8 bit saklar
+This is a Lab document. No format here stores Lab, so it is converted to RGB on export.	Bu bir Lab belgesi. Buradaki hiçbir biçim Lab saklamaz, bu yüzden dışa aktarmada RGB'ye dönüştürülür.
+This layer has no mask	Bu katmanın maskesi yok
+This panel is already at the bottom of its dock	Bu panel zaten yuvasının en altında
+This panel is already at the top of its dock	Bu panel zaten yuvasının en üstünde
+This tool has no options	Bu aracın seçeneği yok
+This tool is already at its defaults	Bu araç zaten varsayılanlarında
+This window cannot read screen pixels, so the eyedropper is unavailable	Bu pencere ekran piksellerini okuyamıyor, bu yüzden damlalık kullanılamıyor
+This works on a pixel layer; the active layer is a {kind}	Bu bir piksel katmanında çalışır; etkin katman bir {kind}
+This works on an 8-bit document	Bu 8 bit bir belgede çalışır
+This works on an RGB document	Bu bir RGB belgesinde çalışır
+Threshold	Eşik
+Threshold…	Eşik…
+Thumbnail Size	Küçük Resim Boyutu
+Thumbnail size	Küçük resim boyutu
+Thumbnails by Document	Belgeye Göre Küçük Resimler
+Thumbnails by Layer	Katmana Göre Küçük Resimler
+Tiles/List	Döşemeler/Liste
+Tiles…	Döşemeler…
+Tilt-Shift…	Eğim-Kaydırma…
+Timeline	Zaman Çizelgesi
+Tint	Renk tonu
+Tint hue	Renk tonu rengi
+Tint saturation	Renk tonu doygunluğu
+To canvas	Tuvale
+Toggle Link	Bağlantıyı Aç/Kapat
+Tonal width	Ton genişliği
+Tone	Ton
+Tone and Detail	Ton ve Ayrıntı
+Tool Presets	Araç Ön Ayarları
+Top	Üst
+Top Edges	Üst Kenarlar
+Top Left	Sol Üst
+Top Left Pixel Color	Sol Üst Piksel Rengi
+Top Right	Sağ Üst
+Top left	Sol üst
+Top right	Sağ üst
+Trace Contour…	Konturu İzle…
+Traces the active layer's colours into shape layers, one per colour.	Etkin katmanın renklerini her renk için bir tane olmak üzere şekil katmanlarına aktarır.
+Transform	Dönüştür
+Transform Layer	Katmanı Dönüştür
+Transform Selection	Seçimi Dönüştür
+Transparency	Saydamlık
+Transparent Pixels	Saydam Pikseller
+Trim Away	Kırp
+Trim…	Kırp…
+Tritone	Üç Ton
+Turn on Resample to change the pixel count.	Piksel sayısını değiştirmek için Yeniden Örnekle'yi açın.
+Twirl…	Döndür…
+Twist	Bük
+Two variables share a name	İki değişken aynı adı paylaşıyor
+Type	Yazı
+Type a zoom level	Bir yakınlaştırma düzeyi yazın
+Type is edited in Character and Paragraph	Yazı, Karakter ve Paragraf'ta düzenlenir
+Type tool defaults	Metin aracı varsayılanları
+UI scale	Arayüz ölçeği
+URL	URL
+US Letter	ABD Letter
+Ultra Condensed	Çok Dar
+Ultra Expanded	Çok Geniş
+Underlying Layer	Alttaki Katman
+Undo	Geri Al
+Ungroup Layers	Katmanların Grubunu Çöz
+Uniform	Tekdüze
+Unite Shapes	Şekilleri Birleştir
+Units	Birimler
+Unmake Frames	Kareleri Kaldır
+Unsaved changes	Kaydedilmemiş değişiklikler
+Unsharp Mask…	Keskinliği Azaltma Maskesi…
+Update the applied comp from the layers	Uygulanan kompozisyonu katmanlardan güncelle
+Use Black Point Compensation	Siyah Nokta Telafisi Kullan
+Use global light	Genel ışığı kullan
+Using:	Kullanılan:
+Vanishing Point…	Kaybolma Noktası…
+Variables	Değişkenler
+Variance	Varyans
+Vector Mask	Vektör Maskesi
+Vector density	Vektör yoğunluğu
+Vector enabled	Vektör etkin
+Vector feather	Vektör yumuşatma
+Vector invert	Vektörü ters çevir
+Vector mask	Vektör maskesi
+Vectorize	Vektörleştir
+Vectorize Bitmap	Bitmap'i Vektörleştir
+Vectorize Bitmap…	Bitmap'i Vektörleştir…
+Vertical Centers	Dikey Merkezler
+Vertical Distortion	Dikey Bozulma
+Vertical center guide	Dikey merkez kılavuzu
+Vertical scale, in percent: stretches the glyphs about the baseline; leading is unchanged	Yüzde olarak dikey ölçek: glifleri taban çizgisi etrafında uzatır; satır aralığı değişmez
+Vertically	Dikey olarak
+Vibrance	Titreşim
+Vibrance…	Titreşim…
+View	Görünüm
+Violet	Menekşe
+Visibility	Görünürlük
+Visible adjustment layers	Görünen ayarlama katmanları
+Vivid Light	Canlı Işık
+W	G
+WEBP…	WEBP…
+Waiting for the composite…	Birleşik görüntü bekleniyor…
+Warm	Sıcak
+Warp	Çarpıt
+Warp Style	Çarpıtma Stili
+Warp Text	Metni Çarpıt
+Warp Text…	Metni Çarpıt…
+Wave	Dalga
+Wavelet Decompose	Dalgacık Ayrıştırma
+Wavelet Decompose splits into 2 to 7 scales	Dalgacık Ayrıştırma 2 ile 7 ölçeğe böler
+Wavelet Decompose works on an sRGB document	Dalgacık Ayrıştırma bir sRGB belgesinde çalışır
+Wavelet Decompose: the layer has no pixels	Dalgacık Ayrıştırma: katmanda piksel yok
+Wavelet Decompose: {n} detail layers over a residual; the source layer is hidden	Dalgacık Ayrıştırma: bir artığın üzerinde {n} ayrıntı katmanı; kaynak katman gizlendi
+Wavelet Decompose…	Dalgacık Ayrıştırma…
+Wave…	Dalga…
+Web (216)	Web (216)
+WebP (lossless)	WebP (kayıpsız)
+WebP (lossy)	WebP (kayıplı)
+Weight	Kalınlık
+White	Beyaz
+White to Black	Beyazdan Siyaha
+Whites	Beyazlar
+Width	Genişlik
+Width and height must be at least 1 pixel	Genişlik ve yükseklik en az 1 piksel olmalı
+Width must be between 1 and 250 pixels	Genişlik 1 ile 250 piksel arasında olmalı
+Width to 110%	Genişliği %110 yap
+Width to 125%	Genişliği %125 yap
+Width to 80%	Genişliği %80 yap
+Width to 90%	Genişliği %90 yap
+Window	Pencere
+Wind…	Rüzgar…
+With Handles	Tutamaçlarla
+Work Path	Çalışma Yolu
+Workspace	Çalışma Alanı
+Wrap to box	Kutuya sar
+Writes the visible adjustment layers, applied to an identity lattice, as a 3D LUT (.cube).	Görünen ayarlama katmanlarını bir kimlik kafesine uygulanmış olarak 3B LUT (.cube) biçiminde yazar.
+Written as CMYK: a naive ink model, not an ICC press profile.	CMYK olarak yazıldı: basit bir mürekkep modeli, ICC baskı profili değil.
+Written as XMP into PNG, JPEG and TIFF files by Export As.	Farklı Dışa Aktar tarafından PNG, JPEG ve TIFF dosyalarına XMP olarak yazılır.
+Written with the document's palette.	Belgenin paletiyle yazıldı.
+Yellow	Sarı
+Yellow / Blue	Sarı / Mavi
+Yellows	Sarılar
+ZigZag…	Zikzak…
+Zoom In	Yakınlaştır
+Zoom Out	Uzaklaştır
+Zoom in	Yakınlaştır
+Zoom out	Uzaklaştır
+Zoom to Selection	Seçime Yakınlaştır
+a layer could not be rewritten	bir katman yeniden yazılamadı
+before / after	önce / sonra
+changed	değişti
+content thumbnail — click to edit the layer's pixels	içerik küçük resmi — katmanın piksellerini düzenlemek için tıklayın
+dpi	dpi
+edits are aimed at this mask — right-click for view and mask options	düzenlemeler bu maskeye yöneliktir — görünüm ve maske seçenekleri için sağ tıklayın
+lines past the box	kutunun ötesindeki satırlar
+mask off	maske kapalı
+mask thumbnail — click to edit the layer's mask	maske küçük resmi — katmanın maskesini düzenlemek için tıklayın
+minutes (0 is off)	dakika (0 kapalı)
+no drop	bırakılamaz
+px	px
+records here	buraya kaydeder
+skipped on play:	oynatmada atlandı:
+the layers could not be added	katmanlar eklenemedi
+the profile cannot be transformed ({error})	profil dönüştürülemiyor ({error})
+to	ile
+vector mask thumbnail — click to edit the vector mask	vektör maskesi küçük resmi — vektör maskesini düzenlemek için tıklayın
+{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time	{format}: zaman çizelgesi, {length} ms boyunca {fps} fps ile {frames} kare; her kare katmanları kendi zamanında gösterir
+{label} is not answered by this route	{label} bu yoldan yanıtlanmıyor
+{label} was refused: {reason}	{label} reddedildi: {reason}
+{name} Residual	{name} Artık
+{name} Scale {k}	{name} Ölçek {k}
+{name}: {n} pages	{name}: {n} sayfa
+{n} slices from the guides ({cols} x {rows}); they replace the slices there were	Kılavuzlardan {n} dilim ({cols} x {rows}); mevcut dilimlerin yerini alırlar
+{path} is a {space} profile; an RGB document takes an RGB profile	{path} bir {space} profili; bir RGB belgesi RGB profili alır
+{path} is {len} bytes, larger than any colour profile	{path} {len} bayt, herhangi bir renk profilinden büyük
+{reason}; this one is {space}	{reason}; bu {space}

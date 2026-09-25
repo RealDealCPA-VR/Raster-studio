@@ -34,6 +34,14 @@ use serde::{Deserialize, Serialize};
 
 use super::{check_count, ResourceError, MAX_ENTRIES};
 
+// W16-H: the events beyond the first eighteen, and their descriptors.
+#[path = "atn_more.rs"]
+mod more;
+pub use more::{
+    blend_from_blnm, blnm, lab_to_rgb, rgb_to_lab, CurvesEntry, LayerRef, LevelsEntry, ModeTarget,
+    Pivot, StrokeAt, ToneChannel, TransformTarget, TrimBasis,
+};
+
 /// The only `.atn` layout this reader accepts (Photoshop 6 and later).
 pub const ATN_VERSION: u32 = 16;
 
@@ -438,6 +446,176 @@ pub enum StepOp {
     },
     /// File ▸ Save.
     Save,
+    // ---- W16-H: appended; units are Photoshop's (see `atn_more`) ----------
+    Levels(Vec<LevelsEntry>),
+    Curves(Vec<CurvesEntry>),
+    /// Hue `-180..=180` (colorize `0..=360`), saturation and lightness
+    /// `-100..=100` (colorize saturation `0..=100`).
+    HueSaturation {
+        hue: f64,
+        saturation: f64,
+        lightness: f64,
+        colorize: bool,
+    },
+    /// Cyan–red, magenta–green, yellow–blue, each `-100..=100`.
+    ColorBalance {
+        shadows: [f64; 3],
+        midtones: [f64; 3],
+        highlights: [f64; 3],
+        preserve_luminosity: bool,
+    },
+    /// Reds, yellows, greens, cyans, blues, magentas in percent; the tint
+    /// as `[r, g, b]` `0..=255`.
+    BlackAndWhite {
+        weights: [f64; 6],
+        tint: Option<[f64; 3]>,
+    },
+    /// Both `-100..=100`.
+    Vibrance {
+        vibrance: f64,
+        saturation: f64,
+    },
+    /// Stops, offset, gamma.
+    Exposure {
+        exposure: f64,
+        offset: f64,
+        gamma: f64,
+    },
+    /// Level `1..=255`.
+    Threshold {
+        level: f64,
+    },
+    Posterize {
+        levels: u32,
+    },
+    /// Stops as `(location 0..=1, [r, g, b] 0..=255)`.
+    GradientMap {
+        stops: Vec<(f64, [f64; 3])>,
+        reverse: bool,
+    },
+    /// Colour `[r, g, b]` `0..=255`, density in percent.
+    PhotoFilter {
+        color: [f64; 3],
+        density: f64,
+        preserve_luminosity: bool,
+    },
+    /// Each output row: red, green, blue, constant, in percent.
+    ChannelMixer {
+        red: [f64; 4],
+        green: [f64; 4],
+        blue: [f64; 4],
+        monochrome: bool,
+    },
+    /// Image ▸ Crop to `[left, top, right, bottom]` of the current canvas
+    /// (it may reach past it), or to the selection when `None`.
+    Crop {
+        rect: Option<[f64; 4]>,
+    },
+    Trim {
+        basis: TrimBasis,
+        top: bool,
+        left: bool,
+        bottom: bool,
+        right: bool,
+    },
+    ConvertMode {
+        mode: ModeTarget,
+    },
+    /// Image ▸ Mode ▸ 8 / 16 / 32 Bits/Channel.
+    BitDepth {
+        bits: u8,
+    },
+    /// Edit ▸ Free Transform (and the Move tool): offset in pixels, scale in
+    /// percent, angle and skew in degrees clockwise, about `pivot`.
+    Transform {
+        target: TransformTarget,
+        pivot: Pivot,
+        offset: [f64; 2],
+        scale: [f64; 2],
+        angle: f64,
+        skew: [f64; 2],
+    },
+    /// Layer ▸ Arrange (or a move to an index).
+    ArrangeLayer(LayerRef),
+    DuplicateLayer {
+        name: Option<String>,
+    },
+    DeleteLayer,
+    MergeDown,
+    MergeVisible,
+    Flatten,
+    /// Layer ▸ New ▸ Group.
+    MakeGroup,
+    /// Layer ▸ Group Layers.
+    GroupLayers,
+    /// The active layer's name, opacity (percent) and blend mode.
+    SetLayer {
+        name: Option<String>,
+        opacity: Option<f64>,
+        blend: Option<layer_model::BlendMode>,
+    },
+    SetVisibility {
+        visible: bool,
+    },
+    SelectLayer(LayerRef),
+    /// Select ▸ Color Range over a sampled colour `[r, g, b]` `0..=255`.
+    ColorRange {
+        color: [f64; 3],
+        fuzziness: f64,
+        invert: bool,
+    },
+    Feather {
+        radius: f64,
+    },
+    Expand {
+        by: f64,
+    },
+    Contract {
+        by: f64,
+    },
+    Border {
+        width: f64,
+    },
+    Smooth {
+        radius: f64,
+    },
+    /// Edit ▸ Stroke; `color` `None` strokes with the foreground colour.
+    Stroke {
+        width: f64,
+        location: StrokeAt,
+        opacity: f64,
+        color: Option<[f64; 3]>,
+        blend: layer_model::BlendMode,
+    },
+    Copy,
+    CopyMerged,
+    Paste,
+    Cut,
+    /// Layer ▸ New ▸ Layer via Copy / Cut.
+    LayerVia {
+        cut: bool,
+    },
+    /// Amount in percent.
+    AddNoise {
+        amount: f64,
+        gaussian: bool,
+        monochromatic: bool,
+    },
+    MotionBlur {
+        angle: f64,
+        distance: f64,
+    },
+    HighPass {
+        radius: f64,
+    },
+    /// Amount and noise reduction in percent, radius in pixels.
+    SmartSharpen {
+        amount: f64,
+        radius: f64,
+        noise_reduction: f64,
+    },
+    /// File ▸ Save As / Export: the export dialog.
+    Export,
 }
 
 /// The four-character code and the string id of each event [`interpret`]
@@ -519,6 +697,9 @@ fn anchor(d: &Descriptor, key: &str, start: &str, end: &str) -> u8 {
 
 /// What `step` does here, or why it cannot be played.
 pub fn interpret(step: &AtnStep) -> Result<StepOp, String> {
+    if let Some(op) = more::interpret(step) {
+        return op;
+    }
     let unmapped = || {
         format!(
             "“{}” ({}) has no equivalent in this application",
@@ -706,6 +887,9 @@ impl StepOp {
     /// This operation as the ATN step Photoshop would record for it;
     /// [`interpret`] of the result is `self`.
     pub fn to_step(&self) -> AtnStep {
+        if let Some(step) = more::to_step(self) {
+            return step;
+        }
         let selection = || {
             Value::Reference(vec![RefItem::Property {
                 name: String::new(),
@@ -877,6 +1061,7 @@ impl StepOp {
                 ],
             ),
             StepOp::Save => ("save", "Save", vec![]),
+            _ => unreachable!("every W16-H operation is written by atn_more::to_step"),
         };
         let descriptor = (!items.is_empty()).then(|| desc("null", items));
         AtnStep::new(event, name, descriptor)
@@ -886,3 +1071,7 @@ impl StepOp {
 #[cfg(test)]
 #[path = "atn_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "atn_w16_tests.rs"]
+mod w16_tests;

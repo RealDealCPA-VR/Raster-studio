@@ -71,6 +71,12 @@ use serde::{Deserialize, Serialize};
 use crate::command::{Command, LayerPatch};
 use crate::document::Document;
 
+// W16-M: video layers (a raster layer plus a clip record whose frame at the
+// playhead is put on the layer's pixels).
+#[path = "timeline_video.rs"]
+mod video;
+pub use video::VideoClip;
+
 /// Frames per second a new timeline plays and exports at.
 pub const DEFAULT_FPS: u32 = 30;
 /// Length of a new timeline, in milliseconds.
@@ -449,6 +455,10 @@ pub struct DocumentTimeline {
     pub current_ms: u32,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tracks: Vec<LayerTrack>,
+    /// W16-M: the video layers' media (appended; absent in older
+    /// documents).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub videos: Vec<VideoClip>,
 }
 
 impl Default for DocumentTimeline {
@@ -459,6 +469,7 @@ impl Default for DocumentTimeline {
             fps: DEFAULT_FPS,
             current_ms: 0,
             tracks: Vec::new(),
+            videos: Vec::new(),
         }
     }
 }
@@ -567,8 +578,10 @@ fn put_patches(doc: &mut Document, patches: Vec<(LayerId, LayerPatch)>) {
 /// video frame renders.
 pub fn document_at(doc: &Document, t_ms: u32) -> Document {
     let patches = patches_at(doc, t_ms, false);
+    let frames = video::frame_deltas(doc, t_ms);
     let mut out = doc.clone();
     put_patches(&mut out, patches);
+    video::put_frames(&mut out, frames);
     out
 }
 
@@ -586,11 +599,18 @@ pub fn seek(doc: &mut Document, t_ms: u32) -> bool {
     } else {
         Vec::new()
     };
-    if doc.timeline.current_ms == t_ms && patches.is_empty() {
+    // W16-M: the video layers' frame at `t_ms`.
+    let frames = if doc.timeline.enabled {
+        video::frame_deltas(doc, t_ms)
+    } else {
+        Vec::new()
+    };
+    if doc.timeline.current_ms == t_ms && patches.is_empty() && frames.is_empty() {
         return false;
     }
     doc.timeline.current_ms = t_ms;
     put_patches(doc, patches);
+    video::put_frames(doc, frames);
     true
 }
 
@@ -640,7 +660,14 @@ pub fn set_timeline(doc: &Document, label: &str, timeline: DocumentTimeline) -> 
     } else {
         Vec::new()
     };
-    if timeline == doc.timeline && patches.is_empty() {
+    // W16-M: the video layers' frame at the playhead, painted as part of
+    // the same undo step.
+    let frames = if timeline.enabled {
+        video::frame_deltas(&probe, timeline.current_ms)
+    } else {
+        Vec::new()
+    };
+    if timeline == doc.timeline && patches.is_empty() && frames.is_empty() {
         return None;
     }
     let mut commands = vec![Command::SetTimeline {
@@ -650,6 +677,14 @@ pub fn set_timeline(doc: &Document, label: &str, timeline: DocumentTimeline) -> 
         patches
             .into_iter()
             .map(|(layer_id, patch)| Command::SetLayerProperties { layer_id, patch }),
+    );
+    commands.extend(
+        frames
+            .into_iter()
+            .map(|(layer, delta)| Command::PaintTiles {
+                target: crate::pixels::PixelTarget::Layer(layer),
+                delta,
+            }),
     );
     Some(Command::Transaction {
         label: label.to_string(),

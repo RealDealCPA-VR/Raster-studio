@@ -20,6 +20,12 @@ use ui::menu::{AdjustmentId, CanvasRotation, FilterId, MenuAction, TransformOp};
 
 use super::{Action, Editor};
 
+// W16-H: the steps `atn_more` reads, each through its menu or dialog route.
+#[path = "atn_play_more.rs"]
+mod more;
+#[cfg(test)]
+pub(super) use more::transform_linear;
+
 fn right_angle(degrees: f64) -> Option<i32> {
     let turns = degrees.rem_euclid(360.0);
     [90, 180, 270]
@@ -61,6 +67,9 @@ impl Editor {
         };
         if self.active().is_none() {
             return Err("No document is open".to_string());
+        }
+        if let Some(result) = self.perform_w16_op(op) {
+            return result;
         }
         match *op {
             StepOp::MakeLayer => dispatch(self, Action::NewLayer),
@@ -259,6 +268,7 @@ impl Editor {
                     TransformOp::FlipVertical
                 }),
             ),
+            _ => Err(format!("{op:?} has no route in this application")),
         }
     }
 }

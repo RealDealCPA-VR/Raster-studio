@@ -232,6 +232,11 @@ pub fn rasterize(data: &[u8], limits: ImportLimits) -> Result<DecodedSurface, Co
     })
 }
 
+/// W16-I: File > Open reads an SVG (and the EPS / PDF display lists) as
+/// layers: groups, shape layers, text layers and raster images.
+#[path = "svg_layers_w16.rs"]
+pub mod layers;
+
 #[cfg(test)]
 mod tests {
     use super::*;

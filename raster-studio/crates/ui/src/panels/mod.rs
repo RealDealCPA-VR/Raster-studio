@@ -36,5 +36,7 @@ pub mod css;
 pub mod doc_info;
 pub mod guide_guy;
 pub mod styles;
+// W16-E: the preset, History and Channels panel menus.
+pub mod panel_menus_w16;
 #[cfg(test)]
 mod w13n_panel_tests;

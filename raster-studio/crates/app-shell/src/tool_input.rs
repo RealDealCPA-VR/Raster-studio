@@ -166,6 +166,15 @@ pub(crate) mod quick_export;
 #[cfg(test)]
 #[path = "tool_input_w13i_tests.rs"]
 mod w13i_tests;
+// W16-A: the selection tools' outline drag, open-lasso hovers, Enter and
+// Backspace (see the module docs).
+#[path = "select_w16.rs"]
+pub(crate) mod select_w16;
+// W16-C: the Paint Bucket's pattern Fill source and the options bar's
+// Commit check, through the real routes.
+#[cfg(test)]
+#[path = "tool_input_w16c_tests.rs"]
+mod w16c_tests;
 // The tests read tile bytes back; the lib reads them through `NarrowedReads`.
 #[cfg(test)]
 use compositor::TileSource;
@@ -1096,6 +1105,12 @@ pub struct ToolPointer {
     /// [`ToolPointer::commit`] reads to fill the canvas the crop adds
     /// ([`crop_fill`]).
     crop_content_aware: bool,
+    /// W16-A: a press inside the selection that may become (or is) an
+    /// outline drag ([`select_w16`]).
+    outline_drag: Option<select_w16::OutlineDragState>,
+    /// W16-A: the selection edits the last off-pointer call drained — a lasso
+    /// closed by Enter or by a hover — for [`select_w16`] to land.
+    off_pointer_selection: Vec<tools::SelectionEdit>,
 }
 
 thread_local! {
@@ -1299,6 +1314,8 @@ impl ToolPointer {
                 editor.set_tool(previous);
             }
         }
+        // W16-A: an outline drag puts the ants back where the press found them.
+        let had = self.cancel_outline_drag(editor) || had;
         self.router.cancel();
         self.aimed_at = None;
         // W4-B: an abandoned stroke takes its live preview with it — the
@@ -1558,7 +1575,10 @@ impl ToolPointer {
         }
         let result = action(tool.as_mut(), &mut ctx);
         let drained = (result, ctx.drain(), ctx.drain_requests());
+        // W16-A: kept for the caller that lands selections (select_w16).
+        let selection_edits = ctx.drain_selection();
         drop(ctx);
+        self.off_pointer_selection = selection_edits;
         drained
     }
 
@@ -2184,6 +2204,11 @@ impl ToolPointer {
             }
         }
 
+        // W16-A: a lasso Enter closed lands its selection as one step.
+        if let (_, Some(reason)) = self.land_off_pointer_selection(editor) {
+            editor.set_status(reason.clone());
+            out.failed = Some(reason);
+        }
         let after = editor.active().map(|d| d.history_depth()).unwrap_or(0);
         out.steps = after.saturating_sub(before);
         if let Some(previous) = restore {
@@ -2485,6 +2510,8 @@ impl ToolPointer {
             // above: a gesture does not outlive the document it was aimed at.
             // W4-B: nor does its live preview, on whichever tab it was shown.
             Self::clear_paint_previews(editor);
+            // W16-A: nor does an outline drag's live outline.
+            self.cancel_outline_drag(editor);
             self.cancel_detached();
             out.refused = Some(Refusal::WrongDocument);
             return out;
@@ -2547,7 +2574,9 @@ impl ToolPointer {
         };
         out.route = Some(routed.route);
         if !routed.in_gesture {
-            // A hover. See the module docs: nothing here consumes one yet.
+            // A hover. See the module docs: W16-A: only a lasso holding an
+            // outline open between presses consumes one (`select_w16`).
+            self.route_lasso_hover(editor, routed.route, routed.event, &mut out);
             return out;
         }
         out.reached_tool = true;
@@ -2568,6 +2597,16 @@ impl ToolPointer {
         // handle, not the layer, until the release (`warp_custom`).
         if let Some(steps) = crate::warp_custom::route(editor, id, routed.phase, routed.event.pos) {
             out.steps = steps;
+            out.preview_tiles = 1;
+            return out;
+        }
+        // W16-A: a press inside the selection with a selection tool (New
+        // mode, no modifier) drags the outline once it travels (select_w16).
+        if let Some(steps) =
+            self.route_outline_drag(editor, id, routed.phase, routed.event, settings)
+        {
+            out.steps = steps;
+            out.selection_changed = steps > 0;
             out.preview_tiles = 1;
             return out;
         }

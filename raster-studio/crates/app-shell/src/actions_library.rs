@@ -29,7 +29,7 @@
 use std::io;
 use std::path::PathBuf;
 
-use asset_store::resources::atn::{self, AtnAction, AtnSet, AtnStep, StepOp};
+use asset_store::resources::atn::{self, AtnAction, AtnSet, AtnStep};
 use serde::{Deserialize, Serialize};
 use ui::panels::actions::{
     ActionSetRequest, ActionSetSummary, ActionSetsView, ActionSummary, ActionsRequest, ActionsView,
@@ -40,6 +40,10 @@ use super::{Action, Editor, RecordedEdit};
 
 #[path = "atn_play.rs"]
 mod atn_play;
+
+// W16-H: a recorded edit as the Photoshop steps that do the same.
+#[path = "atn_record.rs"]
+mod atn_record;
 
 /// W13-E: the set a recording joins when none was chosen, and the set an
 /// action saved before sets existed belongs to.
@@ -382,10 +386,14 @@ impl Editor {
         message
     }
 
-    /// W13-E: the set at `set` as an `.atn` set. A recorded edit that is a
-    /// new layer or a rectangle / empty selection becomes the Photoshop step
-    /// for it; any other recorded edit has none and is left out, and the
-    /// second value counts those.
+    /// W13-E: the set at `set` as an `.atn` set. W16-H: a recorded edit
+    /// becomes the Photoshop steps that do the same wherever its command
+    /// carries their parameters (`atn_record::steps_for`: layers, layer
+    /// properties, selections, transforms, Image / Canvas Size, crop, mode,
+    /// and the parameterless menu commands by their undo label); a pixel
+    /// edit whose settings the command does not keep (a brush stroke, a
+    /// filter or adjustment applied through its dialog) has none and is left
+    /// out, and the second value counts those.
     pub fn action_set_as_atn(&self, set: usize) -> Option<(AtnSet, usize)> {
         let name = self.action_sets().get(set)?.clone();
         let mut left_out = 0;
@@ -396,26 +404,13 @@ impl Editor {
             .map(|a| {
                 let mut steps = Vec::new();
                 for (i, edit) in a.edits.iter().enumerate() {
-                    let op = match &edit.command {
-                        editor_core::Command::CreateLayer { .. } => Some(StepOp::MakeLayer),
-                        editor_core::Command::SetSelection {
-                            selection: editor_core::Selection::None,
-                        } => Some(StepOp::Deselect),
-                        editor_core::Command::SetSelection {
-                            selection: editor_core::Selection::Rect { min, max },
-                        } => Some(StepOp::SelectRect {
-                            left: f64::from(min.x),
-                            top: f64::from(min.y),
-                            right: f64::from(max.x),
-                            bottom: f64::from(max.y),
-                        }),
-                        _ => None,
-                    };
-                    match op {
-                        Some(op) => {
-                            let mut step = op.to_step();
-                            step.enabled = a.is_on(i);
-                            steps.push(step);
+                    match atn_record::steps_for(&edit.command) {
+                        Some(ops) => {
+                            for op in ops {
+                                let mut step = op.to_step();
+                                step.enabled = a.is_on(i);
+                                steps.push(step);
+                            }
                         }
                         None => left_out += 1,
                     }
@@ -721,6 +716,12 @@ mod journal_hold_tests;
 #[cfg(test)]
 #[path = "atn_route_tests.rs"]
 mod atn_route_tests;
+
+/// W16-H: a Photoshop-recorded action played through the chrome, and a
+/// recording exported, parsed back and replayed.
+#[cfg(test)]
+#[path = "atn_w16_route_tests.rs"]
+mod atn_w16_route_tests;
 
 /// W5-B: Color Lookup's Load route, driven through the real chrome and
 /// dialog host with the file dialog answered by a test.

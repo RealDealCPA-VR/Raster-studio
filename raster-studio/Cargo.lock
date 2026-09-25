@@ -2265,6 +2265,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hayro-jpeg2000"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e94b34463cd6309fdfe9a541f07e8343ffe5738534cbca6845960ec41cc077a"
+
+[[package]]
 name = "hayro-syntax"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4068,6 +4074,7 @@ dependencies = [
  "exr",
  "flate2",
  "hayro",
+ "hayro-jpeg2000",
  "hayro-syntax",
  "heic-rs",
  "image",
@@ -5020,6 +5027,7 @@ dependencies = [
  "layer-model",
  "serde",
  "serde_json",
+ "wuff",
 ]
 
 [[package]]
@@ -6307,6 +6315,17 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
+
+[[package]]
+name = "wuff"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "200a7b806377b65f1ff9a985874332f15357c87e5dd7855f35f06dade95b8b3d"
+dependencies = [
+ "brotli-decompressor",
+ "bytes",
+ "flate2",
+]
 
 [[package]]
 name = "x11-dl"

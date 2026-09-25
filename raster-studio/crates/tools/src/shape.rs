@@ -83,6 +83,24 @@ pub enum ShapeKind {
         inner_ratio: f64,
         clockwise: bool,
     },
+    /// W16-G: Photopea's parametric Arrow ([`vector::shapes::parametric_arrow`]),
+    /// from the press to the release: a `weight` px shaft, heads at the start
+    /// and/or end `head_width` x `head_length` px, `concavity` percent.
+    Arrow {
+        weight: f64,
+        head_start: bool,
+        head_end: bool,
+        head_width: f64,
+        head_length: f64,
+        concavity: f64,
+    },
+    /// W16-G: Photopea's parametric Grid ([`vector::shapes::grid`]): the drag
+    /// box with `rows` x `cols` cells cut out, `border` px of frame.
+    Grid {
+        rows: u32,
+        cols: u32,
+        border: f64,
+    },
 }
 
 /// W10-A: the Spiral tool's Direction labels, index for index with
@@ -100,6 +118,8 @@ impl ShapeKind {
             ShapeKind::Line { .. } => ToolId::Line,
             ShapeKind::Custom { .. } => ToolId::CustomShape,
             ShapeKind::Spiral { .. } => ToolId::Spiral,
+            // W16-G: drawn by the Parametric Shape tool, the Polygon slot.
+            ShapeKind::Arrow { .. } | ShapeKind::Grid { .. } => ToolId::Polygon,
         }
     }
 
@@ -674,7 +694,26 @@ pub fn path_for(kind: &ShapeKind, a: Vec2, b: Vec2) -> Result<Path, ToolError> {
                 },
             )?
         }
+        // W16-G: an arrow runs press to release, as a line does.
+        ShapeKind::Arrow {
+            weight,
+            head_start,
+            head_end,
+            head_width,
+            head_length,
+            concavity,
+        } => shapes::parametric_arrow(
+            point(a.x as f64, a.y as f64),
+            point(b.x as f64, b.y as f64),
+            *weight,
+            *head_width,
+            *head_length,
+            *concavity,
+            *head_start,
+            *head_end,
+        ),
         _ if rx <= 0.0 || ry <= 0.0 => return Err(ToolError::Degenerate),
+        ShapeKind::Grid { rows, cols, border } => shapes::grid(bounds, *rows, *cols, *border),
         ShapeKind::Rectangle => shapes::rect(bounds),
         ShapeKind::RoundedRectangle { radius: r } => {
             shapes::rounded_rect(bounds, CornerRadii::uniform(r.max(0.0).min(rx.min(ry))))
@@ -1077,6 +1116,9 @@ pub struct ShapeTool {
     work_path: Option<Path>,
     /// W13-I: the Line tool's arrowheads (read only while `kind` is a line).
     pub arrows: LineArrows,
+    /// W16-G: the Parametric Shape tool's options (`None` on every other
+    /// shape tool); see [`ShapeTool::parametric_tool`].
+    parametric: Option<ParametricOptions>,
 }
 
 impl ShapeTool {
@@ -1091,6 +1133,7 @@ impl ShapeTool {
             shift: false,
             work_path: None,
             arrows: LineArrows::default(),
+            parametric: None,
         }
     }
 
@@ -1098,6 +1141,10 @@ impl ShapeTool {
     /// except that a line with arrowheads on draws them in
     /// ([`line_with_arrows`]).
     fn outline(&self, a: Vec2, b: Vec2) -> Result<Path, ToolError> {
+        // W16-G: the Parametric Shape tool's centred Polygon / Star.
+        if let Some(outline) = self.parametric_outline(a, b) {
+            return outline;
+        }
         match &self.kind {
             ShapeKind::Line { width } if self.arrows.any() => {
                 line_with_arrows(a, b, *width, &self.arrows)
@@ -1128,12 +1175,17 @@ impl ShapeTool {
 
     fn corners(&self, to: Vec2, shift: bool) -> (Vec2, Vec2) {
         let a = self.anchor.unwrap_or(to);
+        // W16-G: a centred parametric shape runs centre to vertex; Shift
+        // snaps its angle to 15 degrees, as Photopea's does.
+        if self.parametric_centred() {
+            return (a, if shift { live::snap_15(a, to) } else { to });
+        }
         let mut b = to;
         if shift {
             b = match self.kind {
                 // A shift-constrained line snaps to 45°; every other shape
                 // constrains to a square box.
-                ShapeKind::Line { .. } => constrain_45(a, to),
+                ShapeKind::Line { .. } | ShapeKind::Arrow { .. } => constrain_45(a, to),
                 _ => {
                     let d = to - a;
                     let s = d.x.abs().max(d.y.abs());
@@ -1141,7 +1193,9 @@ impl ShapeTool {
                 }
             };
         }
-        if self.from_center && !matches!(self.kind, ShapeKind::Line { .. }) {
+        if self.from_center
+            && !matches!(self.kind, ShapeKind::Line { .. } | ShapeKind::Arrow { .. })
+        {
             let d = b - a;
             (a - d, a + d)
         } else {
@@ -1158,7 +1212,12 @@ impl Default for ShapeTool {
 
 impl Tool for ShapeTool {
     fn id(&self) -> ToolId {
-        self.kind.tool_id()
+        // W16-G: the Parametric Shape tool keeps its slot's id whatever
+        // shape it draws.
+        match self.parametric {
+            Some(_) => ToolId::Polygon,
+            None => self.kind.tool_id(),
+        }
     }
 
     fn on_pointer_down(
@@ -1211,8 +1270,22 @@ impl Tool for ShapeTool {
                         .unwrap_or("Shape")
                         .to_string(),
                 };
-                let layer =
-                    Layer::with_kind(name, LayerKind::Shape(self.paint.layer_in(&path, ctx)));
+                // W16-G: a live kind commits its parameters and exactly the
+                // path they regenerate (see `live_shape_of`).
+                let arrows = matches!(self.kind, ShapeKind::Line { .. }) && self.arrows.any();
+                // Photopea keeps a Parametric Shape as a plain path (its
+                // `customShape` origination), so that tool commits no record.
+                let live = live_for(&self.kind, a, b, arrows)
+                    .filter(|_| self.parametric.is_none())
+                    .and_then(|live| live_path(&live).ok().map(|p| (live, p)));
+                let shape = match live {
+                    Some((live, live_outline)) => ShapeLayer {
+                        live: Some(live),
+                        ..self.paint.layer_in(&live_outline, ctx)
+                    },
+                    None => self.paint.layer_in(&path, ctx),
+                };
+                let layer = Layer::with_kind(name, LayerKind::Shape(shape));
                 ctx.emit(Command::create_layer(layer));
             }
             ShapeMode::Rasterize => rasterize_painted(ctx, &path, &self.paint)?,
@@ -1270,6 +1343,10 @@ impl Tool for ShapeTool {
     /// mismatch. Nothing here is a silent no-op.
     fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
         if let Some(answer) = self.paint.set(key, setting) {
+            return answer;
+        }
+        // W16-G: the Parametric Shape tool's shape and parameters.
+        if let Some(answer) = self.set_parametric(key, setting) {
             return answer;
         }
         // W13-I: the Line tool's arrowheads.
@@ -1349,6 +1426,16 @@ impl Tool for ShapeTool {
         }
     }
 }
+
+// W16-G: live shapes and the Parametric Shape tool; the Vector Gradient tool.
+#[path = "shape_live.rs"]
+mod live;
+pub use live::{
+    apply_live, live_for, live_path, live_shape_of, ParametricOptions, PARAMETRIC_KEYS,
+    PARAMETRIC_SHAPE_CHOICES,
+};
+#[path = "vector_gradient.rs"]
+pub mod vector_gradient;
 
 /// Two stored colours equal to within the sRGB round trip's float error.
 #[cfg(test)]

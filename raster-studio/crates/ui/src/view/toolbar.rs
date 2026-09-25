@@ -600,6 +600,18 @@ pub fn tool_options(w: &mut Workspace, ctx: &egui::Context) {
                             }
                             return;
                         }
+                        // W16-C: the Commit button, beside the tool name
+                        // where a long bar cannot scroll it away, while a
+                        // transform, crop box or pen path is pending.
+                        if pending_edit(w) {
+                            commit_button(w, ui);
+                            separator(ui);
+                        }
+                        // W16-K: Hand / Zoom / Rotate View have no settings,
+                        // only their Fit / 100% / Reset buttons.
+                        if w16k::view_row(w, ui, tool) {
+                            return;
+                        }
                         if specs.is_empty() && !wants_gradient_stops(info) {
                             ui.label(hint(
                                 ui,
@@ -646,10 +658,18 @@ pub fn tool_options(w: &mut Workspace, ctx: &egui::Context) {
                             separator(ui);
                             move_align_row(w, ui);
                         }
+                        // W16-F: Path Select's Arrange / Delete buttons.
+                        if tool == ToolId::PathSelect {
+                            separator(ui);
+                            path_arrange_row(w, ui);
+                        }
                         if wants_gradient_stops(info) {
                             separator(ui);
                             gradient_control(w, ui, tool);
                         }
+                        // W16-K: Refine Edge / Select Subject, Warp / Convert,
+                        // the brush presets, Crop by and the artboard + row.
+                        w16k::trailing_row(w, ui, tool);
                     });
                 });
         });
@@ -725,6 +745,58 @@ fn move_align_row(w: &mut Workspace, ui: &mut Ui) {
     );
     if response.clicked() {
         w.emit(Intent::Action(action));
+    }
+}
+
+/// W16-F: Path Select's Arrange and Delete buttons: each operation, its
+/// pseudo-key (`ids::tool_option(ToolId::PathSelect, ..)`) and its caption's
+/// string key, in Photopea's order.
+pub const PATH_ARRANGE_KEYS: [(tools::path_select::ComponentOp, &str, &str); 5] = [
+    (
+        tools::path_select::ComponentOp::BringToFront,
+        "path_bring_to_front",
+        "ui.toolbar.path.bring.to.front",
+    ),
+    (
+        tools::path_select::ComponentOp::BringForward,
+        "path_bring_forward",
+        "ui.toolbar.path.bring.forward",
+    ),
+    (
+        tools::path_select::ComponentOp::SendBackward,
+        "path_send_backward",
+        "ui.toolbar.path.send.backward",
+    ),
+    (
+        tools::path_select::ComponentOp::SendToBack,
+        "path_send_to_back",
+        "ui.toolbar.path.send.to.back",
+    ),
+    (
+        tools::path_select::ComponentOp::Delete,
+        "path_delete",
+        "ui.toolbar.path.delete",
+    ),
+];
+
+/// W16-F: reorder or delete the selected path components. A press parks the
+/// operation for the live Path Select tool
+/// (`tools::path_select::request_component_op`) and raises the confirm
+/// Enter raises ([`Intent::ConfirmTool`]), which performs it on the
+/// components the tool holds selected, as one step.
+fn path_arrange_row(w: &mut Workspace, ui: &mut Ui) {
+    ui.label(hint(ui, crate::strings::tr("ui.toolbar.path.arrange")));
+    for (op, key, label) in PATH_ARRANGE_KEYS {
+        let response = super::labelled_button(
+            ui,
+            crate::strings::tr(label),
+            true,
+            super::ids::tool_option(ToolId::PathSelect, key),
+        );
+        if response.clicked() {
+            tools::path_select::request_component_op(op);
+            w.emit(Intent::ConfirmTool);
+        }
     }
 }
 
@@ -1026,6 +1098,38 @@ fn straighten_button(w: &mut Workspace, ui: &mut Ui) {
     }
 }
 
+// W16-K: the rows Photopea's bars carry beyond the tool's options.
+#[path = "toolbar_w16k.rs"]
+pub mod w16k;
+#[cfg(test)]
+#[path = "toolbar_w16k_tests.rs"]
+mod w16k_tests;
+
+/// W16-C: the options bar's pseudo-key for its Commit (check) button, under
+/// which it is marked (`ids::tool_option(tool, COMMIT_KEY)`).
+pub const COMMIT_KEY: &str = "commit";
+
+/// W16-C: whether a held edit is waiting for Commit — a Free Transform quad
+/// (Warp and Perspective are its modes), a crop box or a pen path, as the
+/// application publishes them into the canvas sessions.
+pub(crate) fn pending_edit(w: &Workspace) -> bool {
+    let s = &w.canvas.sessions;
+    s.transform.is_some() || s.crop.is_some() || s.path.is_some()
+}
+
+/// W16-C: Photopea's check-mark Commit: the held edit is confirmed exactly
+/// as Enter does ([`Intent::ConfirmTool`], the route the Ruler's Straighten
+/// Layer already takes).
+fn commit_button(w: &mut Workspace, ui: &mut Ui) {
+    let tool = w.palette.active();
+    let response =
+        super::icon_button_id(ui, "check", true, super::ids::tool_option(tool, COMMIT_KEY))
+            .on_hover_text(crate::strings::tr("ui.toolbar.commit.hint"));
+    if response.clicked() {
+        w.emit(Intent::ConfirmTool);
+    }
+}
+
 fn separator(ui: &mut Ui) {
     let t = current_tokens(ui);
     let (rect, _) = ui.allocate_exact_size(
@@ -1070,18 +1174,27 @@ fn option_control(w: &mut Workspace, ui: &mut Ui, tool: ToolId, spec: &OptionSpe
     let id = super::ids::tool_option(tool, spec.key);
 
     match (spec.kind, current) {
-        (OptionKind::Float { min, max, .. }, OptionValue::Float(mut v)) => {
+        (OptionKind::Float { min, max, .. }, OptionValue::Float(v)) => {
+            // W16-C: the field shows and accepts Photopea's numbers
+            // (Tolerance 0-255, Opacity 0-100%, Size in px); the tool keeps
+            // its own stored value, so what is typed is divided back.
+            let display = spec
+                .float_display()
+                .unwrap_or_else(|| tools::registry::float_display(spec.key, spec.label, min, max));
+            let (lo, hi) = (display.shown(min), display.shown(max));
+            let mut shown = display.shown(v);
             ui.label(hint(ui, spec.label));
             let response = ui.add_sized(
                 Vec2::new(field, t.metrics.control_height),
-                egui::DragValue::new(&mut v)
-                    .range(min..=max)
-                    .speed((max - min) / 400.0)
-                    .max_decimals(2),
+                egui::DragValue::new(&mut shown)
+                    .range(lo..=hi)
+                    .speed((hi - lo) / 400.0)
+                    .max_decimals(display.decimals)
+                    .suffix(unit_suffix(display.unit, spec.label)),
             );
             super::mark(ui, response.rect, id);
             if response.changed() {
-                emit(w, OptionValue::Float(v));
+                emit(w, OptionValue::Float(display.stored(shown).clamp(min, max)));
             }
         }
         (OptionKind::Int { min, max, .. }, OptionValue::Int(mut v)) => {
@@ -1154,6 +1267,22 @@ fn option_control(w: &mut Workspace, ui: &mut Ui, tool: ToolId, spec: &OptionSpe
 
     if spec.key == BLEND_MODE_KEY {
         separator(ui);
+    }
+}
+
+/// W16-C: the unit a float field carries after its number: `%`, ` px` or
+/// `°`, nothing for a bare number — and nothing when the label already names
+/// the unit (Free Transform's `W %`).
+fn unit_suffix(unit: tools::registry::FloatUnit, label: &str) -> &'static str {
+    use tools::registry::FloatUnit;
+    if label.contains('%') {
+        return "";
+    }
+    match unit {
+        FloatUnit::Plain => "",
+        FloatUnit::Percent => crate::strings::tr("ui.toolbar.unit.percent"),
+        FloatUnit::Pixels => crate::strings::tr("ui.toolbar.unit.px"),
+        FloatUnit::Degrees => crate::strings::tr("ui.toolbar.unit.degrees"),
     }
 }
 
@@ -1813,6 +1942,33 @@ mod w9l_tests {
             .is_none());
     }
 
+    /// W16-F: the Path Select bar draws Arrange (front, forward, backward,
+    /// back) and Delete, left to right; a press parks the operation for the
+    /// live tool and raises the confirm Enter raises.
+    #[test]
+    fn the_path_select_bar_arranges_and_deletes_through_the_confirm() {
+        use tools::path_select::{pending_component_op, ComponentOp};
+        let mut bar = Bar::new(ToolId::PathSelect);
+        let mut lefts = Vec::new();
+        for (op, key, label) in PATH_ARRANGE_KEYS {
+            assert_ne!(crate::strings::tr(label), "", "{label} has a caption");
+            let id = super::super::ids::tool_option(ToolId::PathSelect, key);
+            lefts.push(bar.rect(id).expect("drawn").left());
+            let intents = bar.click(id);
+            assert_eq!(intents, vec![Intent::ConfirmTool], "{key}");
+            assert_eq!(pending_component_op(), Some(op), "{key}");
+        }
+        assert!(
+            lefts.windows(2).all(|p| p[0] < p[1]),
+            "left to right: {lefts:?}"
+        );
+        assert_eq!(
+            PATH_ARRANGE_KEYS.map(|(op, _, _)| op),
+            ComponentOp::ALL,
+            "every operation has a button"
+        );
+    }
+
     #[test]
     fn the_gradient_and_the_bucket_are_offered_the_mode_and_pattern_fill_is_not() {
         let multiply = layer_model::BlendMode::ALL
@@ -1883,3 +2039,10 @@ mod w9l_tests {
         );
     }
 }
+
+// W16-C: the float units, the bucket's Fill source and the Commit check,
+// through headless frames of the bar. Declared last so the style gate's
+// shipping-code scan (it stops at the first test marker) reads the whole bar.
+#[cfg(test)]
+#[path = "toolbar_w16c_tests.rs"]
+mod w16c_tests;

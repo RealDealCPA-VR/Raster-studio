@@ -261,14 +261,27 @@ fn run(path: PathBuf, generation: u64, history_depth: usize) -> ImportOutcome {
                 ),
             }
         }
+        // W16-K: ONE decode answers both the pixels and the depth. It was
+        // two (`DecodedImage::decode_bytes`, then `decode_surface_bytes`
+        // again for the depth), so every flat open decoded the file twice -
+        // and a HEIC / AVIF open started two decode-worker processes.
         let (decoded, sixteen_bit) = match bytes {
             Ok(bytes) => {
-                let decoded =
-                    crate::import::DecodedImage::decode_bytes(&bytes).map_err(|e| e.to_string());
-                let sixteen_bit = decoded.is_ok()
-                    && raster::decode_surface_bytes(&bytes, raster::ImportLimits::default())
-                        .is_ok_and(|s| s.format() == raster::PixelFormat::Rgba16);
-                (decoded, sixteen_bit)
+                match raster::decode_surface_bytes(&bytes, raster::ImportLimits::default()) {
+                    Ok(surface) => {
+                        let sixteen_bit = surface.format() == raster::PixelFormat::Rgba16;
+                        let image = surface.into_decoded_image();
+                        let decoded = crate::import::DecodedImage {
+                            width: image.width,
+                            height: image.height,
+                            rgba8: image.rgba8,
+                            color_space: image.color_space,
+                            icc_profile: image.icc_profile,
+                        };
+                        (Ok(decoded), sixteen_bit)
+                    }
+                    Err(e) => (Err(e.to_string()), false),
+                }
             }
             Err(e) => (Err(e.to_string()), false),
         };
@@ -720,6 +733,11 @@ fn run_export(job: &ExportJob) -> Result<Vec<PathBuf>, crate::doc::DocumentError
         // (`depth32::write_float_tiff`; a no-op for any other document).
         if preset.format == raster::ExportFormat::Exr && preset.scale == 1.0 {
             crate::depth32::write_float_tiff(path, preset.format, doc, || Ok(canvas.clone()))?;
+        }
+        // W16-K: a PDF / EMF / DXF row at 100% is rewritten from the layers
+        // (vector shapes and text; a PDF page per artboard).
+        if raster::ExportFormat::VECTOR.contains(&preset.format) && preset.scale == 1.0 {
+            crate::menu_bridge::w16k::write_vector_export(doc, &job.tiles, preset.format, path)?;
         }
     }
     Ok(written)

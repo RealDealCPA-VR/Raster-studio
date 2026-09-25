@@ -104,6 +104,29 @@ pub fn parse_zoom(text: &str) -> Option<f32> {
     (percent.is_finite() && percent > 0.0).then(|| clamp_zoom(percent / 100.0))
 }
 
+/// W16-E: parse a view angle the Navigator's Angle field was given, in
+/// degrees, wrapped into Photopea's `-180..=180` range (`270` is `-90`).
+/// A trailing `deg` or degree sign is allowed; anything else, or a
+/// non-finite number, is `None`.
+pub fn parse_angle(text: &str) -> Option<f32> {
+    let t = text
+        .trim()
+        .trim_end_matches('\u{b0}')
+        .trim_end_matches("deg")
+        .trim();
+    let degrees: f32 = t.parse().ok()?;
+    if !degrees.is_finite() {
+        return None;
+    }
+    let wrapped = (degrees + 180.0).rem_euclid(360.0) - 180.0;
+    // `180` stays `180` rather than turning into `-180`.
+    Some(if wrapped == -180.0 && degrees > 0.0 {
+        180.0
+    } else {
+        wrapped
+    })
+}
+
 /// The Navigator's geometry: where the viewport sits over the document.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct ViewBox {
@@ -340,6 +363,23 @@ pub fn format_selection(selection: &Selection) -> String {
             )
         }
         _ => "None".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod w16e_angle_tests {
+    use super::parse_angle;
+
+    #[test]
+    fn a_typed_angle_is_read_in_degrees_and_wrapped_like_photopea() {
+        assert_eq!(parse_angle("45"), Some(45.0));
+        assert_eq!(parse_angle(" -30.5 "), Some(-30.5));
+        assert_eq!(parse_angle("270"), Some(-90.0));
+        assert_eq!(parse_angle("180"), Some(180.0));
+        assert_eq!(parse_angle("-180"), Some(-180.0));
+        assert_eq!(parse_angle("90deg"), Some(90.0));
+        assert_eq!(parse_angle("abc"), None);
+        assert_eq!(parse_angle("inf"), None);
     }
 }
 

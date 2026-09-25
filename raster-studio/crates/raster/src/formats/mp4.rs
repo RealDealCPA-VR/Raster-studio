@@ -31,9 +31,11 @@
 //! frames are listed in `stss`.
 //!
 //! [`probe`] reads the box structure back (size, sample count, durations,
-//! codec) without decoding a picture: there is no AV1 *decoder* in this
-//! build (see [`super::avif`]), and so no video import either — a video file
-//! handed to File > Open is refused by name ([`video_refusal`]).
+//! codec) without decoding a picture. W16-M: [`video`] decodes an H.264 or
+//! AV1 track to frames for a video layer (run in app-shell's decode worker);
+//! the codec facade itself still refuses a video file by name
+//! ([`video_refusal`]): a video is not a picture, it opens through the
+//! video-layer route.
 
 use rav1e::prelude::*;
 
@@ -43,6 +45,11 @@ use crate::codec::CodecError;
 // so the MP4 module owns it.
 #[path = "h264.rs"]
 pub mod h264;
+
+// W16-M: MP4 video decoding (H.264 through OpenH264's decoder, AV1 through
+// rusty_av1d) for video layers, run by app-shell's decode worker.
+#[path = "mp4_video.rs"]
+pub mod video;
 
 /// The smallest frame edge rav1e encodes (it refuses anything below 16).
 pub const MIN_EDGE: u32 = 16;

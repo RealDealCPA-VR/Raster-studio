@@ -318,8 +318,45 @@ pub fn current_tokens(ui: &egui::Ui) -> &'static Tokens {
     current_theme(ui.ctx()).tokens()
 }
 
+/// W16-N: how much of a menu's fill stays opaque with Window > Glass Menus
+/// on; the rest lets the document under the menu show through.
+pub const GLASS_MENU_OPACITY: f32 = 0.72;
+
+/// W16-N: the fill a menu is drawn over with Glass Menus on — the theme's
+/// overlay surface (the opaque menu fill) at [`GLASS_MENU_OPACITY`].
+pub fn glass_menu_fill(tokens: &Tokens) -> Color32 {
+    let base = color32(tokens.palette.color(ColorRole::SurfaceOverlay));
+    let alpha = (GLASS_MENU_OPACITY * f32::from(base.a())).round() as u8;
+    Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn glass_menu_fill_is_the_overlay_surface_made_translucent_in_every_theme() {
+        for theme in super::Theme::ALL {
+            let tokens = theme.tokens();
+            let opaque = super::color32(tokens.palette.color(super::ColorRole::SurfaceOverlay));
+            let glass = super::glass_menu_fill(tokens);
+            assert!(
+                glass.a() < opaque.a(),
+                "{theme:?}: the glass fill must let the canvas through"
+            );
+            assert!(
+                glass.a() > 0,
+                "{theme:?}: the glass fill must still be a surface"
+            );
+            let [r, g, b, _] = glass.to_srgba_unmultiplied();
+            let [or, og, ob, _] = opaque.to_srgba_unmultiplied();
+            for (got, want) in [(r, or), (g, og), (b, ob)] {
+                assert!(
+                    got.abs_diff(want) <= 2,
+                    "{theme:?}: the glass keeps the surface's colour"
+                );
+            }
+        }
+    }
+
     use super::*;
     use crate::tokens::UNIT_PT;
 

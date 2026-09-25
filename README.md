@@ -59,9 +59,13 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
 
 ### What you can do in the app
 
-- **Open** PNG, JPEG, WebP, TIFF, GIF, BMP, ICO, TGA and SVG (rasterised at
-  its own size by `resvg`, a gzip `.svgz` too, inflated to at most 64 MiB;
-  `<image>` references to local files are not followed); W10-F: Netpbm
+- **Open** PNG, JPEG, WebP, TIFF, GIF, BMP, ICO, TGA and SVG (W16-I: File >
+  Open reads an SVG as layers at its own size - groups, shape layers with
+  solid fill / stroke, plain text as text layers, other text as outlines,
+  images as raster layers; clipped, masked, filtered, blended, gradient- or
+  dashed-painted elements open as raster layers and the import report says
+  so; a gzip `.svgz` too, inflated to at most 64 MiB; `<image>` references
+  to local files are not followed); W10-F: Netpbm
   PPM / PGM / PBM (ASCII and binary, up to 16 bits), DDS (uncompressed and
   BC1-BC3 / DXT1-DXT5, top mip level), JPEG XL (`jxl-oxide`, pure Rust) and
   GIMP `.xcf` (8-bit RGB / grey, opened as a layered document: one layer
@@ -76,8 +80,24 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   brighter than diffuse white is lost; both File > Open roads),
   Apple `.icns` (its largest PNG, ARGB or 24-bit entry; JPEG 2000 entries
   are skipped), Amiga IFF ILBM / PBM (1-8 planes including EHB and HAM6/8,
-  24 and 32 planes, ByteRun1) and Krita `.kra` (its merged image only: the
-  layers are not read). W13-D: PDF and PDF-compatible Illustrator `.ai`
+  24 and 32 planes, ByteRun1) and Krita `.kra` (its merged image; W16-L:
+  `raster` also reads a `.kra`'s layer tree (names, opacity, visibility,
+  blend-mode ids, groups) and its 8- and 16-bit RGBA paint layers' tiled
+  LZF pixels (`kra::layers::read`), and a `.kra` without a merged image
+  now opens as those layers composited; File > Open still makes one flat
+  layer from it, because the layered import route in `app-shell` (the one
+  `.xcf` uses) is not wired to the Krita reader yet). W16-L: File > Open
+  also reads JPEG 2000 (`hayro-jpeg2000`, pure Rust), Valve `.vtf` (the
+  largest mip: RGBA/BGRA/RGB 8-bit, 565, 5551, 4444, DXT1/3/5, 16-bit),
+  FITS (a 2D image HDU, BITPIX 8/16/32/64/-32/-64 with BSCALE/BZERO,
+  stretched min..max to 16 bits), DICOM (uncompressed or RLE, the file's
+  window, 16-bit grey or 8-bit RGB; JPEG-compressed DICOM is refused by
+  name) and ASCII DXF (lines, polylines with bulges, circles, arcs,
+  ellipses, splines, points and text, drawn onto a white page fitted to
+  1024 pixels: a flat picture, not vector layers); Clip Studio `.clip`,
+  zipped Pixelmator Pro `.pxd`, CorelDRAW `.cdr` and InDesign `.indd` open
+  as their embedded previews only (their layers are not read); Affinity
+  `.afphoto` and PaintTool `.sai` are refused by name, saying why. W13-D: PDF and PDF-compatible Illustrator `.ai`
   pages are rendered by `hayro` 0.4 (pure Rust) at one pixel per point on
   white paper (JPEG 2000 images inside a PDF are not drawn). W13X-7: a
   file of two or more pages first shows an import dialog, as Photopea
@@ -102,7 +122,12 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   why. W15-E: EPS opens as its PostScript artwork, run by a bounded
   PostScript interpreter of this build's own (paths, fills, strokes, clips,
   dashes, images through the ASCIIHex / ASCII85 / RunLength / Flate / DCT
-  filters, and text set in a fallback system font); the status line names
+  filters, and text set in a fallback system font; W16-I: its marks open as
+  layers - fills and strokes as shape layers, `show` text as text layers,
+  images as raster layers, clipped marks flattened and reported. A one-page
+  `.ai` / PDF page of paths and text also opens as shape and text layers; a
+  page with images, shadings, clips or composite fonts opens as one picture,
+  saying why, and a `.pdf` opened through the import dialog is rendered); the status line names
   what it did not draw (smooth shading, patterns, embedded Type 1 font
   outlines, unknown operators), and when the PostScript cannot be drawn
   the preview the file carries (TIFF, WMF or EPSI) opens instead, the
@@ -144,9 +169,15 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   42 made the decoder panic in the worker and every one came back to the
   calling process as an error. Layered `.psd`
   and (W10-F) `.psb`, Photoshop's large-document format (64-bit lengths,
-  canvases past 30 000 px), in RGB or greyscale (opened as RGB; other colour
-  modes are refused by name) at 8 or 16 bits (a 32-bit file is converted
-  down to 8), open as layered documents (groups, masks with their density
+  canvases past 30 000 px), in any Photoshop colour mode (W16-B: RGB,
+  Grayscale, CMYK, Lab, Indexed, Duotone and 1-bit Bitmap open in the
+  matching document mode; CMYK and Lab through this build's own ink model
+  and CIELAB, so Save as PSD writes CMYK, Lab, Indexed and Grayscale back in
+  that mode; Multichannel opens as RGB or Grayscale with the channels past
+  three named in the report; a Duotone saves as RGB and a Bitmap as
+  Grayscale, and CMYK / Lab past 8 bits are edited at 8-bit precision) at 8
+  or 16 bits (a 32-bit file is converted down to 8), open as layered
+  documents (groups, masks with their density
   and feather, blend modes; Invert and, since W11-A, Levels, Curves,
   Brightness/Contrast, Hue/Saturation, Color Balance, Black & White, Photo
   Filter, Channel Mixer, Posterize, Threshold, Gradient Map, Selective
@@ -164,7 +195,11 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   and a later paragraph's different style, which are not applied; W9-M: vector shape layers as live
   shape layers — path, solid / gradient / pattern fill, stroke — embedded
   smart objects (`SoLd`/`PlLd` + `lnk2`/`lnk3`/`lnkD`) as live smart objects
-  over their placed file, and a 16-bit file as a 16-bit document), with a
+  over their placed file (W16-J: a linked one, `liFE` in `lnkE`, as a linked
+  smart object read from its path, and Photoshop's `filterFX` smart filters
+  as live smart filters for the nineteen filters listed below; a linked
+  file that cannot be read or a smart filter this build lacks opens as the
+  layer's pixels, named), and a 16-bit file as a 16-bit document), with a
   per-layer report of what did not map).
   File ▸ Open (and drag-and-drop) also reads Photoshop resource files into
   their libraries: `.pat` (Photoshop or GIMP) patterns into the pattern
@@ -185,9 +220,13 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   document or an empty window), File ▸ Open Recent and a file named on the
   command line — sends a library file to its importer through one routing
   table (`Editor::open_resource_file` / `Editor::open_any`): `.abr` brushes,
-  `.asl` styles, the resource files above, `.ttf`/`.otf`/`.ttc`/`.otc` fonts,
-  and a `.cube` 3D LUT, which becomes a Color Lookup adjustment layer on the
-  active document (one undo step; refused with the reason when no document
+  `.asl` styles, the resource files above, `.ttf`/`.otf`/`.ttc`/`.otc` fonts
+  (W16-L: and `.woff` / `.woff2`, unwrapped to their TrueType / OpenType
+  data by `wuff`), and a `.cube` 3D LUT (W16-L: or a `.3dl` / SpeedGrade
+  `.look`), which becomes a Color Lookup adjustment layer on the
+  active document; W16-L: a Photoshop `.acv` Curves preset becomes a Curves
+  adjustment layer the same way (the Curves dialog has no saved-preset list
+  for it to join) (one undo step; refused with the reason when no document
   is open). An image dropped onto an open document is still placed as a
   layer. Edit ▸ Paste, from the menu or with Ctrl+V, with no document open
   makes a new document the size of the clipboard's image and pastes it
@@ -214,10 +253,20 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   print size, resolution, mode and depth, profile, layer count, memory of
   the distinct pixel tiles) and Guide Guy (margins, columns and rows with
   gutters, centre guides, previewed on a canvas thumbnail and applied as
-  one undo step). The
+  one undo step). W16-E: Swatches, Brushes and Styles have Photopea's
+  panel menu (Open and Export as .ACO / .ABR / .ASL, read back by File >
+  Open; Name Change; Delete; Tiles/List; Define New; no New Folder yet, the
+  preset lists are flat); the Channels footer and menu load, add and delete
+  the current channel and Ctrl+click loads any channel as the selection
+  (spot channels: options and delete, no eye); History's menu has Clear
+  History and New Snapshot; the mask popups have Delete / Apply and a
+  vector-mask menu; Layer Comps have Visibility / Position / Appearance
+  flags and a Last Document State row; Notes have an Author; the Navigator
+  has an Angle field. The
   document is fitted and drawn inside the canvas area, between the tool column,
   the docks and the bars. Workspaces: Essentials, Painting, Photography,
-  Minimal. F cycles the screen modes. Nine themes (W13X-4 and W15-D,
+  Minimal. F cycles the screen modes (W16-K: View ▸ Mode picks one:
+  Fullscreen, Standard, Menu Bar and Canvas). Nine themes (W13X-4 and W15-D,
   `design::Theme::ALL`), picked in Edit ▸ Preferences… ▸ Theme or Window ▸
   Appearance, saved in the preferences file and installed on the next
   frame: the app's own Light and Dark, and all seven of Photopea's — Light
@@ -282,7 +331,9 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   Content-Aware Move (drag a selection: Move fills where it was with the
   PatchMatch content-aware fill and blends it in at the drop, Extend copies
   it; one undo step), red eye, colour replacement; gradient (editable stops) and paint bucket, both
-  with a blend Mode and Opacity, pattern
+  with a blend Mode and Opacity (W16-C: the bucket's Fill is Foreground or
+  Pattern, the pattern being the active one; the options bar has no pattern
+  picker yet), pattern
   fill; blur, sharpen, smudge, dodge, burn and sponge (W11-I: Dodge / Burn
   Protect Tones and Sponge Vibrance, both on by default, and the Gradient's
   Transparency toggle, off ignoring the ramp's opacity stops; W13-I: the
@@ -303,7 +354,15 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   are stored as binary files beside the presets, not in the JSON.
 - **Select** with the marquees, lasso, polygonal and magnetic lasso, magic
   wand and quick select, each combining by New / Add / Subtract / Intersect /
-  Exclude (XOR); the rectangular and elliptical marquees have a Style of
+  Exclude (XOR); W16-A: a drag inside the selection with any selection tool
+  (New mode, no modifier) moves the outline only, pixels untouched, as one
+  undo step (Shift: 45 degrees, Escape puts it back); the polygonal and
+  magnetic lassos close on Enter, a double-click or a click on the start,
+  and Backspace / Delete remove the last point; the magnetic lasso is click,
+  then move, laying anchors pulled onto the strongest edge within Width;
+  Alt while dragging the lasso draws straight segments (the options bar has
+  no Frequency control yet, and a double-click is a second press on the
+  same spot, not timed); the rectangular and elliptical marquees have a Style of
   Normal, Fixed Ratio (W : H) or Fixed Size (W x H px); Color Range, Modify (border, smooth, expand, contract,
   feather), Grow, Similar, Refine Edge, Transform Selection, quick mask, and
   Save / Load / Reselect. Select ▸ Subject selects the region that stands
@@ -333,7 +392,13 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   done: the per-group memory is not kept across sessions; the Layers
   panel's search field has no chord (Ctrl+F is Find).
 - **Draw and type:** the Pen drags out smooth curves (Alt breaks a handle);
-  add, delete and convert anchor points; path and direct selection. Shape
+  add, delete and convert anchor points; path and direct selection (W16-F:
+  Path Select picks single path components — Shift for more — that a drag
+  or the arrows move and its bar's Arrange / Delete buttons reorder or
+  remove; Direct Selection Shift-selects several knots that move together,
+  and a double-click collapses a handle or converts a knot; the Delete key
+  does not reach the path tools and the canvas does not mark the selected
+  components or knots). Shape
   tools, including a Spiral (turns, inner radius, direction) and a
   custom-shape library that Edit ▸ Define Custom Shape adds to (the active
   shape layer or the current path, kept in the shape presets), with fill,
@@ -342,7 +407,18 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   corners and a dash pattern (dash and gap in the options bar; Properties sets
   an even dash). W13-I: the Line tool draws arrowheads at its start and/or
   end, with width and length as a percentage of the weight and a concavity,
-  into the shape itself. The shape tools'
+  into the shape itself. W16-G: a rectangle, rounded rectangle, ellipse, star
+  (Star tool) or arrowless line stays a live shape until its path is edited
+  by hand, and Properties' Live Shape section edits its W, H, X, Y, a
+  rectangle's four corner radii (with Same Radii), a star's points and inner
+  radius and a line's weight, each one undo step; a live rectangle, ellipse
+  or line saves to `.psd` as its `vogk` origination and opens live again
+  (under a translation only; stars go as paths). The Polygon slot is
+  Photopea's Parametric Shape tool (Polygon, Star, Arrow, Grid, Spiral; a
+  Polygon or Star drawn from its centre with a Corner Radius), whose shapes
+  are plain paths as in Photopea; the Vector Gradient tool drags a
+  gradient-filled shape's start and end handles on the canvas (not a
+  gradient fill layer's). The shape tools'
   Path mode makes a Work Path instead of a layer; Path Select can unite /
   subtract / intersect / exclude and align a path's components; Layer ▸
   Combine Shapes merges the selected shape layers with the same boolean ops.
@@ -361,7 +437,8 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   the outline is drawn, flows the text along it (Type on a Path); Layer ▸
   Text ▸ Convert to Shape turns the glyph outlines into a shape layer. The
   options bar's Font list offers the installed families, and File ▸ Open of
-  a .ttf / .otf / .ttc loads a font for the session.
+  a .ttf / .otf / .ttc (W16-L: or .woff / .woff2) loads a font for the
+  session.
 - **Build a layer stack:** groups, masks (a new mask is made from the
   selection and becomes the paint target), clipping masks and all 27 blend
   modes; opacity and fill, locks, rename, align / distribute (W11-I: two or
@@ -384,10 +461,13 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   and kept as an empty layer, and per-range Hue/Saturation settings or
   gradient midpoints the model cannot hold are named; Auto, Desaturate,
   Equalize, Shadows/Highlights, Replace Color, HDR Toning and Match Color
-  have no `.psd` adjustment layer and export empty with a note, as does a
-  setting the layout cannot store, e.g. Brightness past ±150/255, a Black &
-  White weight outside -200%..+300% or Posterize 256, named with its reason rather
-  than clamped. The byte layouts follow Adobe's published specification and
+  have no `.psd` adjustment layer (nor does Photoshop an exact equivalent),
+  so since W16-J each is written as a pixel layer showing its effect on the
+  layers under it (with the layer's own opacity, blend mode and mask; no
+  longer editable as an adjustment) and named in a note — never an empty
+  layer — as is a setting the layout cannot store, e.g. Brightness past
+  ±150/255, a Black & White weight outside -200%..+300% or Posterize 256,
+  named with its reason rather than clamped. The byte layouts follow Adobe's published specification and
   are proven only by round trips through this build: they have not yet been
   checked against files written by Photoshop or Photopea); layer styles (ten effects, all of which render on the canvas;
   Pattern Overlay tiles a pattern picked from the ones Define Pattern made,
@@ -455,15 +535,46 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   merge, flatten; W10-I: Layer ▸ Hide Layers / Show Layers (every selected
   layer, one undo step) and Layer ▸ Matting ▸ Remove Black / White Matte
   (partly transparent pixels un-mixed from a black or white matte, one undo
-  step); the layer row's right-click menu has Photopea's rows: Blending
-  Options, Duplicate, Delete, Convert to Smart Object, Rasterize Layer,
-  Enable / Disable Layer Mask, Create / Release Clipping Mask, Link Layers,
-  Select Pixels, Copy / Paste / Clear Layer Style, Merge Down, Merge
-  Visible, Flatten Image, and (W11-E) the colour labels No Color / Red /
+  step); the layer row's right-click menu (W16-D: the right-click selects
+  the row first) has Photopea's rows in its order, with its separators:
+  Blending Options, Select Pixels | Duplicate Layer (a copy at once, no
+  dialog), Duplicate Into… (the dialog with the destination document),
+  Delete | Convert to Smart Object, on a smart object New Smart Object via
+  Copy / Open (Edit Contents) / Reset Transform / Replace Contents / Export
+  Contents / Convert to Layers, Rasterize, Rasterize Layer Style, Convert
+  to Shape | on a text layer Convert to Point / Paragraph Text (both rows:
+  the menu does not know which kind the layer is) | Create / Release
+  Clipping Mask, Copy / Paste / Clear Layer Style, Merge Down (Merge Layers
+  over a multi-selection), Flatten Image | and (W11-E) the colour labels
+  No Color / Red /
   Orange / Yellow / Green / Blue / Violet / Gray (also Layer ▸ Color
   Label): one undo step for every selected layer, a chip of that colour in
   the row's left margin, saved with the `.rstudio` document and carried by
-  Duplicate Layer, and (W13-B) read from and written to a PSD's `lclr`. W11-E: Ctrl+E over
+  Duplicate Layer, and (W13-B) read from and written to a PSD's `lclr`.
+  Photopea's submenus there (Smart Object, Layer Style, Color) are flat
+  rows, and its Stack Mode / Turn into JPG rows are not offered. W16-D, the
+  Layers panel as Photopea's: a double-click on a row (away from its name,
+  which renames) opens Layer Style on Blending Options (a text row enters
+  the text); a double-click on a smart object's thumbnail opens its
+  contents, on a fill or adjustment layer's its own dialog (Properties for
+  an adjustment with no dialog); a styled layer lists "Effects" and one row
+  per effect under its row, in the Layer Style dialog's order, each with an
+  eye (that effect off or back on with its parameters, one undo step; the
+  "Effects" eye is the whole style), a double-click opening Layer Style on
+  that effect's page, and the row's fx arrow folding the list; an effect
+  row dragged onto the trash deletes that effect, the "Effects" row clears
+  the style, a layer row deletes the layer (with the selection it is part
+  of); Alt-click on an eye shows only that layer and again shows the rest,
+  one undo step each. The panel menu (the arrow at the right of the filter
+  row) has Add "copy" to copied layers (the copy-name rule of every
+  duplicate), − / + Thumbnail Size (four steps, the last none) and
+  Thumbnails by Layer / by Document, kept in the preferences file. Not
+  done: an effect hidden by its eye is kept by the panel for the session
+  only (the model has no per-effect off), so saved it is saved absent; the
+  thumbnail sizes are four steps, not Photopea's 10-200 px; Thumbnails by
+  Layer crops the 64-texel document thumbnail rather than rendering the
+  layer at thumbnail resolution; the Duplicate Into… dialog still opens at
+  "<name> copy" whatever the option says. W11-E: Ctrl+E over
   two or more selected layers is Merge Layers (the row reads so on the
   menu bar and in the row menu): the selected layers, and every layer
   inside a selected group, composite into one layer in the topmost one's
@@ -572,7 +683,11 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   (Arc, Arch, Bulge, Flag, Wave, Fish, Rise, Fisheye, Inflate, Squeeze,
   Twist) with a Bend; a typed field or a picked preset reshapes the live
   box on the canvas in the same frame (the first edit after the options
-  bar's Reset included), and Enter commits what the fields say. The Move tool's options bar has Align (left, centre, right, top,
+  bar's Reset included), and Enter commits what the fields say (W16-C: so
+  does the options bar's Commit check, shown while a transform, crop box or
+  pen path is pending; there is no Cancel cross yet, Escape cancels). The
+  options bar shows Photopea's numbers: Tolerance 0-255, Opacity, Flow,
+  Hardness, Exposure and Spacing in %, sizes in px. The Move tool's options bar has Align (left, centre, right, top,
   middle, bottom) and Distribute (horizontally, vertically) buttons that run
   the Layer menu's commands; with a partial pixel selection, Free Transform and Move
   lift just the selected pixels, as one undo step. W13-I: the Move bar's
@@ -591,7 +706,13 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   lasso or other selection tool the arrows move the selection outline
   only. Each press is one undo step, a held arrow repeats, and the arrows
   do nothing while a text field or a Type run has the keyboard. Ctrl+arrow
-  is not bound. Crop with ratio presets (Free, Original, 1:1,
+  is not bound. W16-F: the arrows also move an open Free Transform box
+  (landing at Enter), Path Select's selected components, Direct
+  Selection's selected knots and Slice Select's picked slice. Free
+  Transform's Ctrl gestures: Ctrl + a side skews, Ctrl + a corner
+  distorts, Ctrl + Alt + Shift + a corner is perspective. Show Transform
+  Controls' handles are live: dragging a corner or side scales the layer,
+  dragging just outside a corner rotates it, as one step (committed at the release, not held for Enter). Crop with ratio presets (Free, Original, 1:1,
   4:3, 16:9, 3:2, 5:4, W × H × resolution), straighten, Delete Cropped
   Pixels and (W13-I) Content-Aware: the box may then be dragged past the
   canvas, and the canvas the crop adds is filled from the active pixel
@@ -686,17 +807,40 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   and plays through the same route as the menu row or dialog OK: new layer;
   select all, none, inverse or a rectangle; Fill; Image Size; Canvas Size;
   Invert; Desaturate; Equalize; Brightness/Contrast; Gaussian Blur; Unsharp
-  Mask; Median; rotate or flip the canvas or the layer; Save. A step with no
+  Mask; Median; rotate or flip the canvas or the layer; Save. W16-H adds
+  Levels, Curves, Hue/Saturation, Color Balance, Black & White, Vibrance,
+  Exposure, Threshold, Posterize, Gradient Map, Photo Filter and Channel
+  Mixer with their settings; Crop, Trim, Image ▸ Mode and bit depth; Free
+  Transform (move, scale, rotate, skew, flip) of the layer or the selection
+  and the Move tool's offset; Duplicate, Delete, Merge Down / Visible,
+  Flatten, New Group, Group Layers, layer name / opacity / blend mode,
+  show / hide, arrange and select a layer by name, index or step; Color
+  Range (sampled colours), Feather, Expand, Contract, Border, Smooth;
+  Stroke; Copy, Copy Merged, Paste, Cut, Layer via Copy / Cut; Add Noise,
+  Motion Blur, High Pass, Smart Sharpen; and Save As / Export, which opens
+  the export dialog. Still skipped, with the reason: Hue/Saturation of a
+  single colour range, Levels / Curves from a preset file, Color Range
+  presets (reds, highlights and so on), an angled crop, and every event not
+  listed here. A step with no
   equivalent here stays listed, marked "skipped on play" with the reason,
   and Play names it on the status line. An unchecked step is passed over.
   Under its flat list the Actions panel draws the sets as a tree (set,
   then its actions, then each step with a check box and the skip reason).
   Its buttons make a new set, rename the selected set in place, choose the
   set recordings join, export the set as `.atn` (the parser reads it back),
-  load a `.atn`, play from the selected step and delete the set. Known
-  gaps: the export writes a recorded step only when it is a new layer or a rectangle
-  or empty selection; any other recorded step is left out and counted.
-  Batch plays only an action's recorded edits, not its imported steps.
+  load a `.atn`, play from the selected step and delete the set. W16-H: the
+  export writes every recorded edit whose command carries its parameters as
+  the Photoshop step for it (new layer / group, delete, layer name /
+  opacity / blend, show / hide, select all / none / rectangle, free
+  transform, Image Size, Canvas Size and Crop as a crop rectangle, mode and
+  bit depth, and by their undo label Invert, Desaturate, Equalize, flips,
+  180° and layer turns, merges, Flatten, Group, Duplicate, Paste, Layer via
+  Copy / Cut). Known gaps: a brush stroke, and a filter or adjustment
+  applied through its dialog, record their pixels but not their settings,
+  so they (and a lasso / mask selection, a layer restack, and a 90° canvas
+  turn, whose direction the command does not keep) are left out and
+  counted. Batch plays only an action's recorded edits, not its imported
+  steps.
 - **Cut out, merge channels, automate, convert type** (W13-N): Select ▸
   Magic Cut… paints foreground / background strokes over the active layer
   in a window; GrabCut turns them into a mask, Refine Edge's smooth / shift /
@@ -761,6 +905,9 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   platform pickers, prefilled with the file name the script passed (its
   last path component only; the user still picks the file). A `.jsx` / `.js` opened with File ▸ Open or dropped on
   the window opens in the Script window and runs only when Run is pressed.
+  W16-K: three demos sit at the window's top (Hello, Grid, Rotate), and Save
+  keeps a script under a name in `<config>/scripts/`, listed at the bottom
+  (a click loads it, the bin deletes it).
 - **Save** the native `.rstudio` package: compressed tiles, unchanged tiles
   reused, written off the UI thread, with autosave and crash recovery
   (commands made while a save runs are journaled beside the package, so a
@@ -842,16 +989,40 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   plain scale and rotation (shear is not keyed). Because a seek
   writes the tracked values straight onto the layers, undoing an older
   layer edit after a scrub can leave a tracked value off the timeline
-  until the playhead next moves. Opening a video
-  file (MP4, MOV, WebM, AVI) is refused by name: no permissively licensed
-  pure-Rust video decoder exists that this build can run safely (re-checked
-  in W13X-9: `rav1d` 1.1 and its `re_rav1d` fork are BSD-2-Clause but
-  only offer dav1d's C-ABI functions, where a panic on damaged input aborts
-  the process, and release builds abort on any panic anyway, so no
-  `catch_unwind` can contain it; `rav1d-safe` is AGPL-3.0), so there are
-  no video layers. Reading an MP4's box structure is bounded: a sample
+  until the playhead next moves. W16-M: **video layers** exist in the
+  engine and the editor API: `Editor::open_video_path` (a new document
+  holding the video) and `Editor::add_media_path` (the timeline's Add
+  Media: a video layer at the playhead, one undo step) decode an H.264
+  (`avc1`, OpenH264's decoder) or 8-bit 4:2:0 AV1 (`av01`, rusty_av1d) MP4
+  **in the decode worker process** (`--decode-worker video`), so a
+  decoder crash on a damaged file is an error, not the editor closing;
+  at most 1000 frames and 1 GiB of decoded frames, checked before a frame
+  is decoded. Each frame's tiles go in the document's tile store; the
+  layer shows the frame at the playhead (scrub, playback, `render_at`,
+  and so MP4 export), and the layer's bar trims it (the middle stays put
+  on the timeline). The frames are not saved in the `.rstudio` package:
+  a reopened document reads them again from the source file on the first
+  seek. **Not reachable yet:** File ▸ Open, Open Recent and drag-and-drop
+  still refuse a video by name, and the Animation panel's new Add Media
+  button asks for File ▸ Place Embedded, whose route still refuses one:
+  the routing branches are written (`Editor::open_video_file` for
+  `Editor::open_resource_file`'s table in `editor_open_any.rs`, which every
+  open route asks first, and `Editor::place_video_file` for the top of
+  `Editor::place_path` in `editor.rs`) but those two call sites are
+  outside this change's files, so nothing calls them yet (the route test
+  `file_open_and_place_route_an_mp4_to_a_video_layer` is `#[ignore]`d
+  until they do). No audio: an audio track is ignored (no
+  permissively licensed pure-Rust AAC decoder; symphonia is MPL-2.0) and
+  MP4 export writes none. HEVC, VP9 and other codecs are refused by name;
+  New Video Group is not there. Reading an MP4's box structure is bounded: a sample
   table naming more than a million frames, or more than the file can
   hold, is refused before anything is sized by it.
+- **Export As PDF, EMF and DXF** (W16-K): a PDF is one page per artboard
+  (else the canvas), shape and single-style text layers as vector paths and
+  other layers as images (a page with blend modes, masks, clipping or
+  adjustment layers is one image); an EMF is the first page as GDI paths
+  with images flattened onto white; a DXF is the first page's paths as R12
+  polylines (no pixels). A scaled row writes one image.
 - **Export** one file with **File ▸ Export…** (W14: a File-menu row above
   Export As, also Ctrl+Alt+Shift+S and an entry in Help ▸ Search Commands):
   the platform save picker, and the format is the extension you type
@@ -891,9 +1062,17 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   opened (every open route, File ▸ Open's background job included), and a
   slice edit in one document never touches another's saved set);
   layered PSD (W9-M: 16-bit for a
-  16-bit document; shape layers as vector shape layers, embedded unfiltered
-  smart objects as placed layers with their file embedded, pattern overlays
-  with their pattern); print as PDF.
+  16-bit document; shape layers as vector shape layers, smart objects as
+  placed layers with their file embedded (`lnk2`) or, W16-J, a linked one
+  as a link to its file's path (`liFE` in `lnkE`), and their smart filters
+  as Photoshop's `filterFX` on the placed layer for Average, Blur, Blur
+  More, Box Blur, Gaussian Blur, Motion Blur, Surface Blur, Sharpen,
+  Sharpen More, Sharpen Edges, Unsharp Mask, Add Noise, Despeckle, Dust &
+  Scratches, Median, Mosaic, High Pass, Maximum and Minimum; any other
+  filter (Lens Blur, Smart Blur, Radial Blur, Smart Sharpen, Reduce Noise,
+  the distort, render and stylize filters, ...), a Wrap/Mirror edge setting
+  or a smart-filter mask keeps the object as its rendered pixels, named with
+  the reason; pattern overlays with their pattern); print as PDF.
   Duplicate a document, Close Others, Close All.
 - **File automation and data-driven exports (W10-E).** File ▸ Automate ▸
   Batch… plays a recorded Action (from the Actions panel's library) on every
@@ -980,9 +1159,9 @@ matrix, each with its reason there:
 
 | Missing | Why |
 | --- | --- |
-| ICC-accurate CMYK, spot colours, Lab files | Since W7-D: Image ▸ Mode ▸ Lab / CMYK / Indexed convert (one undo step each; CMYK on a documented naive ink model, not an ICC press profile; Indexed through its own dialog); File ▸ Export… and Export As write a CMYK document as CMYK JPEG/TIFF and an Indexed one as a palette PNG (GIF keeps its colours) — since W8-B the palette PNG always writes: an image past 256 RGBA colours (a soft stroke painted after the conversion) is re-quantised with 1-bit alpha, as Photoshop's Indexed stores it; Export As says when a format writes the document as RGB instead (always, for Lab), and since W8-B File ▸ Export… says so in the status line; Info adds a Lab or CMYK row for a document in that mode, and since W8-B the Color panel switches to Lab / CMYK / Gray (K%) notation when the document is in that mode (the user can still pick another); since W8-B Image ▸ Adjustments ▸ Levels and Curves on a Lab document list Lightness / a / b (no composite row; they open on Lightness, so a first move keeps greys neutral) and preview and apply on those channels, and since W10-H so does a Levels/Curves *adjustment layer* in a Lab document; since W10-H Indexed Color flattens a layered document (one undo step, and the status line says so), Image ▸ Mode ▸ Bitmap… (threshold, pattern / diffusion dither, halftone screen) and Duotone… (1-4 inks with curves, baked into the pixels) convert from Grayscale, and Image ▸ Apply Image… / Calculations… exist; View ▸ Proof Colors and Gamut Warning are enabled and change the canvas. Still missing: a press profile (since W13X-4 a document can carry spot channels, composited as ink and written to `.psd` as spot channels), any Lab file (Lab goes out as RGB, and both export routes say so), and re-editable duotone inks. |
+| ICC-accurate CMYK, spot colours, Lab files | Since W7-D: Image ▸ Mode ▸ Lab / CMYK / Indexed convert (one undo step each; CMYK on a documented naive ink model, not an ICC press profile; Indexed through its own dialog); File ▸ Export… and Export As write a CMYK document as CMYK JPEG/TIFF and an Indexed one as a palette PNG (GIF keeps its colours) — since W8-B the palette PNG always writes: an image past 256 RGBA colours (a soft stroke painted after the conversion) is re-quantised with 1-bit alpha, as Photoshop's Indexed stores it; Export As says when a format writes the document as RGB instead (always, for Lab), and since W8-B File ▸ Export… says so in the status line; Info adds a Lab or CMYK row for a document in that mode, and since W8-B the Color panel switches to Lab / CMYK / Gray (K%) notation when the document is in that mode (the user can still pick another); since W8-B Image ▸ Adjustments ▸ Levels and Curves on a Lab document list Lightness / a / b (no composite row; they open on Lightness, so a first move keeps greys neutral) and preview and apply on those channels, and since W10-H so does a Levels/Curves *adjustment layer* in a Lab document; since W10-H Indexed Color flattens a layered document (one undo step, and the status line says so), Image ▸ Mode ▸ Bitmap… (threshold, pattern / diffusion dither, halftone screen) and Duotone… (1-4 inks with curves, baked into the pixels) convert from Grayscale, and Image ▸ Apply Image… / Calculations… exist; View ▸ Proof Colors and Gamut Warning are enabled and change the canvas. Still missing: a press profile (since W13X-4 a document can carry spot channels, composited as ink and written to `.psd` as spot channels), a Lab file other than `.psd` (since W16-B a Lab, CMYK, Indexed, Duotone or Bitmap `.psd` opens in its own mode and Save as PSD writes Lab, CMYK, Indexed and Grayscale back in their mode; the flat export routes still write Lab as RGB and say so), and re-editable duotone inks (a Duotone `.psd` opens with its inks baked in and saves as RGB). |
 | Proprietary camera RAW files; EPS text in its own fonts, smooth shading and patterns; Paint.NET layers; Sketch / XD / Figma symbols, gradients and effects | W13-C: DNG opens, but CR2 / CR3 / NEF / ARW / RAF / ORF / RW2 are refused by name (no permissively licensed reader exists; convert to DNG); W13-D: PDF / AI pages open (see Open above), W15-E: EPS artwork opens through a bounded PostScript interpreter, but its text is set in a fallback system font with estimated spacing (embedded Type 1 / Type 42 / CFF outlines are not rasterised) and smooth shading (`shfill`), patterns, `charpath` and masked images (ImageType 3 / 4) are named in the status line, not drawn; W13X-7: Paint.NET files open as layers when this build's reader can follow their object graph (else their thumbnail, saying why). W13X-8: Sketch / XD / Figma open as layers (see Open above), but symbol / component instances are not expanded, gradient and image fills (other than a bitmap), effects, non-union boolean operations, per-run text styles, blend modes and masks are reported and not kept, only the first page opens, and a Figma `VECTOR` that stores no outline is drawn as its bounding box. |
-| Video layers, audio, H.264 | W13-L added the video timeline (per-layer in/out bars, opacity, position, scale and rotation keyframes with per-key Linear / Ease In / Ease Out / Hold interpolation (W13X-9), a playhead whose scrub and playback move the canvas live with no history step, saved in `.rstudio`) and MP4 export (W15-B: H.264 by default through OpenH264 built from source, AV1 as the Codec option; File ▸ Export As ▸ MP4), see Video timeline and MP4 export above. Still missing: opening a video file as a video layer (no permissively licensed pure-Rust decoder, so MP4 / MOV / WebM / AVI are refused by name), audio. |
+| Video layers, audio, H.264 | W13-L added the video timeline (per-layer in/out bars, opacity, position, scale and rotation keyframes with per-key Linear / Ease In / Ease Out / Hold interpolation (W13X-9), a playhead whose scrub and playback move the canvas live with no history step, saved in `.rstudio`) and MP4 export (W15-B: H.264 by default through OpenH264 built from source, AV1 as the Codec option; File ▸ Export As ▸ MP4), see Video timeline and MP4 export above. W16-M: video layers from an H.264 / AV1 MP4, decoded in the decode worker (`Editor::open_video_path`, `Editor::add_media_path`; the frame at the playhead shows, exports and trims). Still missing: the File ▸ Open / Place / drop call sites (in `editor_open_any.rs` and `editor.rs`, outside W16-M's files) for the written branches `Editor::open_video_file` / `place_video_file`, so a video picked there is still refused by name, audio (no permissive pure-Rust AAC decoder), New Video Group. |
 | Collaboration, cloud storage, sharing online, mobile | Non-goals: this is a local-first desktop application whose own code makes no network calls, so nothing that needs a server is offered. |
 | Licensing and auto-update | Dropped from the workspace: neither crate exists. Entitlement checks and update feeds belong to a shipped product's release engineering, not this build. |
 | Perfect PSD round-tripping | The target is a correct reopen in Photoshop and Photopea, not byte fidelity. |
@@ -1133,29 +1312,46 @@ matrix, each with its reason there:
   name); a note's text is edited in the Notes panel, not in a popup on
   the canvas, and a pin cannot be dragged; there is no View > Show > Notes
   of its own (View > Extras hides the pins).
-- **Localisation** covers the view and dialog code (the only code the
-  `no_localized_literals` gate checks). That includes the bodies of the
-  Layers, History, Adjustments, Color, Swatches, Brushes, Character,
-  Paragraph, Navigator, Info, Histogram, Channels, Paths and Actions
-  panels, which are drawn in `src/view/docks.rs` and write their own
-  labels through `tr()`. Thirteen `src/panels` files also call `tr()`
-  (Actions, Animation and its timeline, CSS, Document Info, Glyphs, Guide
-  Guy, Layer Comps, Notes, Properties, Styles, Character / Paragraph
-  Styles and Tool Presets), and so do 22 menu strings (the W13-F rows: the
-  colour-profile rows, Reduce Colors, Wavelet Decompose, Clear Slices,
-  Slices from Guides and Pattern Preview, with their disabled-row reasons,
-  plus Scale Effects…). Text that reaches those panels from model or
-  engine code is still English: every panel's tab title (`PanelId::title`
-  in `src/dock.rs`), the blend-mode names (`BlendMode::label`), the
-  Adjustments panel's button names (`AdjustmentId::label`), the Info
-  panel's row names (Pointer, Hex, Document, Angle… in
-  `src/panels/navigator.rs`), the Character panel's weight and caps names
-  (`src/panels/text.rs`), the built-in brush preset names, the Layers
-  panel's `Show only … layers` filter tooltip, the names a new layer or
-  group starts with (`Layer {n}`, `Group`), and the History panel's step
-  names (the command labels in `editor-core`, with a `Step {n}`
-  fallback). Nearly every other menu label and `src/canvas` are English
-  literals too. English is the only locale.
+- **Languages** (W16-N): Window ▸ Language (Photopea's More ▸ Language)
+  offers English and twelve full translations — Deutsch, Español,
+  Français, Italiano, Polski, Português (Brasil), Türkçe, Русский,
+  Українська, 简体中文, 日本語, 한국어 — each row in its own language; the
+  choice is stored in preferences (`language`) and applied the moment it
+  is picked (the Preferences dialog's Language list offers the same
+  thirteen). A language is a table, `crates/ui/src/i18n/<code>.tsv`,
+  keyed by the English source string. The gate
+  `strings::tests::every_language_table_translates_every_catalogue_string`
+  holds every table to every English string the catalogue knows — every
+  `tr()` key, every menu title, submenu and row (drawn through
+  `MenuAction::label_in`; `label` stays English for scripts), the panel
+  tab titles, blend-mode names, the Adjustments buttons, the Info rows,
+  the Character / Paragraph choices (weights, caps, position, alignment,
+  kerning), the docks' field labels, the shipped brush preset names, the
+  History step names `Command::label` gives (`HISTORY_LABELS`), and a new
+  layer's `Layer n` — with every `{placeholder}` and menu ellipsis kept
+  and no stale row. Chinese, Japanese and Korean draw with a bundled
+  subset of Noto Sans CJK SC (SIL OFL 1.1, `i18n/OFL.txt`) installed in
+  egui's fallback chain; the route is proved end to end by
+  `app-shell/tests/w16n_language.rs` (menu clicks, the drawn bar in
+  German, Japanese, Korean and Chinese, no tofu). Still English: text
+  outside the catalogue — dialog titles and bodies not yet routed through
+  `tr()`, status-line messages built with `format!` in `app-shell`, the
+  menus' disabled-row reasons, `src/canvas`, the Layers filter tooltip, a
+  new group's `Group`, History steps named by a `Transaction` label that
+  is not a menu row, and the `Recent n` slots. Japanese uses the SC face,
+  so shared Han characters take Chinese forms, and the subset covers only
+  the characters the three tables use (CJK typed into a field can still
+  meet a missing glyph). The rest of Photopea's language list (for
+  example Czech, Dutch, Swedish, Hungarian, Romanian, Greek, Arabic,
+  Hebrew, Hindi, Thai, Vietnamese, Indonesian, Traditional Chinese) is not
+  offered: no translation exists, and right-to-left languages would also
+  need a mirrored layout.
+- **Glass Menus** (W16-N): Window ▸ Glass Menus, stored in preferences,
+  draws every menu over `design::egui_theme::glass_menu_fill` (the
+  overlay surface at 72% opacity) so the document shows through; other
+  windows keep their opaque fill. There is no backdrop blur (egui has
+  none), and the research copy of Photopea's bundle carries no Glass
+  Menus string, so the look is not checked against Photopea's.
 - **SVG export** (W10-F): File ▸ Export… to `.svg` (an SVG row in the
   picker) and Export As's SVG rows at 100% write each solid shape layer
   as a `<path>` (fill and stroke colour as the composite draws them, fill

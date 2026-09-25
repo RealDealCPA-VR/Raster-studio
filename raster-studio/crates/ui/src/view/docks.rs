@@ -282,6 +282,8 @@ fn panel_group(
         if active == PanelId::Channels {
             channels_menu(w, ui, doc, history);
         }
+        // W16-E: the Swatches, Brushes, Styles and History panel menus.
+        crate::panels::panel_menus_w16::panel_menu(w, ui, doc, history, active);
     }
     let t = current_tokens(ui);
     // The rule under the group and the gap before it come off the fill, so
@@ -549,7 +551,13 @@ fn has_document(doc: &Document) -> bool {
 // Layers
 // ---------------------------------------------------------------------------
 
+/// W16-D: the effects list, the double-click routes, Alt-click solo, trash
+/// drops and the panel-options menu.
+#[path = "docks_layers_w16.rs"]
+mod layers_w16;
+
 fn layers_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, fill_bottom: Option<f32>) {
+    w.layers.prune_w16(doc);
     let model = LayersModel::build(doc, &w.layers);
     let active = doc.active_layer();
 
@@ -586,15 +594,26 @@ fn layers_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, fill_bottom: Opti
         let released = ui.input(|i| i.pointer.any_released());
         let mut hovered: Option<DropPosition> = None;
         for row in &rows {
-            let response = layer_row(w, ui, row, &rows);
+            let response = layer_row(w, ui, doc, row, &rows);
             // W11-E: the row's colour label, a chip in its left margin.
             color_label_chip(ui, doc, row.id, response.rect);
             // W7-E: a smart object's filter stack hangs under its row.
             smart_filter_rows(w, ui, doc, row);
+            // W16-D: a styled layer's effects list hangs under it too.
+            layers_w16::effect_rows(w, ui, doc, row);
             if let Some(position) = row_drag_position(w, ui, doc, row, &response) {
                 hovered = Some(position);
             }
             if response.secondary_clicked() {
+                // W16-D: Photopea's right-click selects the row first, so the
+                // menu acts on the layer it was opened on.
+                if !row.selected && !row.active {
+                    w.layers.select_only(row.id);
+                    w.emit(Intent::SelectLayers {
+                        layers: vec![row.id],
+                        active: Some(row.id),
+                    });
+                }
                 crate::context_menu::open(
                     w,
                     crate::context_menu::ContextTarget::LayerRow,
@@ -604,9 +623,21 @@ fn layers_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, fill_bottom: Opti
                 );
             }
         }
+        // W16-D: a row released over the footer's trash is deleted (a layer
+        // row) or cleared (an effects row), as in Photopea.
+        let over_trash = released && layers_w16::pointer_over_trash(ui);
+        if released {
+            if let Some(drag) = w.layers.end_effect_drag() {
+                if over_trash {
+                    layers_w16::drop_effect_on_trash(w, doc, drag);
+                }
+            }
+        }
         if released {
             if let Some(dragged) = w.layers.end_drag() {
-                if let Some(position) = hovered {
+                if over_trash {
+                    layers_w16::drop_layer_on_trash(w, doc, dragged);
+                } else if let Some(position) = hovered {
                     match LayersModel::resolve_drop(doc, dragged, position) {
                         Ok(command) => w.emit(Intent::Document(command)),
                         Err(DropRejection::NoChange) => {}
@@ -661,12 +692,12 @@ fn blend_and_opacity(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Opt
                     let mut picked = mode;
                     let combo = egui::ComboBox::from_id_salt("raster-layer-blend")
                         .width(ui.available_width())
-                        .selected_text(body(ui, mode.label()))
+                        .selected_text(body(ui, crate::strings::tr_en(mode.label())))
                         .show_ui(ui, |ui| {
                             for candidate in BlendMode::ALL {
                                 let row = ui.selectable_label(
                                     candidate == mode,
-                                    body(ui, candidate.label()),
+                                    body(ui, crate::strings::tr_en(candidate.label())),
                                 );
                                 super::mark(
                                     ui,
@@ -798,7 +829,13 @@ fn color_label_chip(ui: &mut Ui, doc: &Document, layer: LayerId, row_rect: egui:
     );
 }
 
-fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) -> egui::Response {
+fn layer_row(
+    w: &mut Workspace,
+    ui: &mut Ui,
+    doc: &Document,
+    row: &LayerRow,
+    rows: &[LayerRow],
+) -> egui::Response {
     let t = current_tokens(ui);
     // The thumbnail-size control scales the whole row, not just the well.
     let height = t.metrics.list_row_height * w.layers.thumb_scale.height();
@@ -878,10 +915,8 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
     )
     .clicked()
     {
-        w.emit(Intent::Document(LayersModel::set_visible(
-            row.id,
-            !row.visible,
-        )));
+        // W16-D: Alt-click solos the layer.
+        layers_w16::eye_click(w, &content, doc, row);
     }
 
     thumbnail(&mut content, w, row);
@@ -918,9 +953,9 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
         if row.shows_lock_badge() {
             badge(ui, "lock", false);
         }
-        if row.shows_effects_badge() {
-            badge(ui, "fx", true);
-        }
+        // W16-D: a styled row's fx badge carries the fold toggle of the
+        // effects list drawn under it.
+        layers_w16::fx_toggle(w, ui, doc, row);
         if row.shows_mask_badge() {
             badge(
                 ui,
@@ -935,9 +970,10 @@ fn layer_row(w: &mut Workspace, ui: &mut Ui, row: &LayerRow, rows: &[LayerRow]) 
     });
 
     // Card 026: double-clicking a TEXT row enters that layer for editing —
-    // the shell opens the session; other classes keep plain selection.
-    if response.double_clicked() && row.class == crate::menu::LayerClass::Text {
-        w.emit(Intent::EnterTextLayer { layer: row.id });
+    // the shell opens the session. W16-D: any other row opens Layer Style,
+    // as Photopea's does. Both clicks must land on this row.
+    if layers_w16::double_click_on(ui, &response) {
+        layers_w16::row_double_click(w, row);
     }
     if response.clicked() || name_clicked {
         let modifiers = ui.input(|i| i.modifiers);
@@ -1305,11 +1341,13 @@ fn smart_filter_blend_row(
             let combo =
                 egui::ComboBox::from_id_salt(("raster-smart-filter-mode-combo", layer, index))
                     .width(t.metrics.numeric_field_width * 2.0)
-                    .selected_text(body(ui, mode.label()))
+                    .selected_text(body(ui, crate::strings::tr_en(mode.label())))
                     .show_ui(ui, |ui| {
                         for candidate in BlendMode::ALL {
-                            let option =
-                                ui.selectable_label(candidate == mode, body(ui, candidate.label()));
+                            let option = ui.selectable_label(
+                                candidate == mode,
+                                body(ui, crate::strings::tr_en(candidate.label())),
+                            );
                             super::mark(
                                 ui,
                                 option.rect,
@@ -1416,6 +1454,14 @@ fn rename_field(w: &mut Workspace, content: &mut Ui, row: &LayerRow) {
 /// also exactly what a headless draw sees, since no application has uploaded
 /// textures there.
 fn thumbnail(ui: &mut Ui, w: &mut Workspace, row: &LayerRow) {
+    // W16-D: the smallest "− Thumbnail Size" step draws no wells at all.
+    if !w.layers.thumb_scale.shows_thumbnails() {
+        if w.layers.mask_menu == Some(row.id) {
+            w.layers.mask_menu = None;
+            w.layers.mask_menu_fresh = false;
+        }
+        return;
+    }
     let t = current_tokens(ui);
     let height = (t.metrics.list_row_height * w.layers.thumb_scale.height()) - Space::XSmall.pt();
     let size = Vec2::new(height * 4.0 / 3.0, height);
@@ -1465,7 +1511,7 @@ fn vector_mask_well(
             crate::strings::tr("ui.docks.vector.mask.thumbnail"),
         )
     });
-    if response.clicked() {
+    if response.clicked() || response.secondary_clicked() {
         w.layers.select_only(row.id);
         let selection = w.layers.selection().to_vec();
         w.emit(Intent::SelectLayers {
@@ -1473,6 +1519,65 @@ fn vector_mask_well(
             active: Some(row.id),
         });
         w.property_focus = crate::panels::properties::PropertyFocus::Mask;
+    }
+    // W16-E: the vector mask's own menu on a right-click, as Photopea has
+    // it: Disable / Enable Vector Mask and Delete Vector Mask, through
+    // Layer > Vector Mask's ops on the (now active) layer.
+    let menu_key = egui::Id::new("raster-w16-vector-mask-menu");
+    if response.secondary_clicked() {
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(menu_key, Some((row.id, true))));
+    }
+    if let Some((open, fresh)) = ui
+        .ctx()
+        .data(|d| d.get_temp::<Option<(LayerId, bool)>>(menu_key))
+        .flatten()
+        .filter(|(layer, _)| *layer == row.id)
+    {
+        let mut close = false;
+        egui::Area::new(super::ids::layer_vector_mask_thumb(row.id).with("menu"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(egui::pos2(rect.left(), rect.bottom()))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    let toggle = if v.enabled {
+                        "ui.w16.vector.mask.disable"
+                    } else {
+                        "ui.w16.vector.mask.enable"
+                    };
+                    for (key, label, op) in [
+                        ("toggle", toggle, crate::menu::VectorMaskOp::Toggle),
+                        (
+                            "delete",
+                            "ui.w16.vector.mask.delete",
+                            crate::menu::VectorMaskOp::Delete,
+                        ),
+                    ] {
+                        let id = crate::panels::panel_menus_w16::ids::vector_mask_item(open, key);
+                        if super::labelled_button(ui, crate::strings::tr(label), true, id).clicked()
+                        {
+                            w.emit(Intent::Action(crate::menu::MenuAction::VectorMask(op)));
+                            close = true;
+                        }
+                    }
+                });
+            });
+        if ui.input(|i| i.key_pressed(egui::Key::Escape))
+            || (!fresh && !close && {
+                let area = ui
+                    .ctx()
+                    .read_response(super::ids::layer_vector_mask_thumb(row.id).with("menu"));
+                let pointer = ui.input(|i| i.pointer.interact_pos()).unwrap_or_default();
+                ui.input(|i| i.pointer.any_click())
+                    && !area.is_some_and(|r| r.rect.contains(pointer))
+            })
+        {
+            close = true;
+        }
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(menu_key, (!close).then_some((open, false)));
+        });
     }
     let radius = Radius::Small.resolve(&t.radii, size.y);
     super::checkerboard(ui.painter(), rect, Space::XSmall.pt());
@@ -1624,6 +1729,11 @@ fn content_well(ui: &mut Ui, w: &mut Workspace, row: &LayerRow, size: Vec2) {
             w.emit(crate::Intent::SetEditTarget { mask: false });
         }
     }
+    // W16-D: a double-click opens the layer's own editor (a smart object's
+    // contents, a fill or adjustment layer's dialog) or Layer Style.
+    if layers_w16::double_click_on(ui, &response) {
+        layers_w16::thumbnail_double_click(w, row);
+    }
     let radius = Radius::Small.resolve(&t.radii, size.y);
     super::checkerboard(ui.painter(), rect, Space::XSmall.pt());
     // Card 055: the target border — THE target row's well (the active
@@ -1643,13 +1753,8 @@ fn content_well(ui: &mut Ui, w: &mut Workspace, row: &LayerRow, size: Vec2) {
         };
     ui.painter().rect_stroke(rect, rounding(radius), border);
     if let Some(tex) = w.layer_thumbs.get(&row.id) {
-        let r = rect;
-        ui.painter().image(
-            tex.id(),
-            r,
-            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
-            crate::dialogs::controls::UNTINTED,
-        );
+        // W16-D: cropped to the layer under "Thumbnails by Layer".
+        layers_w16::paint_thumb(ui, w, row, tex, rect);
         return;
     }
     // Square, centred: the well is 4:3, and an icon stretched to fill it would
@@ -1857,8 +1962,8 @@ fn mask_view_popup(
     let popup_id = super::ids::layer_mask_thumb(row.id).with("menu");
     let mut close = false;
     // Clamp the anchor so a well near the panel's bottom still shows the
-    // whole popup: five rows (three modes + two ops) at the control height.
-    let estimated_h = t.metrics.control_height * 5.0 + 8.0;
+    // whole popup: seven rows (three modes + four ops) at the control height.
+    let estimated_h = t.metrics.control_height * 7.0 + 8.0;
     let screen_bottom = ui.ctx().screen_rect().bottom();
     let top = (anchor.bottom() + 2.0).min(screen_bottom - estimated_h);
     egui::Area::new(popup_id)
@@ -1977,6 +2082,24 @@ fn mask_view_popup(
                         crate::menu::MaskOp::ToggleLink,
                     )));
                     close = true;
+                }
+                // W16-E: Photopea's Delete and Apply, through Layer >
+                // Layer Mask's own ops (one undo step each, on the active
+                // layer, which the right-click made this row).
+                for (key, label, op) in [
+                    ("delete", "ui.w16.mask.delete", crate::menu::MaskOp::Delete),
+                    ("apply", "ui.w16.mask.apply", crate::menu::MaskOp::Apply),
+                ] {
+                    if menu_row(
+                        ui,
+                        crate::panels::panel_menus_w16::ids::mask_item(row.id, key),
+                        crate::strings::tr(label),
+                        false,
+                        toggle_enabled,
+                    ) {
+                        w.emit(crate::Intent::Action(crate::menu::MenuAction::Mask(op)));
+                        close = true;
+                    }
                 }
             });
         });
@@ -2117,7 +2240,10 @@ fn layer_filter_row(w: &mut Workspace, ui: &mut Ui) {
                 .clicked()
                 {
                     w.layers.thumb_scale = w.layers.thumb_scale.cycled();
+                    w.layers.note_option_edit();
                 }
+                // W16-D: Photopea's Layers panel menu.
+                layers_w16::options_button(w, ui);
                 // W3-J: the name search fills what the icons left of the row.
                 // When a narrow column leaves less than a numeric field's width,
                 // it drops to its own line below instead of overflowing.
@@ -2136,6 +2262,7 @@ fn layer_filter_row(w: &mut Workspace, ui: &mut Ui) {
         let width = ui.available_width() - Space::XSmall.pt();
         layer_search_field(w, ui, width.max(t.metrics.numeric_field_width));
     }
+    layers_w16::options_menu(w, ui);
 }
 
 /// W3-J: the Layers panel's name search. Typing narrows the rows to those
@@ -2347,6 +2474,8 @@ fn layer_buttons(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Option<
                 ActionState::enabled_if(can_delete),
                 Some(super::ids::layer_delete()),
             );
+            // W16-D: a row dragged over the trash lights it.
+            layers_w16::trash_cue(w, ui, delete.rect);
             if can_delete && delete.clicked() {
                 if let Some(command) = LayersModel::delete_selection(doc, &selection) {
                     w.emit(Intent::Document(command));
@@ -2498,7 +2627,7 @@ fn history_body(w: &mut Workspace, ui: &mut Ui, history: &History) {
             ui.add_space(Space::XSmall.pt());
             ui.label(text(
                 ui,
-                step.label.clone(),
+                crate::strings::tr_en(&step.label).to_string(),
                 if step.undone {
                     TextRole::Disabled
                 } else {
@@ -2586,7 +2715,7 @@ fn adjustments_body(w: &mut Workspace, ui: &mut Ui) {
                 if icon_action_id(
                     ui,
                     AdjustmentsPanel::icon(*id),
-                    id.label(),
+                    crate::strings::tr_en(id.label()),
                     ActionState::Idle,
                     Some(super::ids::adjustment_tile(*id)),
                 )
@@ -2712,7 +2841,7 @@ fn layer_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId)
         return;
     };
     let mut renamed: Option<String> = None;
-    design::inspector_field(ui, "Name", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Name"), |ui| {
         // W5-E: a long name ends in an ellipsis inside the field itself: the
         // field is handed the elided name while nobody is editing it, and the
         // whole name the moment it takes focus, so an edit never starts from
@@ -2752,12 +2881,12 @@ fn layer_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId)
             }
         }
     }
-    design::inspector_field(ui, "Kind", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Kind"), |ui| {
         ui.label(body(ui, crate::menu::LayerClass::of(&layer.kind).label()));
         ui.with_layout(Layout::right_to_left(Align::Center), transform_toggle);
     });
     let mut clipping = layer.is_clipping();
-    design::inspector_field(ui, "Clipping", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Clipping"), |ui| {
         if ui
             .checkbox(
                 &mut clipping,
@@ -2770,7 +2899,7 @@ fn layer_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId)
     });
     if !layer.effects.is_empty() {
         let mut enabled = layer.effects.enabled;
-        design::inspector_field(ui, "Effects", |ui| {
+        design::inspector_field(ui, crate::strings::tr_en("Effects"), |ui| {
             if ui
                 .checkbox(
                     &mut enabled,
@@ -2913,7 +3042,7 @@ fn transform_block(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) 
     });
     // One row: a picker rather than six buttons, so the block stays short
     // enough that the Layers panel sharing the rail keeps its rows.
-    design::inspector_field(ui, "Align", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Align"), |ui| {
         ui.add_enabled_ui(enabled, |ui| {
             let combo = egui::ComboBox::from_id_salt(("raster-properties-align", id))
                 .selected_text(body(ui, crate::strings::tr("ui.docks.align.pick")))
@@ -2968,7 +3097,7 @@ fn text_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) 
     design::section_header(ui, "Type");
     let mut changed = false;
     let mut family: Option<String> = None;
-    design::inspector_field(ui, "Family", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Family"), |ui| {
         family = super::text_field(ui, props::ids::text_family(layer), &run.style.family).committed;
     });
     if let Some(family) = family {
@@ -2985,14 +3114,20 @@ fn text_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) 
     {
         changed |= text_panel::Character::set_size(&mut run, size);
     }
-    design::inspector_field(ui, "Weight", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Weight"), |ui| {
         let mut picked = run.style.weight.0;
         egui::ComboBox::from_id_salt("raster-properties-weight")
-            .selected_text(body(ui, text_panel::weight_label(run.style.weight)))
+            .selected_text(body(
+                ui,
+                crate::strings::tr_en(text_panel::weight_label(run.style.weight)),
+            ))
             .show_ui(ui, |ui| {
                 for (name, value) in text_panel::WEIGHTS {
                     if ui
-                        .selectable_label(run.style.weight.0 == *value, body(ui, *name))
+                        .selectable_label(
+                            run.style.weight.0 == *value,
+                            body(ui, crate::strings::tr_en(name)),
+                        )
                         .clicked()
                     {
                         picked = *value;
@@ -3003,7 +3138,7 @@ fn text_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) 
             changed |= text_panel::Character::set_weight(&mut run, picked);
         }
     });
-    design::inspector_field(ui, "Fill", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Fill"), |ui| {
         let mut picked = text_panel::fill_to_swatch(run.style.color);
         if ui.color_edit_button_srgba(&mut picked).changed() {
             changed |=
@@ -3032,7 +3167,7 @@ fn shape_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId)
     design::section_header(ui, "Shape");
     let mut intents: Vec<Option<Intent>> = Vec::new();
     let mut filled = fill.is_some();
-    design::inspector_field(ui, "Fill", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Fill"), |ui| {
         let toggle = ui.checkbox(
             &mut filled,
             hint(ui, crate::strings::tr("ui.docks.shape.filled")),
@@ -3053,7 +3188,7 @@ fn shape_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId)
         }
     });
     let mut stroked = stroke.is_some();
-    design::inspector_field(ui, "Stroke", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Stroke"), |ui| {
         let toggle = ui.checkbox(
             &mut stroked,
             hint(ui, crate::strings::tr("ui.docks.shape.stroked")),
@@ -3138,9 +3273,14 @@ fn shape_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId)
             intents.push(props::ShapeProperties::set_stroke_dash(doc, id, dash));
         }
     }
+    // W16-G: a live shape's own section (Photopea's Live Shape): W, H, X,
+    // Y, a rectangle's four radii with Same Radii, a polygon's sides.
+    let live = props::LiveShapeProperties::show(ui, doc, id);
+    let is_live = live.is_some();
+    intents.extend(live.into_iter().flatten().map(Some));
     // W3-J: corner radius, for a rectangle or rounded rectangle - the path
     // is re-rounded in place. Any other path has no corners to round.
-    match props::ShapeProperties::corner_radius(doc, id) {
+    match props::ShapeProperties::corner_radius(doc, id).filter(|_| !is_live) {
         Some(mut radius) => {
             let response = design::slider_row(
                 ui,
@@ -3153,6 +3293,7 @@ fn shape_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId)
                 intents.push(props::ShapeProperties::set_corner_radius(doc, id, radius));
             }
         }
+        None if is_live => {}
         None => {
             ui.label(hint(ui, crate::strings::tr("ui.docks.shape.no.radius")));
         }
@@ -3216,14 +3357,14 @@ fn smart_object_properties(
         return;
     };
     design::section_header(ui, "Source");
-    design::inspector_field(ui, "Source", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Source"), |ui| {
         if source.name.is_empty() {
             ui.label(hint(ui, crate::strings::tr("ui.docks.smart.no.source")));
         } else {
             ui.label(body(ui, source.name.clone()));
         }
     });
-    design::inspector_field(ui, "Kind", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Kind"), |ui| {
         let key = if source.linked {
             "ui.docks.smart.linked"
         } else {
@@ -3272,7 +3413,7 @@ fn mask_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) 
         vector_mask_properties(w, ui, doc, id);
         if props::VectorMaskProperties::is_vector_only(doc, id) {
             let mut linked = mask.linked;
-            design::inspector_field(ui, "Linked", |ui| {
+            design::inspector_field(ui, crate::strings::tr_en("Linked"), |ui| {
                 if ui
                     .checkbox(
                         &mut linked,
@@ -3308,7 +3449,7 @@ fn mask_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) 
             w.emit(Intent::Document(c));
         }
     }
-    design::inspector_field(ui, "Invert", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Invert"), |ui| {
         if ui
             .checkbox(
                 &mut inverted,
@@ -3321,7 +3462,7 @@ fn mask_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) 
             }
         }
     });
-    design::inspector_field(ui, "Enabled", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Enabled"), |ui| {
         if ui
             .checkbox(
                 &mut enabled,
@@ -3334,7 +3475,7 @@ fn mask_properties(w: &mut Workspace, ui: &mut Ui, doc: &Document, id: LayerId) 
             }
         }
     });
-    design::inspector_field(ui, "Linked", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Linked"), |ui| {
         if ui
             .checkbox(
                 &mut linked,
@@ -3593,7 +3734,7 @@ fn color_body(w: &mut Workspace, ui: &mut Ui, doc_mode: Option<u8>) {
             // correct: showing it against the colour the panel itself put in
             // the field reads as the user's mistake.
             let mut show_hint = false;
-            design::inspector_field(ui, "Hex", |ui| {
+            design::inspector_field(ui, crate::strings::tr_en("Hex"), |ui| {
                 let edit = super::text_field(ui, super::ids::color_hex(), &current);
                 show_hint = crate::panels::color::hex_hint_is_warranted(edit.editing, &edit.text);
                 committed = edit.committed;
@@ -3780,29 +3921,72 @@ fn swatches_body(w: &mut Workspace, ui: &mut Ui) {
         .enumerate()
         .map(|(i, s)| (i, s.rgba, s.name.clone()))
         .collect();
-    let mut picked: Option<[f32; 4]> = None;
+    // W16-E: the panel menu's Tiles/List, and the swatch its Name Change,
+    // Delete and Export act on (the one last clicked, ringed).
+    use crate::panels::panel_menus_w16::{self as menus, Library, ViewMode};
+    let chosen = menus::selected(ui.ctx(), Library::Swatches);
+    let as_list = menus::view_mode(ui.ctx(), Library::Swatches) == ViewMode::List;
+    let mut picked: Option<(usize, [f32; 4])> = None;
     let mut remove: Option<usize> = None;
-    for chunk in entries.chunks(per_row) {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = Space::Hair.pt();
-            for (i, rgba, name) in chunk {
-                let response = swatch(ui, *rgba, side, Sense::click()).on_hover_text(name);
-                if response.clicked() {
-                    picked = Some(*rgba);
-                }
-                if response.secondary_clicked() {
-                    remove = Some(*i);
-                }
+    if as_list {
+        for (i, rgba, name) in &entries {
+            let row = list_row_layout(
+                ui,
+                menus::ids::list_row(Library::Swatches, *i),
+                chosen == Some(*i),
+                |ui| {
+                    ui.add_space(Space::XSmall.pt());
+                    let chip = t.metrics.list_row_height - Space::XSmall.pt();
+                    swatch(ui, *rgba, chip, Sense::hover());
+                    ui.add_space(Space::XSmall.pt());
+                    ui.label(body(ui, name.clone()));
+                },
+            );
+            if row.response.clicked() {
+                picked = Some((*i, *rgba));
             }
-        });
+            if row.response.secondary_clicked() {
+                remove = Some(*i);
+            }
+        }
+    } else {
+        for chunk in entries.chunks(per_row) {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = Space::Hair.pt();
+                for (i, rgba, name) in chunk {
+                    let rect = swatch(ui, *rgba, side, Sense::hover()).rect;
+                    let response = ui
+                        .interact(rect, menus::ids::swatch_tile(*i), Sense::click())
+                        .on_hover_text(name);
+                    if chosen == Some(*i) && ui.is_rect_visible(rect) {
+                        ui.painter().rect_stroke(
+                            rect,
+                            rounding(Radius::Small.resolve(&t.radii, side)),
+                            egui::Stroke::new(
+                                t.borders.thick,
+                                color32(t.palette.color(ColorRole::SelectionStroke)),
+                            ),
+                        );
+                    }
+                    if response.clicked() {
+                        picked = Some((*i, *rgba));
+                    }
+                    if response.secondary_clicked() {
+                        remove = Some(*i);
+                    }
+                }
+            });
+        }
     }
-    if let Some(rgba) = picked {
+    if let Some((i, rgba)) = picked {
+        menus::set_selected(ui.ctx(), Library::Swatches, Some(i));
         if w.color.set_current(rgba) {
             emit_color(w);
         }
     }
     if let Some(i) = remove {
         w.swatches.remove(i);
+        menus::set_selected(ui.ctx(), Library::Swatches, None);
     }
     ui.add_space(Space::XSmall.pt());
     if design::secondary_button(ui, crate::strings::tr("ui.docks.add.current.colour")).clicked() {
@@ -3912,13 +4096,48 @@ fn brushes_body(w: &mut Workspace, ui: &mut Ui, fill_bottom: Option<f32>) {
         .presets()
         .iter()
         .enumerate()
-        .map(|(i, p)| (i, p.name.clone(), p.settings))
+        .map(|(i, p)| (i, crate::strings::tr_owned(p.name.clone()), p.settings))
         .collect();
 
     let mut apply: Option<usize> = None;
     let mut remove: Option<usize> = None;
+    // W16-E: the panel menu's Tiles/List, and the brush its Name Change,
+    // Delete and Export act on (the one last clicked).
+    use crate::panels::panel_menus_w16::{self as menus, Library, ViewMode};
+    let as_list = menus::view_mode(ui.ctx(), Library::Brushes) == ViewMode::List;
+    let chosen = menus::selected(ui.ctx(), Library::Brushes);
     let list_ui = |ui: &mut Ui, apply: &mut Option<usize>, remove: &mut Option<usize>| {
         let t = current_tokens(ui);
+        if as_list {
+            for (i, name, settings) in &presets {
+                let selected = chosen == Some(*i) || Some(*i) == active;
+                let row = list_row_layout(
+                    ui,
+                    menus::ids::list_row(Library::Brushes, *i),
+                    selected,
+                    |ui| {
+                        let tip = t.metrics.list_row_height;
+                        let (rect, _) = ui.allocate_exact_size(Vec2::splat(tip), Sense::hover());
+                        if ui.is_rect_visible(rect) {
+                            paint_brush_tip(ui, rect, settings);
+                        }
+                        ui.add_space(Space::XSmall.pt());
+                        ui.label(body(ui, name.clone()));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.add_space(Space::XSmall.pt());
+                            ui.label(hint(ui, format!("{:.0}", settings.size)));
+                        });
+                    },
+                );
+                if row.response.clicked() {
+                    *apply = Some(*i);
+                }
+                if row.response.secondary_clicked() {
+                    *remove = Some(*i);
+                }
+            }
+            return;
+        }
         let side = t.metrics.control_height * 2.0;
         let gap = Space::Hair.pt();
         let per_row = ((ui.available_width() / (side + gap)).floor() as usize).max(1);
@@ -3990,6 +4209,7 @@ fn brushes_body(w: &mut Workspace, ui: &mut Ui, fill_bottom: Option<f32>) {
     }
 
     if let Some(i) = apply {
+        menus::set_selected(ui.ctx(), Library::Brushes, Some(i));
         let writes = w.brushes.apply(i, &mut w.options, tool);
         for (key, value) in writes {
             w.emit(Intent::SetToolOption { tool, key, value });
@@ -3997,6 +4217,7 @@ fn brushes_body(w: &mut Workspace, ui: &mut Ui, fill_bottom: Option<f32>) {
     }
     if let Some(i) = remove {
         w.brushes.remove(i);
+        menus::set_selected(ui.ctx(), Library::Brushes, None);
     }
 
     ui.add_space(Space::XSmall.pt());
@@ -4143,7 +4364,7 @@ fn character_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     let mut changed = false;
     let mut picked_family: Option<String> = None;
     let mut picked_face: Option<text_engine::FaceRecord> = None;
-    design::inspector_field(ui, "Family", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Family"), |ui| {
         // Card 022: the field stays free-text — a name the machine does not
         // have is kept in the document and reported below, never rewritten —
         // and while it is edited the installed families narrow to the search.
@@ -4220,7 +4441,7 @@ fn character_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
         ));
     }
     let faces: &[text_engine::FaceRecord] = &family_fonts.faces;
-    design::inspector_field(ui, "Face", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Face"), |ui| {
         if faces.is_empty() {
             // Nothing to list — the control cannot act, so instead of a combo
             // that would go nowhere, the row states the reason (the note above
@@ -4233,7 +4454,7 @@ fn character_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
                     && f.stretch == run.style.stretch
             });
             let selected = current.map_or_else(
-                || text_panel::weight_label(run.style.weight).to_string(),
+                || crate::strings::tr_en(text_panel::weight_label(run.style.weight)).to_string(),
                 |f| text_panel::face_label(f.weight, f.slant, f.stretch),
             );
             egui::ComboBox::from_id_salt(super::ids::character_face(layer))
@@ -4284,15 +4505,18 @@ fn character_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
 /// text-layer page and the Type tool's defaults page, so the two offer the
 /// same controls with the same setters.
 fn character_basics(ui: &mut Ui, run: &mut text_engine::TextRun, changed: &mut bool) {
-    design::inspector_field(ui, "Weight", |ui| {
-        let current = text_panel::weight_label(run.style.weight);
+    design::inspector_field(ui, crate::strings::tr_en("Weight"), |ui| {
+        let current = crate::strings::tr_en(text_panel::weight_label(run.style.weight));
         let mut picked = run.style.weight.0;
         egui::ComboBox::from_id_salt("raster-char-weight")
             .selected_text(body(ui, current))
             .show_ui(ui, |ui| {
                 for (name, value) in text_panel::WEIGHTS {
                     if ui
-                        .selectable_label(run.style.weight.0 == *value, body(ui, *name))
+                        .selectable_label(
+                            run.style.weight.0 == *value,
+                            body(ui, crate::strings::tr_en(name)),
+                        )
                         .clicked()
                     {
                         picked = *value;
@@ -4310,7 +4534,7 @@ fn character_basics(ui: &mut Ui, run: &mut text_engine::TextRun, changed: &mut b
     // frame and folds into one undo step under the established gesture
     // contract, exactly like the sliders.
     let mut fill = run.style.color;
-    design::inspector_field(ui, "Fill", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Fill"), |ui| {
         let mut picked = text_panel::fill_to_swatch(fill);
         if ui.color_edit_button_srgba(&mut picked).changed() {
             fill = text_panel::swatch_to_fill(picked);
@@ -4395,9 +4619,9 @@ fn character_typography(ui: &mut Ui, run: &mut text_engine::TextRun, changed: &m
         .unwrap_or(0);
     let script_labels: Vec<&str> = text_panel::SCRIPTS
         .iter()
-        .map(|s| text_panel::script_label(*s))
+        .map(|s| crate::strings::tr_en(text_panel::script_label(*s)))
         .collect();
-    design::inspector_field(ui, "Position", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Position"), |ui| {
         if design::segmented_control(ui, "raster-char-script", &mut script_index, &script_labels) {
             *changed |= text_panel::Character::set_script(run, text_panel::SCRIPTS[script_index]);
         }
@@ -4410,9 +4634,9 @@ fn character_typography(ui: &mut Ui, run: &mut text_engine::TextRun, changed: &m
         .unwrap_or(0);
     let caps_labels: Vec<&str> = text_panel::CAPS
         .iter()
-        .map(|c| text_panel::caps_label(*c))
+        .map(|c| crate::strings::tr_en(text_panel::caps_label(*c)))
         .collect();
-    design::inspector_field(ui, "Caps", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Caps"), |ui| {
         if design::segmented_control(ui, "raster-char-caps", &mut caps_index, &caps_labels) {
             *changed |= text_panel::Character::set_caps(run, text_panel::CAPS[caps_index]);
         }
@@ -4429,8 +4653,11 @@ fn character_typography(ui: &mut Ui, run: &mut text_engine::TextRun, changed: &m
         &text_panel::KerningMode::ALL[..2]
     };
     let mut kern_index = modes.iter().position(|m| *m == mode).unwrap_or(0);
-    let kern_labels: Vec<&str> = modes.iter().map(|m| m.label()).collect();
-    design::inspector_field(ui, "Kerning", |ui| {
+    let kern_labels: Vec<&str> = modes
+        .iter()
+        .map(|m| crate::strings::tr_en(m.label()))
+        .collect();
+    design::inspector_field(ui, crate::strings::tr_en("Kerning"), |ui| {
         if design::segmented_control(ui, "raster-char-kerning", &mut kern_index, &kern_labels) {
             *changed |= text_panel::Character::set_kerning_mode(
                 run,
@@ -4476,7 +4703,7 @@ fn character_typography(ui: &mut Ui, run: &mut text_engine::TextRun, changed: &m
         .iter()
         .map(|a| text_panel::anti_alias_label(*a))
         .collect();
-    design::inspector_field(ui, "Edges", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Edges"), |ui| {
         if design::segmented_control(ui, "raster-char-antialias", &mut aa_index, &aa_labels) {
             *changed |=
                 text_panel::Character::set_anti_alias(run, text_panel::ANTI_ALIAS[aa_index]);
@@ -4493,7 +4720,7 @@ fn paragraph_style_controls(ui: &mut Ui, run: &mut text_engine::TextRun, changed
     let mut index = text_panel::alignment_index(run.paragraph.alignment);
     let labels: Vec<&str> = text_panel::ALIGNMENTS
         .iter()
-        .map(|a| text_panel::alignment_label(*a))
+        .map(|a| crate::strings::tr_en(text_panel::alignment_label(*a)))
         .collect();
     if design::segmented_control(ui, "raster-paragraph-align", &mut index, &labels) {
         *changed |= text_panel::Paragraph::set_alignment(run, text_panel::ALIGNMENTS[index]);
@@ -4611,7 +4838,7 @@ fn type_tool_defaults(w: &mut Workspace, ui: &mut Ui, page: DefaultsPage) {
         ) {
             if let tools::OptionKind::Choice { choices, .. } = spec.kind {
                 let mut picked = index;
-                design::inspector_field(ui, "Family", |ui| {
+                design::inspector_field(ui, crate::strings::tr_en("Family"), |ui| {
                     egui::ComboBox::from_id_salt("raster-char-default-family")
                         .selected_text(body(ui, choices.get(index).copied().unwrap_or_default()))
                         .show_ui(ui, |ui| {
@@ -4669,7 +4896,7 @@ fn paragraph_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     // it below.
     let mut boxed = matches!(run.frame, text_engine::TextFrame::Box { .. });
     let mut want_boxed = boxed;
-    design::inspector_field(ui, "Frame", |ui| {
+    design::inspector_field(ui, crate::strings::tr_en("Frame"), |ui| {
         ui.checkbox(
             &mut want_boxed,
             hint(ui, crate::strings::tr("ui.docks.paragraph.boxed")),
@@ -4693,7 +4920,7 @@ fn paragraph_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
                 changed |= text_panel::Paragraph::set_box_width(&mut run, w);
             }
             let mut fixed = height.is_some();
-            design::inspector_field(ui, "Height", |ui| {
+            design::inspector_field(ui, crate::strings::tr_en("Height"), |ui| {
                 if ui
                     .checkbox(
                         &mut fixed,
@@ -4879,13 +5106,38 @@ fn navigator_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             )));
         }
     });
+    // W16-E: Photopea's Angle field under the zoom: the view rotation in
+    // degrees, -180 to 180, committed on Enter. The application publishes
+    // the document camera's angle and turns the camera to what is typed.
+    use crate::panels::panel_menus_w16 as menus;
+    if has_document(doc) {
+        ui.horizontal(|ui| {
+            ui.label(hint(ui, crate::strings::tr("ui.w16.navigator.angle")));
+            let shown = menus::published_view_angle(ui.ctx());
+            let field = super::text_field_sized(
+                ui,
+                menus::ids::navigator_angle(),
+                &format!("{shown:.1}"),
+                t.metrics.numeric_field_width,
+            );
+            ui.label(hint(ui, crate::strings::tr("ui.w16.navigator.degrees")));
+            if let Some(typed) = field.committed {
+                if let Some(angle) = crate::panels::navigator::parse_angle(&typed) {
+                    if (angle - shown).abs() > f32::EPSILON {
+                        menus::publish_view_angle(ui.ctx(), angle);
+                        menus::post(menus::PanelRequest::SetViewAngle(angle));
+                    }
+                }
+            }
+        });
+    }
 }
 
 fn info_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     // W3-G: the Document row reads in the Units preference, which the shell
     // pushes into the workspace as the rulers' unit.
     for readout in w.info.readouts_in(doc, w.canvas.unit) {
-        design::inspector_field(ui, readout.label, |ui| {
+        design::inspector_field(ui, crate::strings::tr_en(readout.label), |ui| {
             let label = ui.label(body(ui, readout.value.clone()));
             // Named so a test can read the value the row shows — the RGB and
             // Hex rows were "—" for the life of a session before
@@ -5033,6 +5285,7 @@ fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Histo
     let mode = doc.meta.color_space.clone();
     let mut toggle: Option<(ChannelKind, bool)> = None;
     let mut select: Option<ChannelKind> = None;
+    let mut load_channel: Option<ChannelKind> = None;
     for (index, row) in rows.iter().enumerate() {
         let response = row_layout(ui, |ui| {
             if icon_toggle_id(
@@ -5061,7 +5314,15 @@ fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Histo
         .response
         .interact(Sense::click());
         if response.clicked() {
-            select = Some(row.kind);
+            // W16-E: Ctrl+click loads the channel as the selection
+            // (Photopea's gesture) rather than selecting it; a plain click
+            // selects it and puts down a picked spot channel.
+            if ui.input(|i| i.modifiers.command) {
+                load_channel = Some(row.kind);
+            } else {
+                crate::panels::panel_menus_w16::pick_spot(ui.ctx(), None);
+                select = Some(row.kind);
+            }
         }
         if w.channels.selected == row.kind && ui.is_rect_visible(response.rect) {
             let t = current_tokens(ui);
@@ -5077,8 +5338,14 @@ fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Histo
         }
     }
     saved_selection_rows(w, ui, doc);
-    spot_channel_rows(ui, doc);
+    spot_channel_rows(w, ui, doc);
     new_spot_channel_dialog(w, ui, doc);
+    if let Some(kind) = load_channel {
+        use crate::panels::panel_menus_w16 as menus;
+        if let Ok(route) = menus::load_route(menus::ChannelTarget::Color(kind), doc) {
+            route.fire(w);
+        }
+    }
     if let Some((kind, visible)) = toggle {
         match kind {
             ChannelKind::Composite => {
@@ -5227,8 +5494,36 @@ fn channels_menu(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Histo
     let has_document = context.has_document;
     let mut new_spot = false;
     let mut merge = false;
+    // W16-E: Photopea's first two rows, New and Delete, on the current
+    // channel — the footer's own routes, greyed with the same reasons.
+    use crate::panels::panel_menus_w16 as menus;
+    let target = menus::current_channel(ui.ctx(), w, doc);
+    let mut fire: Option<menus::ChannelRoute> = None;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = Space::Hair.pt();
+        for (key, label, route) in [
+            ("new", "ui.w16.channels.menu.new", menus::new_route(doc)),
+            (
+                "delete",
+                "ui.w16.channels.menu.delete",
+                menus::delete_route(target, doc),
+            ),
+        ] {
+            let enabled = route.is_ok();
+            let response = super::labelled_button(
+                ui,
+                crate::strings::tr(label),
+                enabled,
+                spot_ids::menu_row(key),
+            );
+            match route {
+                Ok(route) if response.clicked() => fire = Some(route),
+                Err(reason) => {
+                    response.on_hover_text(reason);
+                }
+                Ok(_) => {}
+            }
+        }
         for (key, label, row) in [
             ("new-spot", "ui.docks.channels.menu.new.spot", &mut new_spot),
             ("merge", "ui.docks.channels.menu.merge", &mut merge),
@@ -5251,6 +5546,7 @@ fn channels_menu(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Histo
     });
     hairline(ui);
     if new_spot {
+        menus::set_spot_editing(ui.ctx(), None);
         w.channels.spot_dialog = Some(crate::panels::channels::SpotChannelDialog::new(
             editor_core::spot::next_spot_name(doc),
         ));
@@ -5260,36 +5556,109 @@ fn channels_menu(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Histo
         w.emit(Intent::Action(crate::menu::MenuAction::MergeChannels));
         w.panel_menu = None;
     }
+    if let Some(route) = fire {
+        route.fire(w);
+        menus::pick_spot(ui.ctx(), None);
+        w.panel_menu = None;
+    }
 }
 
 /// W13X-4: one row per spot channel under the alpha channels: its ink as a
 /// swatch, its name and its solidity.
-fn spot_channel_rows(ui: &mut Ui, doc: &Document) {
+///
+/// W16-E: a click makes the row the current channel (ringed; the footer's
+/// Load and Delete act on it), a Ctrl+click loads its coverage as the
+/// selection, a double-click or the options button opens Spot Channel
+/// Options on it (name, ink, solidity; OK is one undo step), and the bin
+/// deletes it (one undo step).
+fn spot_channel_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     use crate::dialogs::controls::{from_byte, swatch_readonly};
+    use crate::panels::panel_menus_w16 as menus;
+    let picked = menus::picked_spot(ui.ctx());
+    let mut clicked: Option<(usize, bool)> = None;
+    let mut edit: Option<usize> = None;
+    let mut delete: Option<usize> = None;
     for (index, channel) in doc.spot_channels.iter().enumerate() {
-        let row = row_layout(ui, |ui| {
-            let t = current_tokens(ui);
-            let height = t.metrics.list_row_height - Space::XSmall.pt();
-            let rgba = [
-                from_byte(channel.ink[0]),
-                from_byte(channel.ink[1]),
-                from_byte(channel.ink[2]),
-                from_byte(u8::MAX),
-            ];
-            swatch_readonly(
-                ui,
-                crate::panels::channels::spot_ids::spot_swatch(index),
-                rgba,
-                Vec2::new(height * 4.0 / 3.0, height),
-            );
-            ui.add_space(Space::XSmall.pt());
-            ui.label(body(ui, channel.name.clone()));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(hint(ui, format!("{}%", channel.solidity)));
-            });
-        });
-        row.response
+        let row = list_row_layout(
+            ui,
+            menus::ids::spot_row(index),
+            picked == Some(index),
+            |ui| {
+                let t = current_tokens(ui);
+                let height = t.metrics.list_row_height - Space::XSmall.pt();
+                let rgba = [
+                    from_byte(channel.ink[0]),
+                    from_byte(channel.ink[1]),
+                    from_byte(channel.ink[2]),
+                    from_byte(u8::MAX),
+                ];
+                swatch_readonly(
+                    ui,
+                    crate::panels::channels::spot_ids::spot_swatch(index),
+                    rgba,
+                    Vec2::new(height * 4.0 / 3.0, height),
+                );
+                ui.add_space(Space::XSmall.pt());
+                ui.label(body(ui, channel.name.clone()));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if icon_action_id(
+                        ui,
+                        "trash",
+                        crate::strings::tr("ui.w16.channels.spot.delete"),
+                        ActionState::Idle,
+                        Some(menus::ids::spot_delete(index)),
+                    )
+                    .clicked()
+                    {
+                        delete = Some(index);
+                    }
+                    if icon_action_id(
+                        ui,
+                        "overflow",
+                        crate::strings::tr("ui.w16.channels.spot.options"),
+                        ActionState::Idle,
+                        Some(menus::ids::spot_edit(index)),
+                    )
+                    .clicked()
+                    {
+                        edit = Some(index);
+                    }
+                    ui.label(hint(ui, format!("{}%", channel.solidity)));
+                });
+            },
+        );
+        let response = row
+            .response
             .on_hover_text(crate::strings::tr("ui.docks.channels.spot.hint"));
+        if response.double_clicked() {
+            edit = Some(index);
+        } else if response.clicked() {
+            let command = ui.input(|i| i.modifiers.command);
+            clicked = Some((index, command));
+        }
+    }
+    if let Some((index, command)) = clicked {
+        if command {
+            if let Ok(route) = menus::load_route(menus::ChannelTarget::Spot(index), doc) {
+                route.fire(w);
+            }
+        } else {
+            menus::pick_spot(ui.ctx(), Some(index));
+        }
+    }
+    if let Some(index) = edit.filter(|i| *i < doc.spot_channels.len()) {
+        let channel = &doc.spot_channels[index];
+        let mut dialog = crate::panels::channels::SpotChannelDialog::new(channel.name.clone());
+        dialog.set_ink(channel.ink);
+        dialog.set_solidity(channel.solidity);
+        w.channels.spot_dialog = Some(dialog);
+        menus::set_spot_editing(ui.ctx(), Some(index));
+    }
+    if let Some(index) = delete {
+        if let Ok(route) = menus::delete_route(menus::ChannelTarget::Spot(index), doc) {
+            route.fire(w);
+        }
+        menus::pick_spot(ui.ctx(), None);
     }
 }
 
@@ -5304,6 +5673,7 @@ fn new_spot_channel_dialog(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
         DialogOutcome::Open => {}
         DialogOutcome::Cancelled => {
             w.channels.spot_dialog = None;
+            crate::panels::panel_menus_w16::set_spot_editing(ui.ctx(), None);
             ui.ctx().memory_mut(|m| {
                 m.surrender_focus(crate::panels::channels::spot_ids::keyboard_sink())
             });
@@ -5313,12 +5683,28 @@ fn new_spot_channel_dialog(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             ui.ctx().memory_mut(|m| {
                 m.surrender_focus(crate::panels::channels::spot_ids::keyboard_sink())
             });
-            w.emit(Intent::Document(editor_core::spot::new_spot_channel(
-                doc,
-                &spec.name,
-                spec.ink,
-                spec.solidity,
-            )));
+            // W16-E: opened from a spot row, the dialog is Spot Channel
+            // Options and OK rewrites that channel (coverage kept).
+            let editing = crate::panels::panel_menus_w16::spot_editing(ui.ctx());
+            crate::panels::panel_menus_w16::set_spot_editing(ui.ctx(), None);
+            let command = match editing {
+                Some(index) => crate::panels::panel_menus_w16::edit_spot_command(
+                    doc,
+                    index,
+                    &spec.name,
+                    spec.ink,
+                    spec.solidity,
+                ),
+                None => Some(editor_core::spot::new_spot_channel(
+                    doc,
+                    &spec.name,
+                    spec.ink,
+                    spec.solidity,
+                )),
+            };
+            if let Some(command) = command {
+                w.emit(Intent::Document(command));
+            }
         }
     }
 }
@@ -5392,51 +5778,39 @@ fn channel_thumbnail(w: &mut Workspace, ui: &mut Ui, kind: ChannelKind) {
 /// button that does nothing, and never a button that does something other
 /// than its label. Save goes through the Select menu's own `SaveSelection`,
 /// resolved against the same context the menu bar uses so the gate and the
-/// reason are the menu's. Load is greyed on every row, and its reason names
-/// what is missing: no `Intent` or `editor_core::Command` builds a selection
-/// from a channel's coverage in this build (`Command::SetSelection` exists,
-/// but the workspace cannot read a mask's tiles to fill one), and the Select
-/// menu's `LoadSelection` restores the last *saved* selection, which is a
-/// different thing — routing the button there fired the wrong command under
-/// the right label, which `tests/panel_chrome_geometry.rs` now pins against.
-/// New and Delete have no store to act on — channels live on layers here —
-/// and say so.
+/// reason are the menu's.
+///
+/// W16-E: Load, New and Delete act on the current channel
+/// ([`crate::panels::panel_menus_w16::current_channel`]): Load makes it the
+/// selection (a mask through `SelectLayerPixels`, an alpha or spot channel
+/// as one `SetSelection` step, a colour channel from the composite's pixels
+/// in the application); New adds an empty alpha channel; Delete removes an
+/// alpha or spot channel, or the layer mask a mask row stands for, and is
+/// greyed on a colour channel, which Photopea does not delete either.
 fn channel_footer(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &History) {
+    use crate::panels::panel_menus_w16 as menus;
     let context = w.menu_context(doc, history);
-    let selected = w.channels.selected;
-    let is_mask = matches!(selected, ChannelKind::Mask { .. });
-
-    // Load: greyed, with the reason that fits the row. A component has no
-    // selection to load; a mask *is* a selection's shape, but no command
-    // loads a mask as the selection yet, so the button names the missing
-    // command rather than firing `LoadSelection` (a saved selection).
-    let load: Result<Intent, &'static str> = Err(crate::strings::tr(if is_mask {
-        "ui.docks.channels.no.mask.route"
-    } else {
-        "ui.docks.channels.not.a.mask"
-    }));
+    let target = menus::current_channel(ui.ctx(), w, doc);
     let save = match crate::menu::MenuAction::SaveSelection.resolve(&context) {
-        crate::menu::Resolution::Enabled(intent) => Ok(intent),
+        crate::menu::Resolution::Enabled(intent) => Ok(menus::ChannelRoute::Intent(intent)),
         crate::menu::Resolution::Disabled(_) => Err(crate::strings::tr(if context.has_document {
             "ui.docks.channels.no.selection"
         } else {
             "ui.docks.channels.no.document"
         })),
     };
-    let no_store: Result<Intent, &'static str> =
-        Err(crate::strings::tr("ui.docks.channels.no.alpha.store"));
 
     let actions: [(
         &'static str,
         &'static str,
         &'static str,
-        Result<Intent, &'static str>,
+        Result<menus::ChannelRoute, &'static str>,
     ); 4] = [
         (
             CHANNEL_ACTIONS[0],
             "target",
             crate::strings::tr("ui.docks.channels.load.selection"),
-            load,
+            menus::load_route(target, doc),
         ),
         (
             CHANNEL_ACTIONS[1],
@@ -5448,16 +5822,16 @@ fn channel_footer(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Hist
             CHANNEL_ACTIONS[2],
             "plus",
             crate::strings::tr("ui.docks.channels.new"),
-            no_store.clone(),
+            menus::new_route(doc),
         ),
         (
             CHANNEL_ACTIONS[3],
             "trash",
             crate::strings::tr("ui.docks.channels.delete"),
-            no_store,
+            menus::delete_route(target, doc),
         ),
     ];
-    let mut fire: Option<Intent> = None;
+    let mut fire: Option<menus::ChannelRoute> = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = Space::Hair.pt();
         for (name, icon, tip, route) in actions {
@@ -5472,15 +5846,25 @@ fn channel_footer(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Hist
                 state,
                 Some(crate::dock::ids::channel_action(name)),
             );
-            if let Ok(intent) = route {
+            if let Ok(route) = route {
                 if response.clicked() {
-                    fire = Some(intent);
+                    fire = Some(route);
                 }
             }
         }
     });
-    if let Some(intent) = fire {
-        w.emit(intent);
+    if let Some(route) = fire {
+        let deleting_spot = matches!(
+            (&route, target),
+            (
+                menus::ChannelRoute::Intent(Intent::Document(Command::SetSpotChannels { .. })),
+                menus::ChannelTarget::Spot(_)
+            )
+        );
+        route.fire(w);
+        if deleting_spot {
+            menus::pick_spot(ui.ctx(), None);
+        }
     }
 }
 
