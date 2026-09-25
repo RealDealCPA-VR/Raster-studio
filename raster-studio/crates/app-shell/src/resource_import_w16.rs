@@ -207,7 +207,7 @@ pub fn parse_look(name: &str, text: &str) -> Result<Lut3d, AdjustmentError> {
     let want = size * size * size;
     if hex.len() != want * 3 * 8 {
         return Err(bad(
-            "the look's LUT data does not hold size\u{b3} RGB entries",
+            "the look's LUT data does not hold size cubed RGB entries",
         ));
     }
     let digit = |c: u8| (c as char).to_digit(16).map(|d| d as u8);

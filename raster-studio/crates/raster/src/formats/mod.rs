@@ -269,7 +269,7 @@ pub(super) fn decode<R: Read>(
         ImportFormat::Dng => raw::decode(&bytes, limits),
         ImportFormat::CameraRaw => Err(raw::refusal(&bytes)),
         // W16-L.
-        // REVIEWMUT f if more_formats_w16::owns(f) => more_formats_w16::decode(f, &bytes, limits),
+        f if more_formats_w16::owns(f) => more_formats_w16::decode(f, &bytes, limits),
         other => Err(not_ours(other)),
     }
 }

@@ -116,7 +116,7 @@ impl Editor {
     /// read, is an error naming why.
     pub fn open_resource(&mut self, path: &Path) -> Result<Effect, ActionError> {
         // W16-L: a curves preset or a `.3dl` / `.look` LUT becomes a layer.
-        if let Some(result) = None::<Result<Effect, ActionError>> { // REVIEWMUT self.open_w16_resource(path) {
+        if let Some(result) = self.open_w16_resource(path) {
             return result;
         }
         let fail = |e: &dyn std::fmt::Display| {

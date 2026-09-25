@@ -349,14 +349,18 @@ fn zz_tmp_diag_frames() {
     ctx.set_style_of(egui::Theme::Dark, style.clone());
     ctx.set_style_of(egui::Theme::Light, style);
     let raw = || egui::RawInput {
-        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0))),
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1400.0, 900.0),
+        )),
         ..Default::default()
     };
     let _ = ctx.run(raw(), |_| {});
     let doc = Document::new(320, 240, "Test");
     let history = History::new();
     let mut w = Workspace::new();
-    w.palette.activate(&crate::PaletteModel::build(), tools::ToolId::FreeTransform);
+    w.palette
+        .activate(&crate::PaletteModel::build(), tools::ToolId::FreeTransform);
     let mut all = Vec::new();
     for i in 0..6 {
         if i == 3 {
@@ -372,7 +376,12 @@ fn zz_tmp_diag_frames() {
         let mut buckets: std::collections::BTreeMap<String, usize> = Default::default();
         for s in &out.shapes {
             let c = s.clip_rect;
-            *buckets.entry(format!("{:.0},{:.0},{:.0},{:.0}", c.min.x, c.min.y, c.max.x, c.max.y)).or_default() += 1;
+            *buckets
+                .entry(format!(
+                    "{:.0},{:.0},{:.0},{:.0}",
+                    c.min.x, c.min.y, c.max.x, c.max.y
+                ))
+                .or_default() += 1;
         }
         all.push((out.shapes.len(), buckets));
     }

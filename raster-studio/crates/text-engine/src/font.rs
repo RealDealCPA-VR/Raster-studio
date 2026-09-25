@@ -278,7 +278,7 @@ impl FontLibrary {
     /// the handles of the faces that were added.
     pub fn load_bytes(&mut self, data: Vec<u8>) -> Vec<FontId> {
         // W16-L: a WOFF / WOFF2 is unwrapped to the sfnt it carries.
-        // REVIEWMUT let data = crate::webfont::sfnt_from_webfont(data);
+        let data = crate::webfont::sfnt_from_webfont(data);
         let source = Source::Binary(Arc::new(data));
         let ids = self.system.db_mut().load_font_source(source);
         let ids: Vec<FontId> = ids.into_iter().map(FontId).collect();

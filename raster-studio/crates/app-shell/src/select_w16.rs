@@ -124,7 +124,7 @@ impl ToolPointer {
         match phase {
             PointerPhase::Down => {
                 self.cancel_outline_drag(editor);
-                if true /*RVMUT*/ || !super::move_duplicate::nudge::moves_the_outline(id) {
+                if !super::move_duplicate::nudge::moves_the_outline(id) {
                     return None;
                 }
                 // A press that extends an open lasso outline is the lasso's.
@@ -255,7 +255,7 @@ impl ToolPointer {
             return;
         };
         let before = match &self.current {
-            Some((cur, tool)) if *cur == id && is_lasso(id) && tool.has_pending_commit() && false /*RVMUT*/ => {
+            Some((cur, tool)) if *cur == id && is_lasso(id) && tool.has_pending_commit() => {
                 tool.live_geometry()
             }
             _ => return,
@@ -301,7 +301,7 @@ impl ToolPointer {
             return false;
         }
         match &mut self.current {
-            Some((id, tool)) if is_lasso(*id) && tool.has_pending_commit() && false /*RVMUT*/ => tool
+            Some((id, tool)) if is_lasso(*id) && tool.has_pending_commit() => tool
                 .set_setting(LASSO_REMOVE_LAST_POINT, ToolSetting::Bool(true))
                 .is_ok(),
             _ => false,

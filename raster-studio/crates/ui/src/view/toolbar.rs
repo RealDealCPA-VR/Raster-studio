@@ -1101,9 +1101,6 @@ fn straighten_button(w: &mut Workspace, ui: &mut Ui) {
 // W16-K: the rows Photopea's bars carry beyond the tool's options.
 #[path = "toolbar_w16k.rs"]
 pub mod w16k;
-#[cfg(test)]
-#[path = "toolbar_w16k_tests.rs"]
-mod w16k_tests;
 
 /// W16-C: the options bar's pseudo-key for its Commit (check) button, under
 /// which it is marked (`ids::tool_option(tool, COMMIT_KEY)`).
@@ -2046,3 +2043,7 @@ mod w9l_tests {
 #[cfg(test)]
 #[path = "toolbar_w16c_tests.rs"]
 mod w16c_tests;
+
+#[cfg(test)]
+#[path = "toolbar_w16k_tests.rs"]
+mod w16k_tests;

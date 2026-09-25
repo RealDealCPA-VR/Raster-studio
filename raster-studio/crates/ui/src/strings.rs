@@ -2358,8 +2358,7 @@ fn is_untranslatable(s: &str) -> bool {
             _ => {}
         }
     }
-    !outside_braces.chars().any(char::is_alphabetic)
-        || i18n_sources::PROPER_NAMES.contains(&s)
+    !outside_braces.chars().any(char::is_alphabetic) || i18n_sources::PROPER_NAMES.contains(&s)
 }
 
 /// The English strings the model crates hand the UI (see
@@ -2474,7 +2473,11 @@ mod tests {
     #[test]
     fn every_language_table_translates_every_catalogue_string() {
         let sources = gated_sources();
-        assert!(sources.len() > 1500, "only {} sources gathered", sources.len());
+        assert!(
+            sources.len() > 1500,
+            "only {} sources gathered",
+            sources.len()
+        );
         let mut problems = Vec::new();
         for locale in Locale::ALL.iter().copied().filter(|l| *l != Locale::En) {
             let table = catalogue(locale).expect("every non-English locale has a table");
@@ -2506,7 +2509,10 @@ mod tests {
                 problems.push(format!("{locale:?}: {missing} strings missing in all"));
             }
             for english in table.rows.keys() {
-                if sources.binary_search_by(|s| s.as_str().cmp(english)).is_err() {
+                if sources
+                    .binary_search_by(|s| s.as_str().cmp(english))
+                    .is_err()
+                {
                     problems.push(format!("{locale:?} has a stale row {english:?}"));
                 }
             }
@@ -2523,7 +2529,10 @@ mod tests {
             // A string no table has (a file or layer name) is shown as it is.
             assert_eq!(tr_en("holiday-2026.psd"), "holiday-2026.psd");
             // A history step named after a menu row, ellipsis dropped.
-            assert_eq!(tr_en("Gaussian Blur"), tr_en("Gaussian Blur\u{2026}").trim_end_matches('\u{2026}'));
+            assert_eq!(
+                tr_en("Gaussian Blur"),
+                tr_en("Gaussian Blur\u{2026}").trim_end_matches('\u{2026}')
+            );
             assert_ne!(tr_en("Gaussian Blur"), "Gaussian Blur");
         });
         with_locale(Locale::Ja, || assert_ne!(tr_en("File"), "File"));
@@ -2568,7 +2577,10 @@ mod tests {
         frame(&ctx);
         for locale in Locale::ALL.iter().copied() {
             let name = locale.display_name();
-            assert!(ctx.fonts(|f| f.has_glyphs(&body, name)), "{name:?} has tofu");
+            assert!(
+                ctx.fonts(|f| f.has_glyphs(&body, name)),
+                "{name:?} has tofu"
+            );
         }
         for locale in [Locale::ZhCn, Locale::Ja, Locale::Ko] {
             assert!(locale.needs_cjk_font());
@@ -2597,22 +2609,44 @@ mod tests {
         with_locale(Locale::De, || {
             assert_eq!(
                 titles(),
-                ["Datei", "Bearbeiten", "Bild", "Ebene", "Auswahl", "Filter", "Ansicht", "Fenster", "Hilfe"]
+                [
+                    "Datei",
+                    "Bearbeiten",
+                    "Bild",
+                    "Ebene",
+                    "Auswahl",
+                    "Filter",
+                    "Ansicht",
+                    "Fenster",
+                    "Hilfe"
+                ]
             );
             let ctx = MenuContext::default();
-            assert_eq!(MenuAction::Open.label(), "Open\u{2026}", "the source stays English");
+            assert_eq!(
+                MenuAction::Open.label(),
+                "Open\u{2026}",
+                "the source stays English"
+            );
             assert_eq!(MenuAction::Open.label_in(&ctx), "\u{00D6}ffnen\u{2026}");
             let undo = MenuContext {
                 undo_label: Some("Create Layer".into()),
                 ..MenuContext::default()
             };
-            assert_eq!(MenuAction::Undo.label_in(&undo), "R\u{00FC}ckg\u{00E4}ngig Ebene erstellen");
-            let window = menu_bar(0).into_iter().find(|m| m.title == "Fenster").unwrap();
+            assert_eq!(
+                MenuAction::Undo.label_in(&undo),
+                "R\u{00FC}ckg\u{00E4}ngig Ebene erstellen"
+            );
+            let window = menu_bar(0)
+                .into_iter()
+                .find(|m| m.title == "Fenster")
+                .unwrap();
             let languages = window
                 .entries
                 .iter()
                 .find_map(|e| match e {
-                    Entry::Submenu { label, entries } if *label == "Sprache" => Some(entries.clone()),
+                    Entry::Submenu { label, entries } if *label == "Sprache" => {
+                        Some(entries.clone())
+                    }
                     _ => None,
                 })
                 .expect("Window has a Language submenu");
@@ -2621,19 +2655,32 @@ mod tests {
                 .flat_map(Entry::actions)
                 .map(|a| a.label_in(&ctx))
                 .collect();
-            let names: Vec<String> =
-                Locale::ALL.iter().map(|l| l.display_name().to_string()).collect();
+            let names: Vec<String> = Locale::ALL
+                .iter()
+                .map(|l| l.display_name().to_string())
+                .collect();
             assert_eq!(offered, names, "every language, each in its own name");
             assert!(window.actions().contains(&MenuAction::ToggleGlassMenus));
-            assert_eq!(MenuAction::ToggleGlassMenus.label_in(&ctx), "Glasmen\u{00FC}s");
-            assert_eq!(MenuAction::SetLanguage(Locale::De).checked(&ctx), Some(true));
-            assert_eq!(MenuAction::SetLanguage(Locale::Fr).checked(&ctx), Some(false));
+            assert_eq!(
+                MenuAction::ToggleGlassMenus.label_in(&ctx),
+                "Glasmen\u{00FC}s"
+            );
+            assert_eq!(
+                MenuAction::SetLanguage(Locale::De).checked(&ctx),
+                Some(true)
+            );
+            assert_eq!(
+                MenuAction::SetLanguage(Locale::Fr).checked(&ctx),
+                Some(false)
+            );
         });
     }
 
     #[test]
     fn the_catalogue_parser_reads_names_rows_escapes_and_skips_comments() {
-        let parsed = parse_catalogue("# a comment\n@name\tTest\nA\\tB\tC\\nD\r\nplain\tsimple\n\nno tab here\n");
+        let parsed = parse_catalogue(
+            "# a comment\n@name\tTest\nA\\tB\tC\\nD\r\nplain\tsimple\n\nno tab here\n",
+        );
         assert_eq!(parsed.name, "Test");
         assert_eq!(parsed.rows.get("A\tB"), Some(&"C\nD"));
         assert_eq!(parsed.rows.get("plain"), Some(&"simple"));

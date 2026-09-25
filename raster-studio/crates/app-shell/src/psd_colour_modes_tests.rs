@@ -340,9 +340,9 @@ fn a_malformed_palette_is_an_open_error_not_a_guess() {
     bad.extend_from_slice(&100u32.to_be_bytes());
     bad.extend_from_slice(&good[30..130]);
     bad.extend_from_slice(&good[30 + 768..]);
-    let err = document_from_psd(&bad, "bad.psd", 10)
-        .err()
-        .expect("refused");
+    let Err(err) = document_from_psd(&bad, "bad.psd", 10) else {
+        panic!("refused");
+    };
     assert!(err.to_string().contains("768-byte palette"), "{err}");
 }
 

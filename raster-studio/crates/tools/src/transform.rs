@@ -1610,7 +1610,8 @@ impl TransformTool {
         let option_mode = self.mode;
         if let Some(promoted) = self.ctrl_promoted.take() {
             if self.state.is_some() {
-                /*W16F_MUT*/ let _ = promoted;
+                /*W16F_MUT*/
+                let _ = promoted;
             }
         }
         let result = self.commit_session(ctx);

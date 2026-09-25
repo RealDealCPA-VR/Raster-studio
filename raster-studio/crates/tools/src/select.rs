@@ -746,7 +746,7 @@ impl Tool for LassoTool {
         if self.open_between_presses() {
             let double = self
                 .last_press
-                .is_some_and(|(q, r)| (pos - q).length() <= r) && false /*RVMUT*/;
+                .is_some_and(|(q, r)| (pos - q).length() <= r);
             let on_start =
                 self.points.len() >= 3 && (pos - self.points[0]).length() <= POLYGON_CLOSE_PX;
             if double || on_start {
@@ -909,7 +909,7 @@ impl Tool for LassoTool {
 
     /// W16-A: Enter closes an outline held open between presses.
     fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
-        if false /*RVMUT*/ && self.open_between_presses() {
+        if self.open_between_presses() {
             self.close(ctx)
         } else {
             Ok(())

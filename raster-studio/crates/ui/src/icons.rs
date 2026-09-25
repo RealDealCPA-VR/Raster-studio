@@ -1701,6 +1701,8 @@ const SCREEN_MODE: &[Prim] = &[
 /// over every key this crate uses — see the gates in the module note.
 pub fn ui_icon(key: &str) -> Icon {
     Icon(match key {
+        // the options bar's brush-preset picker (W16-K)
+        "brush" => BRUSH,
         // headers and list chrome
         "chevron-right" => CHEVRON_RIGHT,
         "chevron-down" => CHEVRON_DOWN,

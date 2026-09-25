@@ -1817,7 +1817,7 @@ pub fn document_from_psd(
                 });
             }
             psd::LayerKind::Raster if !matches!(live, psd_live::Live::None) => match &live {
-                psd_live::Live::Shape(shape) => layer.kind = LayerKind::Shape(shape.clone()),
+                psd_live::Live::Shape(shape) => layer.kind = LayerKind::Shape((**shape).clone()),
                 psd_live::Live::Smart(placed) => {
                     layer.kind = placed.kind.clone();
                     layer.transform = placed.transform;
@@ -2396,7 +2396,8 @@ fn psd_layers_for(
                     Err(e) => {
                         record.pixel_data_irrelevant = true; /*W16J-MUT*/
                         if let Some((bounds, rgba)) =
-                            psd_live::adjustment_as_pixels(document, tiles, id, canvas)?.filter(|_| false /*W16J-MUT*/)
+                            psd_live::adjustment_as_pixels(document, tiles, id, canvas)?
+                                .filter(|_| false /*W16J-MUT*/)
                         {
                             record.bounds = bounds.to_psd();
                             record.set_rgba8(&rgba)?;

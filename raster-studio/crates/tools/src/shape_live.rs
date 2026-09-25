@@ -266,7 +266,7 @@ impl ParametricOptions {
 pub fn snap_15(from: Vec2, to: Vec2) -> Vec2 {
     let d = to - from;
     let len = d.length();
-    if !(len > 0.0) {
+    if len.is_nan() || len <= 0.0 {
         return to;
     }
     let step = 15f32.to_radians();

@@ -576,7 +576,7 @@ pub fn rounded_polygon(verts: &[Point], radius: f64) -> Path {
             // The corner's interior angle, halved.
             let half = up.dot(un).clamp(-1.0, 1.0).acos() * 0.5;
             let tan_half = half.tan();
-            if !(tan_half > 1e-9) || !tan_half.is_finite() || half >= FRAC_PI_2 - 1e-9 {
+            if !tan_half.is_finite() || tan_half <= 1e-9 || half >= FRAC_PI_2 - 1e-9 {
                 // A straight or degenerate corner has nothing to round.
                 return [v; 4];
             }

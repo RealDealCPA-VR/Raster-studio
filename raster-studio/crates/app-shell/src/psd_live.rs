@@ -500,7 +500,7 @@ pub(super) struct PlacedImport {
 pub(super) enum Live {
     /// Nothing live: map it the ordinary way.
     None,
-    Shape(ShapeLayer),
+    Shape(Box<ShapeLayer>),
     Smart(Box<PlacedImport>),
     /// A placed layer whose source could not be recovered, and why; its
     /// pixels are imported instead.
@@ -525,7 +525,7 @@ pub(super) fn live_kind(
         };
     }
     match shape_from_psd(source, width, height, patterns) {
-        Some(shape) => Live::Shape(shape),
+        Some(shape) => Live::Shape(Box::new(shape)),
         None => Live::None,
     }
 }
