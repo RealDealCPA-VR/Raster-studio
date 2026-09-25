@@ -89,6 +89,8 @@
 
 mod edit;
 mod font;
+// W13-N: Layer > Text > Convert to Point Text / Convert to Paragraph Text.
+pub mod frame_convert;
 mod layout;
 mod model;
 mod raster;

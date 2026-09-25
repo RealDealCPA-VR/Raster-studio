@@ -162,6 +162,9 @@ impl StepKind {
             // W10-B: storing an alpha channel edits a saved selection.
             Command::SetSavedSelection { .. } => StepKind::LayerChanged,
             Command::SetSlices { .. } => StepKind::LayerChanged,
+            Command::SetTimeline { .. } => StepKind::LayerChanged,
+            // W13-F: Assign Profile re-tags the whole document.
+            Command::SetMetaColorSpace { .. } => StepKind::LayerChanged,
         }
     }
 }

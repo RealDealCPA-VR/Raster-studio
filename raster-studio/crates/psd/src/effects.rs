@@ -9,9 +9,19 @@
 //! any `...Multi` repeated-effect lists present in this descriptor map too,
 //! through [`map_rest`] (`effects_rest.rs`), the one mapping the `.asl`
 //! import shares (the separate `lmfx` block Photoshop CC writes for repeated
-//! effects is not read). [`export_effects`] writes the ten primary slots back;
-//! the extra instances of a repeated effect are named, not written. Anything
-//! else the descriptor lists is named and left behind rather than half-mapped.
+//! effects is not read). [`export_effects`] writes the ten primary slots back,
+//! and W13-B: a style with repeated instances of an effect is written as that
+//! kind's `...Multi` list (`dropShadowMulti`, `innerShadowMulti`,
+//! `frameFXMulti`, `solidFillMulti`, `gradientFillMulti`) inside the same
+//! descriptor, which [`map_rest`] reads back. A stroke filled with a gradient
+//! or a pattern, and an outer or inner glow filled with a gradient, are
+//! written and read too; a pattern stroke resolves against the file's
+//! patterns only through [`import_effects_in`] (a caller with no pattern
+//! library gets it named as unmapped). A gradient overlay's `Ofst` is a
+//! percentage of the layer's box (or the canvas when the ramp is not aligned
+//! with the layer): [`EffectsContext`] carries those sizes, and without them a
+//! non-zero offset is named rather than guessed. Anything else the descriptor
+//! lists is named and left behind rather than half-mapped.
 //!
 //! # Retention is not rendering
 //!
@@ -53,7 +63,8 @@
 //! | `layerConceals` (`bool`) | `knockout` | unchanged; absent ⇒ `false` (Photoshop's default) |
 //! | `Sz  ` (`#Pxl`, stroke) | `size_px` | value × scale |
 //! | `Styl` (`enum FStl`) | `position` | `OutF`→Outside, `InsF`→Inside, `Cntr`/`CtrF`→Center; absent ⇒ Outside |
-//! | `PntT` (`enum FrFl`) | stroke fill | `SClr` maps; a gradient or pattern stroke does not, and is named as unmapped |
+//! | `PntT` (`enum FrFl`) | stroke fill | `SClr` → `FillStyle::Solid` (`Clr `); `GrFl` → `FillStyle::Gradient` (`Grad`, a `Grdn` object); `Ptrn` → `FillStyle::Pattern` (`Ptrn` resolved against the file's patterns, `Scl `, `Angl`, `phase`, `Lnkd`) |
+//! | `Clr ` or `Grad` (glow) | glow fill | a glow carrying `Clr ` is solid; one carrying only `Grad` is a gradient glow |
 //! | `GlwT` (`enum BETe`, glow) | `technique` | `SfBL`→Softer, `PrBL`→Precise; absent ⇒ Softer |
 //!
 //! An effect whose *required* fields are missing is not half-mapped: it is
@@ -65,13 +76,43 @@ use crate::model::Effects;
 use crate::ReadOptions;
 use layer_model::effects::{
     ColorOverlayEffect, FillStyle, GlowEffect, GlowSource, GlowTechnique, LayerEffects,
-    ShadowEffect, StrokeEffect, StrokePosition,
+    PatternFill, ShadowEffect, StrokeEffect, StrokePosition,
 };
 use layer_model::{BlendMode, Rgba};
 
 #[path = "effects_rest.rs"]
 mod rest;
-pub use rest::{map_rest, struck};
+pub use rest::{map_rest, map_rest_in, struck};
+
+/// W13-B: what an effects block needs to know about where it sits, beyond
+/// its own bytes. Every field is optional: [`import_effects`] and
+/// [`export_effects`] pass the default (nothing known).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EffectsContext<'a> {
+    /// The patterns the file defines, for a pattern-filled stroke to
+    /// resolve its `Ptrn` reference against.
+    pub patterns: Option<&'a crate::pattern::PatternLibrary>,
+    /// The layer's box (width, height) in pixels: the box a gradient
+    /// overlay's `Ofst` percentage is of when the ramp is aligned with the
+    /// layer.
+    pub layer_box: Option<[f32; 2]>,
+    /// The canvas (width, height) in pixels: the box of a ramp that is not
+    /// aligned with the layer.
+    pub canvas_box: Option<[f32; 2]>,
+}
+
+impl EffectsContext<'_> {
+    /// The box a gradient overlay's offset is a percentage of, when it is
+    /// known and not empty.
+    pub(crate) fn offset_box(&self, align_with_layer: bool) -> Option<[f32; 2]> {
+        let b = if align_with_layer {
+            self.layer_box
+        } else {
+            self.canvas_box
+        }?;
+        (b[0].is_finite() && b[1].is_finite() && b[0] > 0.0 && b[1] > 0.0).then_some(b)
+    }
+}
 
 /// What an `lfx2` block decoded to.
 pub struct ImportedEffects {
@@ -86,6 +127,17 @@ pub struct ImportedEffects {
 /// `lrFX` layout, say) or its descriptor could not be read at all — the
 /// caller's existing "layer effect(s) … were not imported" note covers that.
 pub fn import_effects(effects: &Effects, opts: &ReadOptions) -> Option<ImportedEffects> {
+    import_effects_in(effects, opts, EffectsContext::default())
+}
+
+/// W13-B: [`import_effects`] with what the caller knows about the layer —
+/// the file's patterns (a pattern stroke) and the layer's and canvas's boxes
+/// (a gradient overlay's offset).
+pub fn import_effects_in(
+    effects: &Effects,
+    opts: &ReadOptions,
+    ctx: EffectsContext<'_>,
+) -> Option<ImportedEffects> {
     let descriptor = effects.descriptor(opts)?;
 
     let mut out = ImportedEffects {
@@ -124,7 +176,7 @@ pub fn import_effects(effects: &Effects, opts: &ReadOptions) -> Option<ImportedE
                 Some(s) => out.effects.drop_shadow = Some(s),
                 None => out.unmapped.push("drop shadow".into()),
             },
-            "FrFX" => match stroke(effect, scale) {
+            "FrFX" => match stroke(effect, scale, ctx) {
                 Some(s) => out.effects.stroke = Some(s),
                 None => out.unmapped.push("stroke".into()),
             },
@@ -154,7 +206,7 @@ pub fn import_effects(effects: &Effects, opts: &ReadOptions) -> Option<ImportedE
                 .push(format!("an effect this build does not know ({other})")),
         }
     }
-    map_rest(&descriptor, &mut out.effects, &mut out.unmapped);
+    map_rest_in(&descriptor, &mut out.effects, &mut out.unmapped, ctx);
     Some(out)
 }
 
@@ -315,12 +367,51 @@ fn drop_shadow(d: &Descriptor, scale: f32) -> Option<ShadowEffect> {
     })
 }
 
-fn stroke(d: &Descriptor, scale: f32) -> Option<StrokeEffect> {
-    // Only a solid-colour stroke maps; a gradient or pattern fill is a
-    // different effect this build does not model.
-    if enumerated(d, "PntT")? != "SClr" {
-        return None;
+/// A pattern fill's placement keys (`Scl `, `Angl`, `phase`, and the link
+/// flag under `Lnkd` or `Algn`) around a resolved tile.
+fn pattern_placement(d: &Descriptor, tile: layer_model::effects::PatternTile) -> PatternFill {
+    let finite = |v: f64, fallback: f32| {
+        let v = v as f32;
+        if v.is_finite() {
+            v
+        } else {
+            fallback
+        }
+    };
+    let scale = d.number("Scl ").map_or(1.0, |v| finite(v / 100.0, 1.0));
+    let phase = d.descriptor("phase");
+    let axis = |key: &str| {
+        phase
+            .and_then(|p| p.number(key))
+            .map_or(0.0, |v| finite(v, 0.0))
+    };
+    PatternFill {
+        asset: None,
+        tile: Some(tile),
+        scale: if scale > 0.0 { scale } else { 1.0 },
+        offset_px: [axis("Hrzn"), axis("Vrtc")],
+        angle_deg: d.number("Angl").map_or(0.0, |v| finite(v, 0.0)),
+        link_with_layer: flag(d, "Lnkd").or_else(|| flag(d, "Algn")).unwrap_or(true),
     }
+}
+
+/// What fills a stroke: `PntT` names the kind — a solid colour, a gradient
+/// (`Grad`) or a pattern (`Ptrn`, resolved against `ctx.patterns`).
+fn stroke_fill(d: &Descriptor, ctx: EffectsContext<'_>) -> Option<FillStyle> {
+    match enumerated(d, "PntT")? {
+        "SClr" => Some(FillStyle::Solid(color(d)?)),
+        "GrFl" => Some(FillStyle::Gradient(rest::gradient(d.descriptor("Grad")?)?)),
+        "Ptrn" => {
+            let reference = crate::pattern::PatternRef::of(d)?;
+            let tile = ctx.patterns?.find(&reference)?.tile()?;
+            Some(FillStyle::Pattern(pattern_placement(d, tile)))
+        }
+        _ => None,
+    }
+}
+
+fn stroke(d: &Descriptor, scale: f32, ctx: EffectsContext<'_>) -> Option<StrokeEffect> {
+    let fill = stroke_fill(d, ctx)?;
     let position = match enumerated(d, "Styl") {
         Some("InsF") => StrokePosition::Inside,
         Some("Cntr" | "CtrF") => StrokePosition::Center,
@@ -332,7 +423,7 @@ fn stroke(d: &Descriptor, scale: f32) -> Option<StrokeEffect> {
         position,
         blend_mode: blend_mode(d)?,
         opacity: opacity_of(d)?,
-        fill: FillStyle::Solid(color(d)?),
+        fill,
         overprint: flag(d, "overprint").unwrap_or(false),
     })
 }
@@ -348,9 +439,16 @@ fn color_overlay(d: &Descriptor) -> Option<ColorOverlayEffect> {
 fn outer_glow(d: &Descriptor, scale: f32) -> Option<GlowEffect> {
     let size_px = pixels(d, "blur")? * scale;
     let spread_px = pixels(d, "Ckmt").unwrap_or(0.0) * scale;
+    // W13-B: a glow carrying a colour is solid; one carrying only a `Grad`
+    // object is a gradient glow.
+    let fill = if d.get("Clr ").is_some() {
+        FillStyle::Solid(color(d)?)
+    } else {
+        FillStyle::Gradient(rest::gradient(d.descriptor("Grad")?)?)
+    };
     Some(GlowEffect {
         blend_mode: blend_mode(d)?,
-        fill: FillStyle::Solid(color(d)?),
+        fill,
         opacity: opacity_of(d)?,
         noise: if d.get("Nose").is_some() {
             percent(d, "Nose")
@@ -458,29 +556,40 @@ fn enumerated_value(type_id: &str, value: &str) -> Value {
 }
 
 /// Encode the model's layer effects as an `lfx2` descriptor payload (card
-/// 080, W11-B) — the exact inverse of [`import_effects`] for every kind this
-/// build maps, with the same keys and units its parsers read.
+/// 080, W11-B, W13-B) — the exact inverse of [`import_effects`] for every
+/// kind this build maps, with the same keys and units its parsers read.
 ///
 /// Returns the bytes plus the human kind names that could NOT be written
 /// (an effect the model carries but whose descriptor form this writer does
-/// not produce, e.g. a gradient-filled glow). An all-unmapped result
-/// returns `None` so the caller keeps its existing "not imported" note
-/// instead of writing a meaningless block.
+/// not produce, e.g. a pattern-filled glow, or a pattern stroke when no
+/// pattern block is being written — [`export_effects_with_patterns`] writes
+/// that one). An all-unmapped result returns `None` so the caller keeps its
+/// existing "not imported" note instead of writing a meaningless block.
 pub fn export_effects(effects: &LayerEffects) -> Option<(Vec<u8>, Vec<String>)> {
-    export_impl(effects, None)
+    export_impl(effects, None, EffectsContext::default())
 }
 
-/// W9-M: [`export_effects`] that also writes a pattern overlay whose pattern
-/// carries its own pixels, as a `patternFill` descriptor naming the pattern,
-/// and returns that pattern so the caller can put it in the document's `Patt`
-/// block (the block the reference resolves against —
-/// [`crate::pattern::encode_block`]). A pattern overlay with no pixels (only
-/// an asset id) is still named as unmapped.
+/// W9-M: [`export_effects`] that also writes a pattern overlay (and, W13-B,
+/// a pattern-filled stroke) whose pattern carries its own pixels, as a
+/// descriptor naming the pattern, and returns those patterns so the caller
+/// can put them in the document's `Patt` block (the block the reference
+/// resolves against — [`crate::pattern::encode_block`]). A pattern with no
+/// pixels (only an asset id) is still named as unmapped.
 pub fn export_effects_with_patterns(
     effects: &LayerEffects,
 ) -> Option<(Vec<u8>, Vec<String>, Vec<crate::pattern::PsdPattern>)> {
+    export_effects_in(effects, EffectsContext::default())
+}
+
+/// W13-B: [`export_effects_with_patterns`] with the layer's and canvas's
+/// boxes, so a gradient overlay's offset is written as the percentage of
+/// its box that `Ofst` stores. `ctx.patterns` is not used on this side.
+pub fn export_effects_in(
+    effects: &LayerEffects,
+    ctx: EffectsContext<'_>,
+) -> Option<(Vec<u8>, Vec<String>, Vec<crate::pattern::PsdPattern>)> {
     let mut patterns = Vec::new();
-    let (data, unmapped) = export_impl(effects, Some(&mut patterns))?;
+    let (data, unmapped) = export_impl(effects, Some(&mut patterns), ctx)?;
     Some((data, unmapped, patterns))
 }
 
@@ -498,9 +607,156 @@ pub fn pattern_id(tile: &layer_model::effects::PatternTile) -> String {
     )
 }
 
+/// Put `tile` in the pattern block being written (once per id) and return
+/// the `Ptrn` reference object that names it.
+fn pattern_reference(
+    out: &mut Vec<crate::pattern::PsdPattern>,
+    tile: &layer_model::effects::PatternTile,
+) -> Value {
+    let id = pattern_id(tile);
+    let mut p = crate::Descriptor::new("Ptrn");
+    let _ = p.push("Nm  ", Value::Text(tile.name().to_string()));
+    let _ = p.push("Idnt", Value::Text(id.clone()));
+    if !out.iter().any(|p| p.id == id) {
+        out.push(crate::pattern::PsdPattern {
+            name: tile.name().to_string(),
+            id,
+            width: tile.width(),
+            height: tile.height(),
+            rgba8: tile.rgba8().to_vec(),
+        });
+    }
+    Value::Descriptor(p)
+}
+
+/// A `Pnt ` object of two plain numbers (a pattern's `phase`).
+fn point_value(xy: [f32; 2]) -> Value {
+    let mut p = crate::Descriptor::new("Pnt ");
+    let _ = p.push("Hrzn", Value::Double(f64::from(xy[0])));
+    let _ = p.push("Vrtc", Value::Double(f64::from(xy[1])));
+    Value::Descriptor(p)
+}
+
+/// A stroke as its `FrFX` descriptor, or `None` when its fill has no form
+/// here (a pattern with no pixels, or no pattern block being written).
+fn stroke_descriptor(
+    s: &StrokeEffect,
+    patterns: Option<&mut Vec<crate::pattern::PsdPattern>>,
+) -> Option<crate::Descriptor> {
+    let mut d = crate::Descriptor::new("FrFX");
+    let _ = d.push("enab", Value::Bool(true));
+    let _ = d.push("Md  ", enumerated_value("BlnM", blnm(s.blend_mode)));
+    let _ = d.push("Opct", percent_value(s.opacity));
+    let _ = d.push("Sz  ", px_value(s.size_px));
+    let _ = d.push(
+        "Styl",
+        enumerated_value(
+            "FStl",
+            match s.position {
+                StrokePosition::Inside => "InsF",
+                StrokePosition::Center => "CtrF",
+                StrokePosition::Outside => "OutF",
+            },
+        ),
+    );
+    match &s.fill {
+        FillStyle::Solid(color) => {
+            let _ = d.push("PntT", enumerated_value("FrFl", "SClr"));
+            let _ = d.push("Clr ", rgbc(*color));
+        }
+        FillStyle::Gradient(g) => {
+            // The model's gradient stroke is the ramp alone; the geometry
+            // keys carry Photoshop's defaults (linear, 90°, 100 %, aligned).
+            let _ = d.push("PntT", enumerated_value("FrFl", "GrFl"));
+            let _ = d.push("Grad", Value::Descriptor(rest::gradient_descriptor(g)));
+            let _ = d.push("Type", enumerated_value("GrdT", "Lnr "));
+            let _ = d.push("Angl", angle_value(90.0));
+            let _ = d.push("Scl ", percent_value(1.0));
+            let _ = d.push("Rvrs", Value::Bool(false));
+            let _ = d.push("Algn", Value::Bool(true));
+            let _ = d.push("Dthr", Value::Bool(false));
+        }
+        FillStyle::Pattern(fill) => {
+            let tile = fill.tile.as_ref()?;
+            let out = patterns?;
+            let _ = d.push("PntT", enumerated_value("FrFl", "Ptrn"));
+            let _ = d.push("Ptrn", pattern_reference(out, tile));
+            let _ = d.push("Scl ", percent_value(fill.scale));
+            let _ = d.push("Angl", angle_value(fill.angle_deg));
+            let _ = d.push("Lnkd", Value::Bool(fill.link_with_layer));
+            let _ = d.push("phase", point_value(fill.offset_px));
+        }
+    }
+    let _ = d.push("overprint", Value::Bool(s.overprint));
+    Some(d)
+}
+
+/// An outer or inner glow's descriptor, solid or gradient-filled; `None`
+/// for a pattern glow, which Photoshop's glows cannot carry.
+fn glow_out(
+    inner: bool,
+    g: &GlowEffect,
+    contour: &layer_model::effects::Contour,
+) -> Option<crate::Descriptor> {
+    match &g.fill {
+        FillStyle::Solid(color) => Some(rest::glow_descriptor(inner, g, *color, contour)),
+        FillStyle::Gradient(ramp) => {
+            let mut d = rest::glow_descriptor(inner, g, [0.0, 0.0, 0.0, 1.0], contour);
+            d.items.retain(|(key, _)| key != "Clr ");
+            let _ = d.push("Grad", Value::Descriptor(rest::gradient_descriptor(ramp)));
+            Some(d)
+        }
+        FillStyle::Pattern(_) => None,
+    }
+}
+
+/// A gradient overlay's descriptor with its `Ofst`: the offset as a
+/// percentage of `ctx`'s box. `Err` carries the descriptor written without
+/// the offset when the offset is not zero and the box is not known.
+fn gradient_overlay_out(
+    g: &layer_model::effects::GradientOverlayEffect,
+    ctx: EffectsContext<'_>,
+) -> Result<crate::Descriptor, crate::Descriptor> {
+    let mut d = rest::gradient_overlay_descriptor(g);
+    let offset = g.offset_px.map(|v| if v.is_finite() { v } else { 0.0 });
+    let percent = match ctx.offset_box(g.align_with_layer) {
+        Some(b) => [offset[0] / b[0], offset[1] / b[1]],
+        None if offset == [0.0, 0.0] => [0.0, 0.0],
+        None => return Err(d),
+    };
+    let mut p = crate::Descriptor::new("Pnt ");
+    let _ = p.push("Hrzn", percent_value(percent[0]));
+    let _ = p.push("Vrtc", percent_value(percent[1]));
+    let _ = d.push("Ofst", Value::Descriptor(p));
+    Ok(d)
+}
+
+/// Push one kind: its single key when there is one instance, its `...Multi`
+/// list (every instance, bottom-most first) when there are more.
+fn push_kind(
+    top: &mut crate::Descriptor,
+    key: &str,
+    multi: &str,
+    mut written: Vec<crate::Descriptor>,
+) -> bool {
+    match written.len() {
+        0 => false,
+        1 => {
+            let _ = top.push(key, Value::Descriptor(written.remove(0)));
+            true
+        }
+        _ => {
+            let list = written.into_iter().map(Value::Descriptor).collect();
+            let _ = top.push(multi, Value::List(list));
+            true
+        }
+    }
+}
+
 fn export_impl(
     effects: &LayerEffects,
-    patterns: Option<&mut Vec<crate::pattern::PsdPattern>>,
+    mut patterns: Option<&mut Vec<crate::pattern::PsdPattern>>,
+    ctx: EffectsContext<'_>,
 ) -> Option<(Vec<u8>, Vec<String>)> {
     let mut top = crate::Descriptor::new("Lfx2");
     let _ = top.push("masterFXSwitch", Value::Bool(effects.enabled));
@@ -509,79 +765,58 @@ fn export_impl(
     let mut wrote = false;
 
     let contours = &effects.extras.contours;
-    if let Some(s) = &effects.drop_shadow {
-        let d = rest::shadow_descriptor("DrSh", s, &contours.drop_shadow);
-        let _ = top.push("DrSh", Value::Descriptor(d));
-        wrote = true;
-    }
-    // W11-B: the five kinds past card 080's four, written as the exact
-    // inverse of [`map_rest`].
-    if let Some(s) = &effects.inner_shadow {
-        let d = rest::shadow_descriptor("IrSh", s, &contours.inner_shadow);
-        let _ = top.push("IrSh", Value::Descriptor(d));
-        wrote = true;
-    }
-    if let Some(s) = &effects.stroke {
-        match &s.fill {
-            FillStyle::Solid(color) => {
-                let mut d = crate::Descriptor::new("FrFX");
-                let _ = d.push("enab", Value::Bool(true));
-                let _ = d.push("Md  ", enumerated_value("BlnM", blnm(s.blend_mode)));
-                let _ = d.push("Clr ", rgbc(*color));
-                let _ = d.push("Opct", percent_value(s.opacity));
-                let _ = d.push("Sz  ", px_value(s.size_px));
-                let _ = d.push("PntT", enumerated_value("FrFl", "SClr"));
-                let _ = d.push(
-                    "Styl",
-                    enumerated_value(
-                        "FStl",
-                        match s.position {
-                            StrokePosition::Inside => "InsF",
-                            StrokePosition::Center => "CtrF",
-                            StrokePosition::Outside => "OutF",
-                        },
-                    ),
-                );
-                let _ = d.push("overprint", Value::Bool(s.overprint));
-                let _ = top.push("FrFX", Value::Descriptor(d));
-                wrote = true;
-            }
-            FillStyle::Gradient(_) | FillStyle::Pattern(_) => {
-                unmapped.push("stroke".into());
-            }
+    // W13-B: every instance of a repeatable kind — the primary slot, then
+    // the extras — goes out; more than one becomes that kind's `...Multi`
+    // list, which [`map_rest`] reads back into the same primary + extras.
+    let shadows: Vec<crate::Descriptor> = effects
+        .drop_shadows()
+        .into_iter()
+        .map(|(s, c)| rest::shadow_descriptor("DrSh", s, c))
+        .collect();
+    wrote |= push_kind(&mut top, "DrSh", "dropShadowMulti", shadows);
+    let shadows: Vec<crate::Descriptor> = effects
+        .inner_shadows()
+        .into_iter()
+        .map(|(s, c)| rest::shadow_descriptor("IrSh", s, c))
+        .collect();
+    wrote |= push_kind(&mut top, "IrSh", "innerShadowMulti", shadows);
+    let mut strokes = Vec::new();
+    for s in effects.strokes() {
+        match stroke_descriptor(s, patterns.as_deref_mut()) {
+            Some(d) => strokes.push(d),
+            None => unmapped.push("stroke".into()),
         }
     }
-    if let Some(s) = &effects.color_overlay {
-        let mut d = crate::Descriptor::new("SoFi");
-        let _ = d.push("enab", Value::Bool(true));
-        let _ = d.push("Md  ", enumerated_value("BlnM", blnm(s.blend_mode)));
-        let _ = d.push("Clr ", rgbc(s.color));
-        let _ = d.push("Opct", percent_value(s.opacity));
-        let _ = top.push("SoFi", Value::Descriptor(d));
-        wrote = true;
-    }
+    wrote |= push_kind(&mut top, "FrFX", "frameFXMulti", strokes);
+    let overlays: Vec<crate::Descriptor> = effects
+        .color_overlays()
+        .into_iter()
+        .map(|s| {
+            let mut d = crate::Descriptor::new("SoFi");
+            let _ = d.push("enab", Value::Bool(true));
+            let _ = d.push("Md  ", enumerated_value("BlnM", blnm(s.blend_mode)));
+            let _ = d.push("Clr ", rgbc(s.color));
+            let _ = d.push("Opct", percent_value(s.opacity));
+            d
+        })
+        .collect();
+    wrote |= push_kind(&mut top, "SoFi", "solidFillMulti", overlays);
     if let Some(s) = &effects.outer_glow {
-        match &s.fill {
-            FillStyle::Solid(color) => {
-                let d = rest::glow_descriptor(false, s, *color, &contours.outer_glow);
+        match glow_out(false, s, &contours.outer_glow) {
+            Some(d) => {
                 let _ = top.push("OrGl", Value::Descriptor(d));
                 wrote = true;
             }
-            FillStyle::Gradient(_) | FillStyle::Pattern(_) => {
-                unmapped.push("outer glow".into());
-            }
+            None => unmapped.push("outer glow".into()),
         }
     }
     if let Some(s) = &effects.inner_glow {
-        match &s.fill {
-            FillStyle::Solid(color) => {
-                let d = rest::glow_descriptor(true, s, *color, &contours.inner_glow);
+        match glow_out(true, s, &contours.inner_glow) {
+            Some(d) => {
                 let _ = top.push("IrGl", Value::Descriptor(d));
                 wrote = true;
             }
-            FillStyle::Gradient(_) | FillStyle::Pattern(_) => {
-                unmapped.push("inner glow".into());
-            }
+            None => unmapped.push("inner glow".into()),
         }
     }
     if let Some(b) = &effects.bevel_emboss {
@@ -593,67 +828,35 @@ fn export_impl(
         let _ = top.push("ChFX", Value::Descriptor(rest::satin_descriptor(s)));
         wrote = true;
     }
-    if let Some(g) = &effects.gradient_overlay {
-        let _ = top.push(
-            "GrFl",
-            Value::Descriptor(rest::gradient_overlay_descriptor(g)),
-        );
-        if g.offset_px != [0.0, 0.0] {
-            // `Ofst` is a percentage of the layer's box, which this writer
-            // does not know; the offset is named rather than dropped.
-            unmapped.push("gradient overlay offset".into());
-        }
-        wrote = true;
+    let mut gradients = Vec::new();
+    for g in effects.gradient_overlays() {
+        gradients.push(gradient_overlay_out(g, ctx).unwrap_or_else(|d| {
+            // The box `Ofst` is a percentage of is not known here: the
+            // offset is named rather than guessed.
+            if !unmapped.iter().any(|u| u == "gradient overlay offset") {
+                unmapped.push("gradient overlay offset".into());
+            }
+            d
+        }));
     }
+    wrote |= push_kind(&mut top, "GrFl", "gradientFillMulti", gradients);
     if let Some(overlay) = &effects.pattern_overlay {
         match (patterns, overlay.pattern.tile.as_ref()) {
             (Some(out), Some(tile)) => {
-                let id = pattern_id(tile);
                 let fill = &overlay.pattern;
                 let mut d = crate::Descriptor::new("patternFill");
                 let _ = d.push("enab", Value::Bool(true));
                 let _ = d.push("Md  ", enumerated_value("BlnM", blnm(overlay.blend_mode)));
                 let _ = d.push("Opct", percent_value(overlay.opacity));
-                let mut p = crate::Descriptor::new("Ptrn");
-                let _ = p.push("Nm  ", Value::Text(tile.name().to_string()));
-                let _ = p.push("Idnt", Value::Text(id.clone()));
-                let _ = d.push("Ptrn", Value::Descriptor(p));
+                let _ = d.push("Ptrn", pattern_reference(out, tile));
                 let _ = d.push("Angl", angle_value(fill.angle_deg));
                 let _ = d.push("Scl ", percent_value(fill.scale));
                 let _ = d.push("Algn", Value::Bool(fill.link_with_layer));
-                let mut phase = crate::Descriptor::new("Pnt ");
-                let _ = phase.push("Hrzn", Value::Double(f64::from(fill.offset_px[0])));
-                let _ = phase.push("Vrtc", Value::Double(f64::from(fill.offset_px[1])));
-                let _ = d.push("phase", Value::Descriptor(phase));
+                let _ = d.push("phase", point_value(fill.offset_px));
                 let _ = top.push("patternFill", Value::Descriptor(d));
-                if !out.iter().any(|p| p.id == id) {
-                    out.push(crate::pattern::PsdPattern {
-                        name: tile.name().to_string(),
-                        id,
-                        width: tile.width(),
-                        height: tile.height(),
-                        rgba8: tile.rgba8().to_vec(),
-                    });
-                }
                 wrote = true;
             }
             _ => unmapped.push("pattern overlay".into()),
-        }
-    }
-
-    // W11-B round 2: the import decodes Photoshop CC's `...Multi` lists
-    // into `extras`, but this writer emits one instance per kind. The
-    // extra instances are named, never silently dropped.
-    let extras = &effects.extras;
-    for (count, name) in [
-        (extras.drop_shadows.len(), "repeated drop shadow"),
-        (extras.inner_shadows.len(), "repeated inner shadow"),
-        (extras.strokes.len(), "repeated stroke"),
-        (extras.color_overlays.len(), "repeated colour overlay"),
-        (extras.gradient_overlays.len(), "repeated gradient overlay"),
-    ] {
-        if count > 0 {
-            unmapped.push(name.into());
         }
     }
 
@@ -1036,8 +1239,15 @@ mod w11b_rest_effect_tests {
     /// decode the layer's block, the pattern overlay resolved against the
     /// file's `Patt` block as the import path does.
     fn through_psd(effects: &LayerEffects) -> (LayerEffects, Vec<String>, Vec<String>) {
+        // The layer and the canvas below are both 4 x 4: the box a gradient
+        // overlay's `Ofst` percentage is of, on both sides.
+        let boxes = EffectsContext {
+            patterns: None,
+            layer_box: Some([4.0, 4.0]),
+            canvas_box: Some([4.0, 4.0]),
+        };
         let (data, not_written, patterns) =
-            export_effects_with_patterns(effects).expect("the block is written");
+            export_effects_in(effects, boxes).expect("the block is written");
         let mut file = PsdFile::new(PsdHeader::rgba8(4, 4));
         let mut layer = PsdLayer::raster("fx", Rect::new(0, 0, 4, 4));
         layer.set_rgba8(&[200u8; 4 * 4 * 4]).unwrap();
@@ -1056,10 +1266,14 @@ mod w11b_rest_effect_tests {
         let back = crate::read(&bytes).unwrap();
         let opts = ReadOptions::default();
         let fx = back.layers[0].effects.as_ref().expect("the lfx2 block");
-        let imported = import_effects(fx, &opts).expect("the block decodes");
+        let library = crate::pattern::PatternLibrary::read(&back, &opts);
+        let ctx = EffectsContext {
+            patterns: Some(&library),
+            ..boxes
+        };
+        let imported = import_effects_in(fx, &opts, ctx).expect("the block decodes");
         let mut decoded = imported.effects;
         let mut unmapped = imported.unmapped;
-        let library = crate::pattern::PatternLibrary::read(&back, &opts);
         if let Some(overlay) = crate::pattern::pattern_overlay(fx, &opts, &library) {
             decoded.pattern_overlay = Some(overlay);
             struck(&mut unmapped, "pattern overlay");
@@ -1268,12 +1482,175 @@ mod w11b_rest_effect_tests {
         assert!(not_written.is_empty(), "{not_written:?}");
         assert!(unmapped.is_empty(), "{unmapped:?}");
         assert_eq!(back, fx);
-        // An offset has no descriptor form here: it is named, not dropped
-        // silently.
-        let mut offset = fx.clone();
-        offset.gradient_overlay.as_mut().unwrap().offset_px = [4.0, 0.0];
-        let (_, not_written, _) = through_psd(&offset);
+    }
+
+    #[test]
+    fn a_gradient_overlay_offset_round_trips_as_a_percentage_of_its_box() {
+        // W13-B: `Ofst` is a percentage of the layer's box (or the canvas
+        // when the ramp is not aligned with the layer). Both ways.
+        for align_with_layer in [true, false] {
+            let mut fx = LayerEffects {
+                gradient_overlay: Some(GradientOverlayEffect {
+                    align_with_layer,
+                    offset_px: [2.0, -1.0],
+                    ..gradient_overlay()
+                }),
+                ..Default::default()
+            };
+            fx.extras.gradient_overlays = vec![GradientOverlayEffect {
+                offset_px: [-3.0, 1.0],
+                ..gradient_overlay()
+            }];
+            let (back, not_written, unmapped) = through_psd(&fx);
+            assert!(not_written.is_empty(), "{not_written:?}");
+            assert!(unmapped.is_empty(), "{unmapped:?}");
+            assert_eq!(back, fx, "align_with_layer {align_with_layer}");
+        }
+        // The descriptor spells it the way Photoshop does: a `Pnt ` of
+        // `#Prc` values (2 px of a 4 px box is 50 %).
+        let fx = LayerEffects {
+            gradient_overlay: Some(GradientOverlayEffect {
+                align_with_layer: true,
+                offset_px: [2.0, -1.0],
+                ..gradient_overlay()
+            }),
+            ..Default::default()
+        };
+        let ctx = EffectsContext {
+            layer_box: Some([4.0, 4.0]),
+            ..Default::default()
+        };
+        let (data, _, _) = export_effects_in(&fx, ctx).unwrap();
+        let block = Effects {
+            key: *b"lfx2",
+            data: data.clone(),
+        };
+        let top = block.descriptor(&ReadOptions::default()).unwrap();
+        let ofst = top.descriptor("GrFl").unwrap().descriptor("Ofst").unwrap();
+        assert_eq!(
+            ofst.get("Hrzn"),
+            Some(&Value::UnitFloat {
+                unit: *b"#Prc",
+                value: 50.0
+            })
+        );
+        // With no box known, the offset is named on both sides, never
+        // guessed.
+        let (_, not_written) = export_effects(&fx).unwrap();
         assert_eq!(not_written, ["gradient overlay offset"]);
+        let imported = import_effects(&block, &ReadOptions::default()).unwrap();
+        assert_eq!(imported.unmapped, ["gradient overlay offset"]);
+        assert_eq!(
+            imported.effects.gradient_overlay.unwrap().offset_px,
+            [0.0, 0.0]
+        );
+    }
+
+    fn ramp() -> Gradient {
+        gradient_overlay().gradient
+    }
+
+    #[test]
+    fn a_gradient_filled_stroke_round_trips_through_a_psd() {
+        let stroke = StrokeEffect {
+            size_px: 6.0,
+            position: StrokePosition::Inside,
+            blend_mode: BlendMode::Multiply,
+            opacity: 0.5,
+            fill: FillStyle::Gradient(ramp()),
+            overprint: true,
+        };
+        let fx = LayerEffects {
+            stroke: Some(stroke),
+            ..Default::default()
+        };
+        let (back, not_written, unmapped) = through_psd(&fx);
+        assert!(not_written.is_empty(), "{not_written:?}");
+        assert!(unmapped.is_empty(), "{unmapped:?}");
+        assert_eq!(back, fx);
+    }
+
+    #[test]
+    fn a_pattern_filled_stroke_round_trips_through_a_psd_and_its_pattern_block() {
+        let tile = PatternTile::new("Checks", 2, 1, vec![9, 8, 7, 255, 1, 2, 3, 64]).unwrap();
+        let stroke = StrokeEffect {
+            size_px: 2.0,
+            position: StrokePosition::Center,
+            blend_mode: BlendMode::Normal,
+            opacity: 0.75,
+            fill: FillStyle::Pattern(PatternFill {
+                tile: Some(tile),
+                scale: 2.0,
+                offset_px: [3.0, -5.0],
+                angle_deg: 45.0,
+                link_with_layer: false,
+                ..Default::default()
+            }),
+            overprint: false,
+        };
+        let fx = LayerEffects {
+            stroke: Some(stroke),
+            ..Default::default()
+        };
+        let (back, not_written, unmapped) = through_psd(&fx);
+        assert!(not_written.is_empty(), "{not_written:?}");
+        assert!(unmapped.is_empty(), "{unmapped:?}");
+        assert_eq!(back, fx);
+        // With no pattern block being written, it is named, not dropped.
+        let only_solid = LayerEffects {
+            satin: Some(satin()),
+            ..fx.clone()
+        };
+        let (data, not_written) = export_effects(&only_solid).unwrap();
+        assert_eq!(not_written, ["stroke"]);
+        // And a reader with no pattern library names the stroke it cannot
+        // resolve.
+        let (data_with, _, _) = export_effects_with_patterns(&fx).unwrap();
+        let imported = import_effects(
+            &Effects {
+                key: *b"lfx2",
+                data: data_with,
+            },
+            &ReadOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(imported.unmapped, ["stroke"]);
+        assert!(imported.effects.stroke.is_none());
+        assert!(!data.is_empty());
+    }
+
+    #[test]
+    fn gradient_filled_outer_and_inner_glows_round_trip_through_a_psd() {
+        let fx = LayerEffects {
+            outer_glow: Some(GlowEffect {
+                fill: FillStyle::Gradient(ramp()),
+                source: GlowSource::Edge,
+                ..inner_glow()
+            }),
+            inner_glow: Some(GlowEffect {
+                fill: FillStyle::Gradient(Gradient {
+                    alpha_stops: Vec::new(),
+                    ..ramp()
+                }),
+                ..inner_glow()
+            }),
+            ..Default::default()
+        };
+        let (back, not_written, unmapped) = through_psd(&fx);
+        assert!(not_written.is_empty(), "{not_written:?}");
+        assert!(unmapped.is_empty(), "{unmapped:?}");
+        assert_eq!(back, fx);
+        // A pattern glow has no descriptor form: named, not dropped.
+        let pattern = LayerEffects {
+            outer_glow: Some(GlowEffect {
+                fill: FillStyle::Pattern(PatternFill::default()),
+                ..inner_glow()
+            }),
+            satin: Some(satin()),
+            ..Default::default()
+        };
+        let (_, not_written) = export_effects(&pattern).unwrap();
+        assert_eq!(not_written, ["outer glow"]);
     }
 
     #[test]
@@ -1365,38 +1742,89 @@ mod w11b_rest_effect_tests {
         assert_eq!(back, fx);
     }
     #[test]
-    fn the_extra_instances_of_a_repeated_effect_are_named_not_silently_dropped() {
-        // Review round 2: the import decodes Photoshop CC's `...Multi`
-        // lists into `extras`; the writer emits one instance per kind, so
-        // every extra kind must be named in the export report.
+    fn two_drop_shadows_export_as_a_multi_list_and_reimport_as_two() {
+        // W13-B: a layer carrying two drop shadows writes both, in
+        // `dropShadowMulti`, and reads both back.
         use layer_model::effects::ShadowInstance;
-        let extra_shadow = ShadowInstance {
-            effect: inner_shadow(),
-            contour: Contour::default(),
+        let mut fx = LayerEffects {
+            drop_shadow: Some(ShadowEffect {
+                opacity: 0.3,
+                ..ShadowEffect::default()
+            }),
+            ..Default::default()
         };
+        fx.extras.drop_shadows = vec![ShadowInstance {
+            effect: inner_shadow(),
+            contour: custom_contour(),
+        }];
+        let (data, not_written) = export_effects(&fx).unwrap();
+        assert!(not_written.is_empty(), "{not_written:?}");
+        let block = Effects {
+            key: *b"lfx2",
+            data,
+        };
+        let top = block.descriptor(&ReadOptions::default()).unwrap();
+        assert!(top.get("DrSh").is_none(), "one kind, one key");
+        match top.get("dropShadowMulti") {
+            Some(Value::List(items)) => assert_eq!(items.len(), 2),
+            other => panic!("expected a two-item list, got {other:?}"),
+        }
+        let (back, not_written, unmapped) = through_psd(&fx);
+        assert!(not_written.is_empty(), "{not_written:?}");
+        assert!(unmapped.is_empty(), "{unmapped:?}");
+        assert_eq!(back.drop_shadows().len(), 2);
+        assert_eq!(back, fx);
+    }
+
+    #[test]
+    fn every_repeatable_kind_round_trips_its_extra_instances_through_a_psd() {
+        // W13-B: the five `...Multi` lists, written and read back with equal
+        // parameters (a gradient and a pattern stroke among the strokes).
+        use layer_model::effects::ShadowInstance;
+        let tile = PatternTile::new("Dots", 1, 2, vec![1, 2, 3, 255, 4, 5, 6, 128]).unwrap();
         let mut fx = LayerEffects {
             drop_shadow: Some(ShadowEffect::default()),
+            inner_shadow: Some(inner_shadow()),
+            stroke: Some(StrokeEffect::default()),
+            color_overlay: Some(ColorOverlayEffect::default()),
+            gradient_overlay: Some(gradient_overlay()),
             ..Default::default()
+        };
+        let extra_shadow = ShadowInstance {
+            effect: inner_shadow(),
+            contour: Contour::preset(ContourPreset::Cone),
         };
         fx.extras.drop_shadows = vec![extra_shadow.clone(), extra_shadow.clone()];
         fx.extras.inner_shadows = vec![extra_shadow];
-        fx.extras.strokes = vec![StrokeEffect::default()];
-        fx.extras.color_overlays = vec![ColorOverlayEffect::default()];
-        fx.extras.gradient_overlays = vec![GradientOverlayEffect::default()];
+        fx.extras.strokes = vec![
+            StrokeEffect {
+                fill: FillStyle::Gradient(ramp()),
+                ..StrokeEffect::default()
+            },
+            StrokeEffect {
+                fill: FillStyle::Pattern(PatternFill {
+                    tile: Some(tile),
+                    scale: 0.5,
+                    ..Default::default()
+                }),
+                ..StrokeEffect::default()
+            },
+        ];
+        fx.extras.color_overlays = vec![ColorOverlayEffect {
+            color: [0.0, 1.0, 0.0, 1.0],
+            ..ColorOverlayEffect::default()
+        }];
+        fx.extras.gradient_overlays = vec![GradientOverlayEffect {
+            reverse: false,
+            ..gradient_overlay()
+        }];
 
-        let (back, not_written, _unmapped) = through_psd(&fx);
-        assert_eq!(
-            not_written,
-            vec![
-                "repeated drop shadow".to_string(),
-                "repeated inner shadow".to_string(),
-                "repeated stroke".to_string(),
-                "repeated colour overlay".to_string(),
-                "repeated gradient overlay".to_string(),
-            ]
-        );
-        // The primary slot is still written and read back.
-        assert!(back.drop_shadow.is_some());
+        let (back, not_written, unmapped) = through_psd(&fx);
+        assert!(not_written.is_empty(), "{not_written:?}");
+        assert!(unmapped.is_empty(), "{unmapped:?}");
+        assert_eq!(back.extras.drop_shadows.len(), 2);
+        assert_eq!(back.extras.strokes.len(), 2);
+        assert_eq!(back, fx);
     }
     #[test]
     fn a_multi_list_inside_the_lfx2_descriptor_maps_through_a_psd() {

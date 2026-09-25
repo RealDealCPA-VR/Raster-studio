@@ -62,22 +62,45 @@ pub fn channel_for_key(
     channels.kind_for_digit(doc, digit)
 }
 
-/// The tool a bare letter selects, cycling within its group.
+/// The tool a tool letter selects, Photopea's way (W13-M) — the one rule
+/// both key routes use: this crate's [`tool_for_key`] and the application's
+/// `Editor::select_tool_letter`, which the shipped key route reaches.
 ///
-/// `None` for any chord carrying a modifier — a tool letter is always bare —
-/// and for a key no tool claims.
+/// A bare letter picks its group: the active tool when it already belongs to
+/// that group (pressing `M` again keeps the Ellipse marquee, as Photopea
+/// does), the group's first member otherwise. `step` (Shift + the letter)
+/// moves to the next tool of the group, wrapping, when the active tool is in
+/// it; from outside the group it enters it like the bare letter. Photopea's
+/// key handler (`pp.js`, the tool-letter branch) advances a group only while
+/// Shift is held and the group is already the active one.
+///
+/// `None` for a letter no tool claims.
+pub fn tool_for_letter(letter: char, step: bool, active: Option<ToolId>) -> Option<ToolId> {
+    let group = tools::registry::by_shortcut(letter);
+    let at = active.and_then(|a| group.iter().position(|t| *t == a));
+    match (at, step) {
+        (Some(i), true) => group.get((i + 1) % group.len()).copied(),
+        (Some(i), false) => group.get(i).copied(),
+        (None, _) => group.first().copied(),
+    }
+}
+
+/// The tool a key press selects in this crate's workspace route, through
+/// [`tool_for_letter`] (Shift is the step).
+///
+/// `None` for a chord carrying Ctrl/Cmd or Alt, and for a key no tool claims.
 pub fn tool_for_key(
     key: egui::Key,
     modifiers: egui::Modifiers,
     active: Option<ToolId>,
 ) -> Option<ToolId> {
-    if modifiers.any() {
+    if modifiers.command || modifiers.ctrl || modifiers.alt || modifiers.mac_cmd {
         return None;
     }
-    match Key::from_egui(key)? {
-        Key::Char(c) => tools::registry::cycle(c, active),
-        _ => None,
-    }
+    let Key::Char(c) = Key::from_egui(key)? else {
+        return None;
+    };
+    tool_for_letter(c, modifiers.shift, active)
 }
 
 #[cfg(test)]
@@ -265,7 +288,7 @@ mod tests {
             tool_for_key(
                 egui::Key::B,
                 egui::Modifiers {
-                    shift: true,
+                    alt: true,
                     ..Default::default()
                 },
                 None
@@ -274,14 +297,39 @@ mod tests {
         );
     }
 
+    fn shift() -> egui::Modifiers {
+        egui::Modifiers {
+            shift: true,
+            ..Default::default()
+        }
+    }
+
+    /// W13-M: Photopea cycles a group on Shift + the letter only; the bare
+    /// letter pressed again keeps the tool the group is showing.
     #[test]
-    fn pressing_a_tool_letter_again_cycles_within_its_group() {
+    fn shift_and_a_tool_letter_cycles_the_group_and_the_bare_letter_stays() {
         let group = tools::registry::by_shortcut('m');
         assert!(group.len() > 1);
         let first = tool_for_key(egui::Key::M, egui::Modifiers::default(), None).unwrap();
         assert_eq!(first, group[0]);
-        let second = tool_for_key(egui::Key::M, egui::Modifiers::default(), Some(first)).unwrap();
+        assert_eq!(
+            tool_for_key(egui::Key::M, egui::Modifiers::default(), Some(first)),
+            Some(first),
+            "a repeated bare letter must not cycle"
+        );
+        let second = tool_for_key(egui::Key::M, shift(), Some(first)).unwrap();
         assert_eq!(second, group[1]);
+        // Walking the whole group with Shift wraps back to the first member.
+        let mut tool = second;
+        for _ in 1..group.len() {
+            tool = tool_for_key(egui::Key::M, shift(), Some(tool)).unwrap();
+        }
+        assert_eq!(tool, group[0]);
+        // From outside the group, Shift + the letter enters it at the start.
+        assert_eq!(
+            tool_for_key(egui::Key::M, shift(), Some(ToolId::Brush)),
+            Some(group[0])
+        );
     }
 
     #[test]

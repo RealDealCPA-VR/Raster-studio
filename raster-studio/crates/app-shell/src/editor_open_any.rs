@@ -55,6 +55,8 @@ impl Editor {
             || crate::dialogs::is_style_library_path(path)
             || is_cube_path(path)
             || Self::is_resource_path(path)
+            // W13-K: a script opens in the File > Script window.
+            || crate::script::is_script_path(path)
     }
 
     /// W11-D: route a library file to its importer. `None` when `path` is
@@ -90,6 +92,24 @@ impl Editor {
         // W9-N: patterns, gradients, shapes, swatches, a profile.
         if Self::is_resource_path(path) {
             return Some(self.open_resource(path));
+        }
+        // W13-D: PDF / AI (a multi-page PDF opens one artboard per page),
+        // WMF / EMF, and the preview formats (EPS, PDN, Sketch, XD, FIG),
+        // which open with a status line saying what was read.
+        if let Some(result) = self.open_w13d_document(path) {
+            return Some(result);
+        }
+        // W13-K: a `.jsx` / `.js` opens in the File > Script window with its
+        // source shown; it runs only when the user presses Run there.
+        if crate::script::is_script_path(path) {
+            let opened = crate::script::open_file(path);
+            if opened.is_ok() {
+                self.set_status(format!(
+                    "Opened {} in File > Script; press Run to run it",
+                    path.display()
+                ));
+            }
+            return Some(opened);
         }
         None
     }
@@ -206,7 +226,13 @@ impl Editor {
             let doc = self.active().ok_or("No document is open")?;
             (doc.id(), self.prefs.history_depth)
         };
-        let saved = if Self::is_project_path(&path) {
+        // W13-D: a multi-page PDF comes back as its page artboards.
+        let pages = Self::open_pages_document(id, &path, depth)
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .map(|(doc, _, _)| doc);
+        let saved = if let Some(doc) = pages {
+            Ok(doc)
+        } else if Self::is_project_path(&path) {
             OpenDocument::open_project(id, &path, depth)
         } else {
             match Self::open_animated(id, &path, depth) {
@@ -378,3 +404,7 @@ fn revert_command(doc: &mut OpenDocument, saved: &OpenDocument) -> Result<Comman
 #[cfg(test)]
 #[path = "editor_open_any_tests.rs"]
 mod tests;
+
+/// W13-D: PDF pages as artboards, and the preview formats' open route.
+#[path = "editor_open_pages.rs"]
+pub(crate) mod open_pages;

@@ -390,8 +390,14 @@ mod tests {
         match chrome.dialogs_for_test().active_for_test() {
             ActiveDialog::ShortcutSheet(sheet) => {
                 let visible = sheet.visible();
-                assert_eq!(visible.len(), 1, "{visible:?}");
-                assert_eq!(visible[0].chord, spell("Ctrl+Shift+P"));
+                // W13-M: Ctrl+F (Photopea's Find) reaches it too.
+                assert_eq!(visible.len(), 2, "{visible:?}");
+                let chords: Vec<&str> = visible.iter().map(|r| r.chord.as_str()).collect();
+                assert!(
+                    chords.contains(&spell("Ctrl+Shift+P").as_str()),
+                    "{chords:?}"
+                );
+                assert!(chords.contains(&spell("Ctrl+F").as_str()), "{chords:?}");
             }
             _ => panic!("the sheet did not open"),
         }

@@ -211,6 +211,11 @@ pub fn is_temporary_hand_key(logical: &winit::keyboard::Key) -> bool {
 ///   Ctrl or that already move or navigate ([`ctrl_keeps_the_tool`]);
 /// * Alt alone on a colour-painting tool is the Eyedropper, so an Alt-click
 ///   samples the composite into the foreground and paints nothing.
+/// * W13-A: on the tools Ctrl lends the Move tool on, Ctrl+Alt lends it
+///   too (Alt no longer blocks the lend), so the drag is the Move tool's
+///   Alt+drag copy (`move_duplicate`); on the tools in [`ctrl_keeps_the_tool`]
+///   Ctrl+Alt lends nothing. With the Move tool itself in hand Alt lends
+///   nothing ([`alt_samples_colour`] is false for it), so its Alt+drag copies.
 ///
 /// Shift never lends a tool: on a stroke tool it draws the straight line
 /// (`tools::stroke`), on the selection tools it adds.
@@ -223,7 +228,7 @@ pub fn temporary_tool_for(
     if space_held {
         return (mods.ctrl || mods.alt).then_some(T::Zoom);
     }
-    if mods.ctrl && !mods.alt && !ctrl_keeps_the_tool(tool) {
+    if mods.ctrl && !ctrl_keeps_the_tool(tool) {
         return Some(T::Move);
     }
     if mods.alt && !mods.ctrl && alt_samples_colour(tool) {
@@ -416,11 +421,15 @@ enum WheelGesture {
 
 /// Decide what a wheel event of `lines` notches does.
 ///
-/// `wheel_zooms` is the Scroll-wheel-zooms preference. When it is on, every
-/// wheel zooms; when it is off, only Ctrl (Command) + wheel zooms and a plain
-/// wheel pans — Shift swaps the vertical wheel onto the horizontal axis, the
-/// convention every scrolling surface follows. Alt + wheel zooms whatever the
-/// preference says, as Ctrl + wheel does (W11-F, Photoshop's gesture).
+/// W13-M: Photopea's rule, read from its canvas wheel handler. Alt inverts
+/// the Scroll-wheel-zooms preference (`wheel_zooms`): with it off, a plain
+/// wheel pans and Alt + wheel zooms; with it on, a plain wheel zooms and
+/// Alt + wheel pans. Ctrl (Command) + wheel, when it does not zoom, pans
+/// *horizontally* — Photopea's Hand swaps the axes while Ctrl is held — so
+/// with the preference off Ctrl + wheel scrolls sideways rather than zooming.
+/// Shift + wheel turns a vertical wheel horizontal (what the browser hands
+/// Photopea for Shift + wheel) and always pans, so a Shift + wheel is never
+/// a zoom by nothing.
 fn wheel_gesture(
     lines: Vec2,
     ctrl: bool,
@@ -428,7 +437,7 @@ fn wheel_gesture(
     shift: bool,
     wheel_zooms: bool,
 ) -> WheelGesture {
-    if wheel_zooms || ctrl || alt {
+    if alt != wheel_zooms && !shift {
         return WheelGesture::Zoom((1.0 + lines.y * 0.1).clamp(0.2, 5.0));
     }
     let lines = if shift && lines.x == 0.0 {
@@ -436,8 +445,48 @@ fn wheel_gesture(
     } else {
         lines
     };
+    let lines = if ctrl {
+        Vec2::new(lines.y, lines.x)
+    } else {
+        lines
+    };
     WheelGesture::Pan(lines * WHEEL_LINE_PX)
 }
+
+/// W13-M: what a key press does to the mask view, Photopea's way (its key
+/// handler, `pp.js`, the `mskView` branch): only while the active layer has
+/// a mask, a bare `\` toggles the rubylith overlay, a bare `` ` `` toggles
+/// the mask shown alone, and Escape puts the image back when a mask view is
+/// on. `None` for every other key, and when nothing would change.
+fn mask_view_key(
+    chord: &Chord,
+    current: ui::MaskViewMode,
+    has_mask: bool,
+) -> Option<ui::MaskViewMode> {
+    use ui::MaskViewMode::{Composite, Grayscale, Overlay};
+    if !has_mask || chord.ctrl_or_cmd || chord.alt || chord.shift {
+        return None;
+    }
+    let toggle = |mode| if current == mode { Composite } else { mode };
+    let next = match chord.key {
+        Key::Char('\\') => toggle(Overlay),
+        Key::Char('`') => toggle(Grayscale),
+        Key::Escape if current != Composite => Composite,
+        _ => return None,
+    };
+    Some(next)
+}
+
+// W13-M: the Photopea wheel, tool-letter, mask-thumbnail and print routes,
+// driven through the shell's own entry points.
+#[cfg(test)]
+#[path = "shell_w13m_tests.rs"]
+mod w13m_tests;
+
+// W13-L: the Animation timeline's scrub and playback reach the canvas.
+#[cfg(test)]
+#[path = "shell_w13l_tests.rs"]
+mod w13l_tests;
 
 /// Held modifiers as the tools read them.
 ///
@@ -838,6 +887,8 @@ impl Shell {
             .with_position(PhysicalPosition::new(geometry.x, geometry.y))
             .with_maximized(geometry.maximized);
         let window = Arc::new(event_loop.create_window(attrs)?);
+        // W13-M: File > Print's system dialog opens owned by this window.
+        crate::editor::print::set_owner_window(&window);
 
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(window.clone())?;
@@ -1451,6 +1502,11 @@ impl Shell {
                 text,
             );
             self.editor.set_status(said.unwrap_or_else(|e| e));
+        }
+        // W13-L: the timeline's playhead moved; the canvas follows, with no
+        // history step.
+        if let Some(t_ms) = output.seek_timeline {
+            self.editor.seek_timeline(t_ms);
         }
         if let Some(kind) = output.edit_target {
             self.editor.set_edit_target_kind(kind);
@@ -2193,7 +2249,28 @@ impl Shell {
                         return;
                     }
                 }
+                // W13-M: Photopea's mask-view keys, before the keymap — a
+                // view toggle that works wherever the keyboard is the
+                // canvas's, whether or not the Layers panel is showing.
+                let has_mask = self.editor.active().is_some_and(|d| {
+                    let doc = &d.document;
+                    doc.active_layer()
+                        .and_then(|id| doc.layers.get(id))
+                        .is_some_and(|l| l.mask.is_some())
+                });
+                if let Some(mode) = mask_view_key(&chord, self.chrome.mask_view(), has_mask) {
+                    self.chrome.set_mask_view(mode);
+                    self.repaint_at = Some(Instant::now());
+                    return;
+                }
                 match self.editor.keymap().resolve_any(&chord) {
+                    // W13-M: Shift + a tool letter steps through the group
+                    // (Photopea); the bare letter picks it and keeps the tool.
+                    Some(Resolved::App(Action::SelectTool(key))) if chord.shift => {
+                        if self.editor.select_tool_letter(key, true).is_some() {
+                            self.repaint_at = Some(Instant::now());
+                        }
+                    }
                     Some(Resolved::App(action)) => self.perform(action),
                     Some(Resolved::Menu(action)) => self.perform_menu_chord(action),
                     // W11-F: Ctrl+Space and Alt+Space, unless the keymap
@@ -2238,9 +2315,9 @@ impl Shell {
     /// One wheel event over the canvas, `lines` in wheel notches (positive y
     /// is away from the user).
     ///
-    /// Honours the Scroll-wheel-zooms preference: on (Photopea's default) a
-    /// plain wheel zooms about the cursor; off, a plain wheel pans the view —
-    /// Shift turns the vertical wheel horizontal — and Ctrl+wheel zooms.
+    /// Honours the Scroll-wheel-zooms preference and Photopea's modifiers
+    /// ([`wheel_gesture`]): Alt inverts the preference, Ctrl pans sideways,
+    /// Shift turns the vertical wheel horizontal.
     fn on_wheel(&mut self, lines: Vec2) {
         let gesture = wheel_gesture(
             lines,
@@ -2997,11 +3074,17 @@ mod tests {
         assert_ne!(c3.x, c2.x);
         assert_eq!(c3.y, c2.y);
 
-        // Ctrl+wheel still zooms.
+        // W13-M: Ctrl+wheel scrolls sideways, as in Photopea; Alt+wheel zooms.
         shell.modifiers = ModifiersState::CONTROL;
         shell.on_wheel(Vec2::new(0.0, 1.0));
-        let (_, z4) = camera_of(&shell);
-        assert_ne!(z4, z2, "Ctrl+wheel zooms");
+        let (c4, z4) = camera_of(&shell);
+        assert_eq!(z4, z2, "Ctrl+wheel pans, it does not zoom");
+        assert_ne!(c4.x, c3.x, "Ctrl+wheel pans horizontally");
+        assert_eq!(c4.y, c3.y, "Ctrl+wheel pans horizontally");
+        shell.modifiers = ModifiersState::ALT;
+        shell.on_wheel(Vec2::new(0.0, 1.0));
+        let (_, z5) = camera_of(&shell);
+        assert_ne!(z5, z4, "Alt+wheel zooms");
         let _ = center;
     }
 
@@ -3020,10 +3103,21 @@ mod tests {
             wheel_gesture(notch, false, false, true, false),
             WheelGesture::Pan(Vec2::new(WHEEL_LINE_PX, 0.0))
         );
-        assert!(matches!(
+        // W13-M: Ctrl + wheel pans sideways with wheel-pan configured
+        // (Photopea), and zooms when the wheel zooms.
+        assert_eq!(
             wheel_gesture(notch, true, false, false, false),
+            WheelGesture::Pan(Vec2::new(WHEEL_LINE_PX, 0.0))
+        );
+        assert!(matches!(
+            wheel_gesture(notch, true, false, false, true),
             WheelGesture::Zoom(_)
         ));
+        // W13-M: with the wheel zooming, Alt + wheel pans instead.
+        assert_eq!(
+            wheel_gesture(notch, false, true, false, true),
+            WheelGesture::Pan(Vec2::new(0.0, WHEEL_LINE_PX))
+        );
         // W11-F: Alt + wheel zooms with wheel-pan configured.
         assert!(matches!(
             wheel_gesture(notch, false, true, false, false),

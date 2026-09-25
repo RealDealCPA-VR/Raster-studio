@@ -122,6 +122,8 @@ pub mod preset_manager;
 pub mod puppet_warp;
 pub mod refine_mask;
 pub mod rename_layer;
+// W13-K: File > Script... (the code box, Run, the output log).
+pub mod script;
 pub mod selection_modify;
 pub mod selection_name;
 pub mod sizes;
@@ -133,6 +135,14 @@ pub mod units;
 pub mod vanishing_point;
 // W9-K: Layer > Text > Warp Text...
 pub mod warp_text;
+// W13-F: Edit > Convert to Profile..., Image > Reduce Colors... / Wavelet
+// Decompose...
+pub mod w13f;
+// W13-N: Select > Magic Cut..., File > Automate > Resize Images... /
+// Generate Mockups...
+pub mod magic_cut;
+pub mod merge_channels;
+pub mod resize_images;
 
 pub use about::AboutDialog;
 pub use action::DialogAction;
@@ -205,6 +215,7 @@ pub use preset_manager::{
     PresetEntry, PresetFileRequest, PresetKind, PresetLibrary, PresetManagerDialog,
 };
 pub use rename_layer::RenameLayerDialog;
+pub use script::{ScriptDialog, ScriptLogKind, ScriptLogLine, ScriptOutcome};
 pub use selection_modify::{ModifySpec, SelectionModifyDialog};
 pub use selection_name::{
     LoadOperation, LoadSelectionDialog, LoadSelectionSpec, SaveSelectionDialog, SaveSelectionSpec,

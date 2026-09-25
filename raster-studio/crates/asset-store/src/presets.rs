@@ -94,6 +94,14 @@ pub struct PresetStore {
     /// W9-N: custom shapes a `.csh` file brought in (File > Open).
     #[serde(default)]
     shapes: Vec<crate::resources::ShapeResource>,
+    /// W13-E: the Actions panel's set names in panel order — kept here so a
+    /// set with no action yet (a New Set) survives; the actions themselves
+    /// name their set in the actions file.
+    #[serde(default)]
+    action_sets: Vec<String>,
+    /// W13-E: the set a stopped recording joins.
+    #[serde(default)]
+    recording_set: Option<String>,
 }
 
 impl PresetStore {
@@ -228,6 +236,55 @@ impl PresetStore {
     /// W9-N: every imported custom shape, oldest first.
     pub fn shapes(&self) -> &[crate::resources::ShapeResource] {
         &self.shapes
+    }
+
+    /// W13-E: the action set names, in panel order.
+    pub fn action_sets(&self) -> &[String] {
+        &self.action_sets
+    }
+
+    /// W13-E: add a set name at the end; `false` (and nothing changes) when
+    /// the name is blank or already listed.
+    pub fn define_action_set(&mut self, name: &str) -> bool {
+        if name.trim().is_empty() || self.action_sets.iter().any(|n| n == name) {
+            return false;
+        }
+        self.action_sets.push(name.to_string());
+        true
+    }
+
+    /// W13-E: rename a set in place (the recording set follows); `false`
+    /// when `from` is not listed or `to` is blank or taken.
+    pub fn rename_action_set(&mut self, from: &str, to: &str) -> bool {
+        if to.trim().is_empty() || self.action_sets.iter().any(|n| n == to) {
+            return false;
+        }
+        let Some(slot) = self.action_sets.iter_mut().find(|n| *n == from) else {
+            return false;
+        };
+        *slot = to.to_string();
+        if self.recording_set.as_deref() == Some(from) {
+            self.recording_set = Some(to.to_string());
+        }
+        true
+    }
+
+    /// W13-E: forget a set name (and stop recording into it).
+    pub fn remove_action_set(&mut self, name: &str) {
+        self.action_sets.retain(|n| n != name);
+        if self.recording_set.as_deref() == Some(name) {
+            self.recording_set = None;
+        }
+    }
+
+    /// W13-E: the set a stopped recording joins, when one was chosen.
+    pub fn recording_set(&self) -> Option<&str> {
+        self.recording_set.as_deref()
+    }
+
+    /// W13-E: choose the set stopped recordings join.
+    pub fn set_recording_set(&mut self, name: Option<String>) {
+        self.recording_set = name;
     }
 
     /// Write the store as one pretty JSON document.

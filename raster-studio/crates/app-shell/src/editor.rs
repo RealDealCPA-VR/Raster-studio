@@ -973,7 +973,7 @@ impl Editor {
         self.revision
     }
 
-    fn touch(&mut self) {
+    pub(crate) fn touch(&mut self) {
         self.revision += 1;
         self.content_revision += 1;
     }
@@ -1725,7 +1725,50 @@ impl Editor {
         self.gpu_adapter_name = Some(name);
     }
 
+    /// W13-M: on Windows File ▸ Print opens the system Print dialog, owned
+    /// by the app window, and sends the flattened image to the printer chosen
+    /// there; cancelling it prints nothing. When no printer can be opened at
+    /// all, and on every other platform, Print writes the print-ready PDF as
+    /// before ([`print::route_for`]). File ▸ Print as PDF… is that PDF route
+    /// on its own row, everywhere ([`Editor::print_as_pdf`]).
     pub fn print_pdf(&mut self) -> Result<String, String> {
+        let mut fallback_note = None;
+        if print::current_route() == print::PrintRoute::SystemDialog {
+            let doc = self
+                .active_mut()
+                .ok_or_else(|| "No document is open".to_string())?;
+            let rect = doc.canvas_rect();
+            let rgba = doc.composite(rect).map_err(|e| e.to_string())?;
+            let (w, h) = (doc.document.width(), doc.document.height());
+            let name = doc.title().to_string();
+            match print::print_with_system_dialog(&name, w, h, &rgba) {
+                print::SystemPrint::Printed => {
+                    self.status = Some(format!("Sent {name} to the printer"));
+                    self.touch();
+                    return Ok("Print…".to_string());
+                }
+                print::SystemPrint::Cancelled => {
+                    return Err("Print: cancelled".to_string());
+                }
+                print::SystemPrint::Unavailable(why) => fallback_note = Some(why),
+            }
+        }
+        self.write_print_pdf(fallback_note)?;
+        Ok("Print…".to_string())
+    }
+
+    /// W13-M: File ▸ Print as PDF… — the print-ready single-page PDF written
+    /// where the user picks, on every platform. On Windows it is the row that
+    /// keeps the PDF route beside Print's system dialog.
+    pub fn print_as_pdf(&mut self) -> Result<String, String> {
+        self.write_print_pdf(None)?;
+        Ok("Print as PDF…".to_string())
+    }
+
+    /// The PDF half of Print: ask where, write the flattened page, say so.
+    /// `fallback_note` is why a system print dialog could not be used, when
+    /// that is how the PDF route was reached.
+    fn write_print_pdf(&mut self, fallback_note: Option<String>) -> Result<(), String> {
         let suggested = self
             .active()
             .map(|d| d.suggested_export_path().with_extension("pdf"))
@@ -1737,9 +1780,40 @@ impl Editor {
             .active_mut()
             .ok_or_else(|| "No document is open".to_string())?;
         doc.print_to(&target).map_err(|e| e.to_string())?;
-        self.status = Some(format!("Printed {}", target.display()));
+        self.status = Some(match fallback_note {
+            Some(why) => format!(
+                "No printer could be used ({why}); printed {} as a PDF",
+                target.display()
+            ),
+            None => format!("Printed {}", target.display()),
+        });
         self.touch();
-        Ok("Print…".to_string())
+        Ok(())
+    }
+
+    /// W13-M: select the tool a tool letter names, Photopea's way
+    /// ([`ui::keys::tool_for_letter`], the rule the `ui` crate's key route
+    /// uses too): the bare letter picks the group and keeps the active tool
+    /// when it is already in it; `step` (Shift + the letter, from
+    /// `Shell::on_key`) moves to the next tool of the group, wrapping.
+    ///
+    /// Through `set_tool`, so a tool reached by its keyboard letter takes up
+    /// its own brush exactly as one clicked in the palette does. `None` when
+    /// no tool answers to the letter.
+    pub fn select_tool_letter(
+        &mut self,
+        key: crate::action::ToolKey,
+        step: bool,
+    ) -> Option<ToolId> {
+        let next = ui::keys::tool_for_letter(key.char(), step, Some(self.tool))?;
+        self.set_tool(next);
+        self.status = Some(
+            registry::info(next)
+                .map(|i| i.name.to_string())
+                .unwrap_or_else(|| format!("{next:?}")),
+        );
+        self.touch();
+        Some(next)
     }
 
     /// Layer ▸ Rasterize: bake the active text/shape/styled layer's pixels into
@@ -5568,19 +5642,12 @@ impl Editor {
                 Ok(Effect::Preferences)
             }
             Action::SelectTool(key) => {
-                let next = registry::cycle(key.char(), Some(self.tool)).ok_or_else(|| {
+                // W13-M: Photopea's rule — the bare letter picks the group and
+                // a repeat keeps the tool; the shell steps the group on
+                // Shift + the letter (`Editor::select_tool_letter`).
+                self.select_tool_letter(key, false).ok_or_else(|| {
                     ActionError::unavailable(action, "no tool answers to that key")
                 })?;
-                // Through `set_tool`, so a tool reached by its keyboard letter
-                // takes up its own brush exactly as one clicked in the palette
-                // does.
-                self.set_tool(next);
-                self.status = Some(
-                    registry::info(next)
-                        .map(|i| i.name.to_string())
-                        .unwrap_or_else(|| format!("{next:?}")),
-                );
-                self.touch();
                 Ok(Effect::Tool)
             }
             Action::TemporaryHand => {
@@ -5933,7 +6000,10 @@ impl Editor {
         // animation when the document has `_a_` frame layers; the rest go
         // through the ordinary batch below.
         let mut job = job;
-        if !crate::import::animation_frame_layers(&doc.document).is_empty() {
+        // W13-L: or, in Timeline mode, the timeline's frames.
+        if !crate::import::animation_frame_layers(&doc.document).is_empty()
+            || crate::timeline::exports_timeline(&doc.document)
+        {
             let (animated, still): (Vec<_>, Vec<_>) = job.entries.into_iter().partition(|e| {
                 e.enabled && e.animated && raster::animation::can_animate(e.preset.format)
             });
@@ -6726,8 +6796,7 @@ fn write_animated_rows(
     rows: &[ui::dialogs::ExportEntry],
     dir: &Path,
 ) -> Result<Vec<PathBuf>, String> {
-    let frames =
-        crate::import::composite_animation_frames(document, tiles).map_err(|e| e.to_string())?;
+    let frames = crate::timeline::export_frames(document, tiles)?;
     let (w, h) = (document.width(), document.height());
     let space = &document.meta.color_space;
     let mut written = Vec::with_capacity(rows.len());
@@ -6765,6 +6834,10 @@ fn write_animated_rows(
     }
     Ok(written)
 }
+
+// W13-M: File > Print's system-dialog route (`Editor::print_pdf`).
+#[path = "print.rs"]
+pub mod print;
 
 #[cfg(test)]
 #[path = "animation_tests.rs"]

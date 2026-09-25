@@ -98,6 +98,22 @@ pub(crate) mod layer_extras;
 pub(crate) mod custom_shape;
 pub(crate) mod link_groups;
 
+// W13-N: the Styles panel's click, Select > Magic Cut, Image > Merge
+// Channels, File > Automate > PDF Presentation / Resize Images / Crop and
+// Straighten Photos / Generate Mockups, Layer > Text > Convert to Point /
+// Paragraph Text.
+#[path = "w13n_ops.rs"]
+pub(crate) mod w13n_ops;
+
+// W13-F: Assign / Convert to Profile, Reduce Colors, Wavelet Decompose,
+// Clear Slices, Slices from Guides (src/menu_w13f.rs).
+#[path = "menu_w13f.rs"]
+pub(crate) mod menu_w13f;
+
+// W13-G: the last Layer-menu gaps (src/layer_ops_w13.rs).
+#[path = "layer_ops_w13.rs"]
+pub(crate) mod layer_ops_w13;
+
 /// Shown on an item the shared menu model allows but this build cannot perform.
 ///
 /// Kept as the *fallback* only. Every item this build genuinely cannot do now
@@ -214,6 +230,9 @@ pub enum Pick {
     /// W10-B: the Glyphs panel's pick for a text layer; the shell inserts it
     /// ([`glyph_insert::insert_glyph`]).
     InsertGlyph(LayerId, String),
+    /// W13-L: move the Animation timeline's playhead, history-free
+    /// ([`Editor::seek_timeline`]).
+    SeekTimeline(u32),
 }
 
 /// The nine menus, exactly as the `ui` crate publishes them.
@@ -367,6 +386,9 @@ pub fn pick(intent: &Intent, editor: &Editor) -> Option<Pick> {
         )),
         Intent::EnterTextLayer { layer } => Some(Pick::EnterTextLayer(*layer)),
         Intent::InsertGlyph { layer, text } => Some(Pick::InsertGlyph(*layer, text.clone())),
+        // W13-L: shell state (the document's playhead), not a workspace
+        // intent; the editor seeks with no history step.
+        Intent::SeekTimeline { t_ms } => Some(Pick::SeekTimeline(*t_ms)),
         Intent::HistoryJump(jump) => {
             // The panel counts *steps* from where the document stands; the
             // editor walks to an absolute depth. Converting here keeps the one
@@ -524,6 +546,10 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
     // (the file half is the tested raster::pdf encoder).
     if action == MenuAction::Print {
         return Some(Pick::Menu(MenuAction::Print));
+    }
+    // W13-M: Print as PDF… is the PDF half of Print on its own row.
+    if action == MenuAction::PrintAsPdf {
+        return Some(Pick::Menu(MenuAction::PrintAsPdf));
     }
     let mapped = match action {
         MenuAction::NewDocument => Action::NewDocument,
@@ -711,6 +737,7 @@ pub fn record(pick: Pick, out: &mut ChromeOutput) {
         Pick::OpenBrushEditor => out.brush_editor = true,
         Pick::ConfirmTool => out.confirm_tool = true,
         Pick::InsertGlyph(layer, text) => out.insert_glyphs.push((layer, text)),
+        Pick::SeekTimeline(t_ms) => out.seek_timeline = Some(t_ms),
     }
 }
 
@@ -802,6 +829,12 @@ pub fn draw(
                 }
             });
         });
+    // W13-K: the File > Script window, when open. Run clicks the Script row
+    // through `on_click`, so the run is routed like any menu click.
+    crate::script::draw_window(ctx, on_click);
+    // W13-N: the Styles panel's list, and the Magic Cut / Resize Images /
+    // Generate Mockups windows, whose OK clicks their row through `on_click`.
+    w13n_ops::frame(ctx, editor, on_click);
 }
 
 fn entries(
@@ -1473,9 +1506,13 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         },
         // W10-E: Batch / Convert Formats, Export Color Lookup / PDF,
         // Variables, Vectorize Bitmap.
+        // W13-N.
+        action if w13n_ops::performs(action) => w13n_ops::perform(action, editor),
         action if crate::file_extras::performs(action) => {
             crate::file_extras::perform(action, editor)
         }
+        // W13-K: File > Script: open the window, or run what Run parked.
+        MenuAction::Script => crate::script::perform(editor),
         MenuAction::ExportLayers => editor.export_layers(),
         // W4-H: one file per committed Slice-tool region.
         MenuAction::ExportSlices => crate::slices_export::export_slices(editor),
@@ -1486,6 +1523,9 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::PlaceEmbedded => editor.place_from_dialog(false),
         MenuAction::PlaceLinked => editor.place_from_dialog(true),
         MenuAction::Print => editor.print_pdf(),
+        MenuAction::PrintAsPdf => editor.print_as_pdf(),
+        // W13-I: the Move options bar's Quick Export / File > Export row.
+        MenuAction::QuickExportLayer => crate::tool_input::quick_export::quick_export_layer(editor),
         MenuAction::Rasterize(ui::menu::RasterizeTarget::Text)
         | MenuAction::Rasterize(ui::menu::RasterizeTarget::Shape)
         | MenuAction::Rasterize(ui::menu::RasterizeTarget::LayerStyle)
@@ -1538,6 +1578,8 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::EmbedLinked => crate::layer_ops::w11e::embed_linked(editor),
         MenuAction::SetLayerColor(color) => crate::layer_ops::w11e::set_color_label(editor, color),
         MenuAction::NewLayerBasedSlice => crate::slices_export::new_layer_based_slice(editor),
+        // W13-G: the last Layer-menu gaps (`layer_ops_w13`).
+        MenuAction::LayerExtra(op) => layer_ops_w13::perform(editor, op),
         // ---- Filter --------------------------------------------------------
         MenuAction::ConvertForSmartFilters => convert_for_smart_filters(editor),
         // W10-D: a Displace the external-map dialog confirmed runs that map;
@@ -1941,6 +1983,9 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
                 .map(|()| "No layer is selected now".to_string())
                 .map_err(|e| e.to_string()),
         },
+
+        // W13-F: the profile, Reduce Colors, Wavelet Decompose and slice rows.
+        action if menu_w13f::performs(action) => menu_w13f::perform(action, editor),
 
         // ---- View ----------------------------------------------------------
         // The view rotation lives on the DOCUMENT camera — the one the shell
@@ -2374,8 +2419,25 @@ pub(crate) fn run_filter_invocation(
         *buffer = filtered;
         Ok(())
     })?;
+    // W13-J: an 8-bit document stores the spectrum in 8 bits, and the way
+    // back through Inverse Fourier Transform is off by several levels
+    // (`filters::fourier`'s `eight_bit_storage_loses_the_round_trip`); say
+    // so where the user is looking, with the way out.
+    if spec.id == ui::menu::FilterId::FourierTransform
+        && editor
+            .active()
+            .is_some_and(|d| d.document.meta.bit_depth == 8)
+    {
+        return Ok(format!("{label} applied. {FOURIER_EIGHT_BIT_NOTE}"));
+    }
     Ok(format!("{label} applied"))
 }
+
+/// W13-J: what Fourier Transform adds to the status line on an 8-bit
+/// document. Short, because the status bar elides a long message to the room
+/// it has: the way out comes first.
+pub(crate) const FOURIER_EIGHT_BIT_NOTE: &str =
+    "8-bit: use 16 Bits/Channel (Image > Mode) for an exact Inverse";
 
 // ---------------------------------------------------------------------------
 // W7-E: smart filters
@@ -6284,6 +6346,18 @@ mod tests {
             ) {
                 continue;
             }
+            // W13-J: Texture Dilation grows opaque pixels into transparent
+            // ones, and the probe is opaque everywhere, so it has nothing to
+            // do by design; Repeat at its defaults (Photopea's: 100 %, no
+            // spacing, no angle) tiles a canvas-filling layer onto itself.
+            // `w13j_filters_open_from_the_menu_and_land_as_one_step_or_a_
+            // smart_filter` runs both over a layer where they do something.
+            if matches!(
+                id,
+                ui::menu::FilterId::TextureDilation | ui::menu::FilterId::Repeat
+            ) {
+                continue;
+            }
             let mut ed = opened(dir.path());
             match invoke(&mut ed, MenuAction::Filter(*id)) {
                 Ok(true) => {}
@@ -9995,6 +10069,10 @@ mod tests {
             // no-op, so it does not have to change the document digest.
             if action == MenuAction::ExportLayers
                 || action == MenuAction::Print
+                || action == MenuAction::PrintAsPdf
+                // W13-I: Quick Export writes a PNG, or refuses loudly when
+                // the scripted save dialog is declined.
+                || action == MenuAction::QuickExportLayer
                 // Export Diagnostics writes a file (or refuses when the dialog
                 // is declined) — loud either way, and the digest cannot move.
                 || action == MenuAction::ExportDiagnostics
@@ -10064,6 +10142,20 @@ mod tests {
                 // dialog confirmation; the two exports cancel at the
                 // scripted folder picker (loud).
                 || crate::file_extras::is_loud_without_a_dialog(action)
+                // W13-N: Magic Cut and Resize Images open their windows, PDF
+                // Presentation cancels at the scripted folder picker, and the
+                // fixture's flat layers hold no photo to crop (all loud).
+                || w13n_ops::is_loud_without_a_dialog(action)
+                // W13-F: a profile from a file cancels at the scripted
+                // picker (loud), and Assign Profile moves only the tag,
+                // which this digest does not read; `menu_w13f::tests` pins
+                // both routes.
+                || menu_w13f::is_loud_without_a_dialog(action)
+                || menu_w13f::changes_only_the_tag(action)
+                // W13-K: File > Script opens its window; a run needs the
+                // source Run parks, which `script::tests::a_script_run_from_
+                // the_window_edits_the_document_as_one_undo_step` drives.
+                || action == MenuAction::Script
                 || matches!(action, MenuAction::Purge(_))
             {
                 match perform(action, &mut ed) {
@@ -10177,6 +10269,9 @@ mod tests {
             MenuAction::ReplaceContents,
             MenuAction::ExportLayers,
             MenuAction::Print,
+            MenuAction::PrintAsPdf,
+            // W13-I.
+            MenuAction::QuickExportLayer,
             MenuAction::ExportDiagnostics,
             MenuAction::PasteLayerStyle,
             MenuAction::ApplyStylePreset,
@@ -10243,6 +10338,10 @@ mod tests {
                         broken.push(format!("{action:?}: {reason}"));
                     }
                     Err(_) if LOUD_REFUSALS.contains(&action) => {}
+                    // W13-N: see `w13n_ops::is_loud_without_a_dialog`.
+                    Err(_) if w13n_ops::is_loud_without_a_dialog(action) => {}
+                    // W13-F: see `menu_w13f::is_loud_without_a_dialog`.
+                    Err(_) if menu_w13f::is_loud_without_a_dialog(action) => {}
                     Err(reason) => broken.push(format!("{action:?}: refused with {reason:?}")),
                 }
             }
@@ -10325,6 +10424,25 @@ mod tests {
                     F::LensCorrection,
                     F::LightingEffects,
                     F::HsbHsl,
+                ]
+                .map(MenuAction::Filter),
+            );
+            // W13-J: the rest of Photopea's Filter menu, the one-click
+            // Fourier rows included.
+            asked.extend(
+                [
+                    F::Kaleidoscope,
+                    F::Dents,
+                    F::ShapeMosaic,
+                    F::Flame,
+                    F::Repeat,
+                    F::ColorToAlpha,
+                    F::Dither,
+                    F::Particles,
+                    F::FourierTransform,
+                    F::InverseFourierTransform,
+                    F::NormalMap,
+                    F::TextureDilation,
                 ]
                 .map(MenuAction::Filter),
             );
@@ -12726,6 +12844,336 @@ mod tests {
                 assert!(ed.active_mut().unwrap().undo().unwrap());
                 assert!(stack(&ed, so).is_empty(), "{id:?}: undo left the filter");
                 assert_eq!(composite(&mut ed), before);
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // W13-J: Kaleidoscope, Dents, Shape Mosaic, Flame, Repeat, Color to
+        // Alpha, Dither, Particles, Fourier / Inverse Fourier, Normal Map,
+        // Texture Dilation; the gallery's Distort and Stylize sets.
+        // -------------------------------------------------------------------
+
+        const W13J: [ui::menu::FilterId; 12] = {
+            use ui::menu::FilterId as F;
+            [
+                F::Kaleidoscope,
+                F::Dents,
+                F::ShapeMosaic,
+                F::Flame,
+                F::Repeat,
+                F::ColorToAlpha,
+                F::Dither,
+                F::Particles,
+                F::FourierTransform,
+                F::InverseFourierTransform,
+                F::NormalMap,
+                F::TextureDilation,
+            ]
+        };
+
+        /// A colour ramp with a clear 8x8 corner, so every W13-J filter has
+        /// something to change (Dither needs off-grid tones, Texture
+        /// Dilation needs transparent pixels).
+        fn w13j_rgba() -> Vec<u8> {
+            let mut rgba = vec![0u8; (W * H * 4) as usize];
+            for y in 0..H {
+                for x in 0..W {
+                    let i = ((y * W + x) * 4) as usize;
+                    let a = if x >= 40 && y < 8 { 0 } else { 255 };
+                    rgba[i..i + 4].copy_from_slice(&[
+                        (x * 5 + 7) as u8,
+                        (y * 7 + 11) as u8,
+                        ((x * 3 + y * 2) % 200 + 20) as u8,
+                        a,
+                    ]);
+                }
+            }
+            rgba
+        }
+
+        fn w13j_painted(dir: &std::path::Path) -> Editor {
+            let mut ed = opened(dir);
+            let layer = ed.active().unwrap().document.active_layer().unwrap();
+            let paint =
+                pixels::write_layer(ed.active_mut().unwrap(), layer, &w13j_rgba(), "Ramp").unwrap();
+            ed.apply_command(paint);
+            ed
+        }
+
+        /// W13-J: every new Filter-menu row opens the generated dialog (live
+        /// preview) through the real dialog host; confirming it at its
+        /// defaults (Repeat at 50 %) is ONE undo step on a pixel layer, and
+        /// over a smart object
+        /// it joins the smart-filter stack under its `FilterId` key, renders,
+        /// leaves the source alone, and undoes in one.
+        #[test]
+        fn w13j_filters_open_from_the_menu_and_land_as_one_step_or_a_smart_filter() {
+            for id in W13J {
+                let open = |ed: &mut Editor| -> ui::dialogs::FilterInvocation {
+                    let mut host = crate::dialog_host::DialogHost::default();
+                    assert!(
+                        host.open_for_menu_action(&MenuAction::Filter(id), ed),
+                        "{id:?} opened no dialog"
+                    );
+                    let crate::dialog_host::ActiveDialog::Filter(dialog) = host.active_for_test()
+                    else {
+                        panic!("{id:?} did not open the filter dialog");
+                    };
+                    assert_eq!(dialog.spec().id, id);
+                    // The live preview is the layer run through the filter.
+                    let source = filter_dialog_source(ed, id).expect("a layer to preview");
+                    assert_eq!(dialog.preview_buffer().dimensions(), source.dimensions());
+                    let mut invocation = dialog.invocation();
+                    // Repeat at Photopea's defaults tiles a canvas-filling
+                    // layer onto itself; at 50 % it has something to do.
+                    if id == ui::menu::FilterId::Repeat {
+                        assert!(invocation
+                            .params
+                            .set("scale", ui::dialogs::ParamValue::Float(50.0)));
+                    }
+                    invocation
+                };
+                // A pixel layer.
+                let dir = tempfile::tempdir().unwrap();
+                let mut ed = w13j_painted(dir.path());
+                let before = composite(&mut ed);
+                let depth = ed.active().unwrap().history.undo_depth();
+                let invocation = open(&mut ed);
+                run_filter_invocation(&mut ed, &invocation)
+                    .unwrap_or_else(|e| panic!("{id:?}: {e}"));
+                assert_ne!(composite(&mut ed), before, "{id:?} changed nothing");
+                assert_eq!(
+                    ed.active().unwrap().history.undo_depth(),
+                    depth + 1,
+                    "{id:?} was not exactly one undo step"
+                );
+                assert!(ed.active_mut().unwrap().undo().unwrap());
+                assert_eq!(composite(&mut ed), before, "{id:?}: undo did not restore");
+
+                // A smart object.
+                let dir = tempfile::tempdir().unwrap();
+                let mut ed = w13j_painted(dir.path());
+                perform(MenuAction::ConvertForSmartFilters, &mut ed).unwrap();
+                let so = active_smart_object(&ed).expect("converted");
+                let source = ed.active().unwrap().document.layer_tiles(so).cloned();
+                let before = composite(&mut ed);
+                let invocation = open(&mut ed);
+                run_filter_invocation(&mut ed, &invocation).unwrap();
+                let filters = stack(&ed, so);
+                assert_eq!(filters.len(), 1, "{id:?} did not join the stack");
+                assert_eq!(filters[0].filter, format!("{id:?}"));
+                assert_ne!(
+                    composite(&mut ed),
+                    before,
+                    "{id:?}: the smart filter renders nothing"
+                );
+                assert_eq!(
+                    ed.active().unwrap().document.layer_tiles(so).cloned(),
+                    source,
+                    "{id:?} rewrote the smart object's source"
+                );
+                assert!(ed.active_mut().unwrap().undo().unwrap());
+                assert!(stack(&ed, so).is_empty(), "{id:?}: undo left the filter");
+                assert_eq!(composite(&mut ed), before);
+            }
+        }
+
+        /// W13-J, the menu-bar route: each new row clicked in the chrome's
+        /// menu bar (`Chrome::menu_click`, what `draw` calls) opens the
+        /// filter dialog instead of running at its defaults, and one frame of
+        /// the whole chrome draws it.
+        #[test]
+        fn w13j_every_new_row_opens_its_dialog_from_the_menu_bar() {
+            let raw = || egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1400.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            for id in W13J {
+                let dir = tempfile::tempdir().unwrap();
+                let mut ed = w13j_painted(dir.path());
+                let mut chrome = crate::chrome::Chrome::new();
+                let ctx = egui::Context::default();
+                design::apply_theme(&ctx, design::Theme::Dark);
+                let _ = ctx.run(raw(), |ctx| {
+                    let _ = chrome.ui(ctx, &mut ed);
+                });
+                let menu_ctx = context(&mut ed, chrome.workspace());
+                let action = MenuAction::Filter(id);
+                let intent = resolve_intent(action, &menu_ctx, &ed)
+                    .unwrap_or_else(|reason| panic!("{id:?} is greyed: {reason}"));
+                let mut out = ChromeOutput::default();
+                chrome.menu_click(intent, &ed, &mut out);
+                assert!(
+                    chrome.dialog_open(),
+                    "{id:?} did not open its dialog from the menu bar"
+                );
+                assert!(out.menu.is_empty(), "{id:?} ran at its defaults");
+                let _ = ctx.run(raw(), |ctx| {
+                    let _ = chrome.ui(ctx, &mut ed);
+                });
+                assert!(chrome.dialog_open(), "{id:?}: the dialog closed on its own");
+            }
+        }
+
+        /// W13-J: Filter > Fourier > Fourier Transform then Inverse Fourier
+        /// Transform, each clicked from the menu, restores a 16-bit
+        /// document's layer to within 1/255, two undo steps.
+        #[test]
+        fn w13j_fourier_then_inverse_from_the_menu_restores_a_sixteen_bit_layer() {
+            use ui::menu::FilterId as F;
+            let dir = tempfile::tempdir().unwrap();
+            let mut ed = opened(dir.path());
+            perform(
+                MenuAction::SetBitDepth(ui::menu::ChannelDepth::Sixteen),
+                &mut ed,
+            )
+            .unwrap();
+            assert!(ed.active().unwrap().is_sixteen_bit());
+            let layer = ed.active().unwrap().document.active_layer().unwrap();
+            let before = ed.active().unwrap().layer_rgba16(layer);
+            let depth = ed.active().unwrap().history.undo_depth();
+            assert!(invoke(&mut ed, MenuAction::Filter(F::FourierTransform)).unwrap());
+            let spectrum = ed.active().unwrap().layer_rgba16(layer);
+            assert_ne!(spectrum, before, "the spectrum is the image");
+            assert!(invoke(&mut ed, MenuAction::Filter(F::InverseFourierTransform)).unwrap());
+            let after = ed.active().unwrap().layer_rgba16(layer);
+            let worst = before
+                .iter()
+                .zip(&after)
+                .map(|(a, b)| (i32::from(*a) - i32::from(*b)).abs())
+                .max()
+                .unwrap();
+            assert!(
+                worst <= 257,
+                "worst channel error {worst}/65535 is over 1/255"
+            );
+            assert_eq!(ed.active().unwrap().history.undo_depth(), depth + 2);
+        }
+
+        /// W13-J: on an 8-bit document Fourier Transform still applies, and
+        /// the status bar the user is looking at says the way back will not
+        /// be exact and what to do instead (checked in the shapes a real
+        /// chrome frame paints); on a 16-bit document, and for the inverse,
+        /// it says only that the filter applied.
+        #[test]
+        fn w13j_fourier_on_an_eight_bit_document_says_to_use_sixteen_bits() {
+            use ui::menu::FilterId as F;
+            let painted = |ed: &mut Editor| -> Vec<String> {
+                let ctx = egui::Context::default();
+                design::apply_theme(&ctx, design::Theme::Dark);
+                let mut chrome = crate::chrome::Chrome::new();
+                let raw = || egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1600.0, 900.0),
+                    )),
+                    ..Default::default()
+                };
+                let _ = ctx.run(raw(), |ctx| {
+                    let _ = chrome.ui(ctx, ed);
+                });
+                let full = ctx.run(raw(), |ctx| {
+                    let _ = chrome.ui(ctx, ed);
+                });
+                full.shapes
+                    .iter()
+                    .filter_map(|c| match &c.shape {
+                        egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+                        _ => None,
+                    })
+                    .collect()
+            };
+            let dir = tempfile::tempdir().unwrap();
+            let mut ed = opened(dir.path());
+            assert_eq!(ed.active().unwrap().document.meta.bit_depth, 8);
+            assert!(invoke(&mut ed, MenuAction::Filter(F::FourierTransform)).unwrap());
+            let told = format!("Fourier Transform applied. {FOURIER_EIGHT_BIT_NOTE}");
+            assert_eq!(ed.status(), Some(told.as_str()));
+            let texts = painted(&mut ed);
+            assert!(
+                texts.contains(&told),
+                "the status bar does not show the whole 8-bit note: {texts:?}"
+            );
+            assert!(invoke(&mut ed, MenuAction::Filter(F::InverseFourierTransform)).unwrap());
+            assert_eq!(ed.status(), Some("Inverse Fourier Transform applied"));
+            let dir = tempfile::tempdir().unwrap();
+            let mut deep = opened(dir.path());
+            perform(
+                MenuAction::SetBitDepth(ui::menu::ChannelDepth::Sixteen),
+                &mut deep,
+            )
+            .unwrap();
+            assert!(invoke(&mut deep, MenuAction::Filter(F::FourierTransform)).unwrap());
+            assert_eq!(deep.status(), Some("Fourier Transform applied"));
+        }
+
+        /// W13-J: the Filter Gallery's Distort (Diffuse Glow, Glass, Ocean
+        /// Ripple) and Stylize (Glowing Edges) folders, opened from the menu
+        /// row through the real host, stack and land as ONE undo step holding
+        /// exactly the stack's pixels.
+        #[test]
+        fn w13j_the_gallerys_distort_and_stylize_sets_land_as_one_undo_step() {
+            use filters::gallery_sets::{GalleryEffect, GallerySet};
+            assert_eq!(
+                GallerySet::Distort.effects().collect::<Vec<_>>(),
+                [
+                    GalleryEffect::DiffuseGlow,
+                    GalleryEffect::Glass,
+                    GalleryEffect::OceanRipple
+                ]
+            );
+            assert_eq!(
+                GallerySet::Stylize.effects().collect::<Vec<_>>(),
+                [GalleryEffect::GlowingEdges]
+            );
+            for (set, first, second) in [
+                (
+                    GallerySet::Distort,
+                    GalleryEffect::Glass,
+                    GalleryEffect::DiffuseGlow,
+                ),
+                (
+                    GallerySet::Distort,
+                    GalleryEffect::OceanRipple,
+                    GalleryEffect::GlowingEdges,
+                ),
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let mut ed = opened(dir.path());
+                let layer = ed.active().unwrap().document.active_layer().unwrap();
+                let before = pixels::read_layer(ed.active().unwrap(), layer);
+                let depth = ed.active().unwrap().history.undo_depth();
+                let ctx = egui::Context::default();
+                design::apply_theme(&ctx, design::Theme::Dark);
+                let mut host = crate::dialog_host::DialogHost::default();
+                assert!(host.open_for_menu_action(&MenuAction::FilterGallery, &ed));
+                let gallery = host.active_filter_gallery_for_test();
+                gallery.set_tab(ui::dialogs::GalleryTab::Set(set));
+                gallery.pick_effect(first);
+                gallery.new_layer();
+                gallery.set_tab(ui::dialogs::GalleryTab::Set(second.set()));
+                gallery.pick_effect(second);
+                let stack = gallery.stack().clone();
+                assert_eq!(
+                    stack.layers.iter().map(|l| l.effect).collect::<Vec<_>>(),
+                    [first, second]
+                );
+                let _ = w7h_frame(&mut host, &ctx, &[]);
+                let out = w7h_frame(&mut host, &ctx, &[egui::Key::Enter]);
+                assert_eq!(out.menu, vec![MenuAction::FilterGallery]);
+                perform(MenuAction::FilterGallery, &mut ed).unwrap();
+                assert_eq!(ed.active().unwrap().history.undo_depth(), depth + 1);
+                let after = pixels::read_layer(ed.active().unwrap(), layer);
+                let expected = stack
+                    .apply(&filters::FilterBuffer::from_rgba8(W, H, &before).unwrap())
+                    .to_rgba8();
+                assert_eq!(after, expected, "{first:?} + {second:?}");
+                assert_ne!(after, before);
+                ed.active_mut().unwrap().undo().unwrap();
+                assert_eq!(pixels::read_layer(ed.active().unwrap(), layer), before);
             }
         }
     }

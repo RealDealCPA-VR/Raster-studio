@@ -720,6 +720,173 @@ pub fn path_for(kind: &ShapeKind, a: Vec2, b: Vec2) -> Result<Path, ToolError> {
     Ok(path)
 }
 
+// ------------------------------------------------ W13-I: line arrowheads ----
+
+/// W13-I: the Line tool's arrowhead options, Photoshop's "Arrowheads" set:
+/// a head at the start and/or the end of the drag, its width and length as a
+/// percentage of the line weight, and its concavity as a percentage of its
+/// length. The proportions travel as a [`vector::ArrowStyle`]
+/// ([`LineArrows::style`]); [`line_with_arrows`] draws the heads into the
+/// line's own outline, so the shape layer, a rasterised line and a Path-mode
+/// Work Path all carry them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineArrows {
+    pub start: bool,
+    pub end: bool,
+    /// Head width, percent of the line weight.
+    pub width_pct: f64,
+    /// Head length, percent of the line weight.
+    pub length_pct: f64,
+    /// `-50..=50`, percent of the head length: positive pulls the middle of
+    /// the head's base towards its tip (a barbed head), negative pushes it
+    /// back (a diamond-like head).
+    pub concavity_pct: f64,
+}
+
+impl Default for LineArrows {
+    /// Photoshop's defaults: no heads, 500% wide, 1000% long, flat base.
+    fn default() -> Self {
+        Self {
+            start: false,
+            end: false,
+            width_pct: 500.0,
+            length_pct: 1000.0,
+            concavity_pct: 0.0,
+        }
+    }
+}
+
+/// W13-I: the option keys [`LineArrows::set`] answers, in bar order.
+pub const LINE_ARROW_KEYS: [&str; 5] = [
+    "arrow_start",
+    "arrow_end",
+    "arrow_width",
+    "arrow_length",
+    "arrow_concavity",
+];
+
+impl LineArrows {
+    /// Whether any head is drawn.
+    pub fn any(&self) -> bool {
+        self.start || self.end
+    }
+
+    /// The head proportions for a line of `weight` document pixels.
+    pub fn style(&self, weight: f64) -> vector::ArrowStyle {
+        vector::ArrowStyle {
+            shaft_width: weight,
+            head_length: weight * self.length_pct.max(0.0) / 100.0,
+            head_width: weight * self.width_pct.max(0.0) / 100.0,
+        }
+    }
+
+    /// Answer one of [`LINE_ARROW_KEYS`]; `None` for any other key.
+    pub fn set(&mut self, key: &str, setting: ToolSetting) -> Option<Result<(), ToolError>> {
+        if !LINE_ARROW_KEYS.contains(&key) {
+            return None;
+        }
+        Some(match (key, setting) {
+            ("arrow_start", ToolSetting::Bool(v)) => {
+                self.start = v;
+                Ok(())
+            }
+            ("arrow_end", ToolSetting::Bool(v)) => {
+                self.end = v;
+                Ok(())
+            }
+            ("arrow_width", ToolSetting::Float(v)) => crate::error::finite("arrowhead width", v)
+                .map(|v| self.width_pct = f64::from(v).clamp(10.0, 1000.0)),
+            ("arrow_length", ToolSetting::Float(v)) => crate::error::finite("arrowhead length", v)
+                .map(|v| self.length_pct = f64::from(v).clamp(10.0, 5000.0)),
+            ("arrow_concavity", ToolSetting::Float(v)) => {
+                crate::error::finite("arrowhead concavity", v)
+                    .map(|v| self.concavity_pct = f64::from(v).clamp(-50.0, 50.0))
+            }
+            _ => Err(ToolError::OptionKindMismatch {
+                key: key.to_owned(),
+            }),
+        })
+    }
+}
+
+/// W13-I: one arrowhead with its tip at `tip`, pointing along the unit
+/// vector `dir`, proportioned by `style` (its `head_length` already clamped
+/// by the caller) and with its base's middle moved `concavity` (a fraction,
+/// `-0.5..=0.5`) of the length towards the tip.
+fn arrowhead(
+    tip: vector::Point,
+    dir: vector::Point,
+    style: vector::ArrowStyle,
+    concavity: f64,
+) -> Path {
+    let normal = dir.perp() * -1.0;
+    let base = tip - dir * style.head_length;
+    let notch = tip - dir * (style.head_length * (1.0 - concavity));
+    let half = style.head_width * 0.5;
+    let mut p = Path::new();
+    p.move_to(tip)
+        .line_to(base - normal * half)
+        .line_to(notch)
+        .line_to(base + normal * half)
+        .close();
+    p
+}
+
+/// W13-I: the Line tool's outline from `a` to `b` at `weight`, with the
+/// heads `arrows` asks for drawn into it. Each head's tip sits on its end of
+/// the drag; the round-capped shaft stops inside the head (at the middle of
+/// its base), and the heads and the shaft are one union, so the outline
+/// fills cleanly. Two heads on a line too short for both share its length.
+pub fn line_with_arrows(
+    a: Vec2,
+    b: Vec2,
+    weight: f64,
+    arrows: &LineArrows,
+) -> Result<Path, ToolError> {
+    crate::error::finite_pt("line start", a)?;
+    crate::error::finite_pt("line end", b)?;
+    let (pa, pb) = (point(a.x as f64, a.y as f64), point(b.x as f64, b.y as f64));
+    let axis = pb - pa;
+    let len = axis.length();
+    if !arrows.any() || len <= 0.0 {
+        return path_for(&ShapeKind::Line { width: weight }, a, b);
+    }
+    let dir = axis * (1.0 / len);
+    let heads = f64::from(u8::from(arrows.start) + u8::from(arrows.end));
+    let weight = weight.max(0.1);
+    let mut style = arrows.style(weight);
+    style.head_length = style.head_length.min(len / heads);
+    let concavity = arrows.concavity_pct.clamp(-50.0, 50.0) / 100.0;
+    // The shaft ends where each head's base meets the axis, so its round cap
+    // never pokes out past a tip.
+    let inset = style.head_length * (1.0 - concavity).min(1.0);
+    let from = if arrows.start { pa + dir * inset } else { pa };
+    let to = if arrows.end { pb - dir * inset } else { pb };
+    let shaft = to - from;
+    let mut parts = Vec::new();
+    if shaft.x * dir.x + shaft.y * dir.y > 1e-6 {
+        parts.push(stroke(
+            &shapes::line(from, to),
+            &StrokeStyle {
+                width: weight,
+                cap: vector::Cap::Round,
+                ..Default::default()
+            },
+        )?);
+    }
+    if arrows.end {
+        parts.push(arrowhead(pb, dir, style, concavity));
+    }
+    if arrows.start {
+        parts.push(arrowhead(pa, dir * -1.0, style, concavity));
+    }
+    let path = vector::fold(&parts, vector::BoolOp::Union, vector::FillRule::NonZero)?;
+    if path.is_empty() || !path.is_finite() {
+        return Err(ToolError::Degenerate);
+    }
+    Ok(path)
+}
+
 /// The anti-aliased coverage of a path, clipped to `clip`.
 fn path_coverage(path: &Path, clip: PixelRect) -> Result<vector::CoverageMask, ToolError> {
     let opts = FillOptions::default().clipped_to(VecRect::from_xywh(
@@ -908,6 +1075,8 @@ pub struct ShapeTool {
     /// W9-F: the Work Path the last Path-mode drag made, until the next drag
     /// or a cancel.
     work_path: Option<Path>,
+    /// W13-I: the Line tool's arrowheads (read only while `kind` is a line).
+    pub arrows: LineArrows,
 }
 
 impl ShapeTool {
@@ -921,6 +1090,19 @@ impl ShapeTool {
             current: None,
             shift: false,
             work_path: None,
+            arrows: LineArrows::default(),
+        }
+    }
+
+    /// W13-I: the outline a drag from `a` to `b` commits — [`path_for`],
+    /// except that a line with arrowheads on draws them in
+    /// ([`line_with_arrows`]).
+    fn outline(&self, a: Vec2, b: Vec2) -> Result<Path, ToolError> {
+        match &self.kind {
+            ShapeKind::Line { width } if self.arrows.any() => {
+                line_with_arrows(a, b, *width, &self.arrows)
+            }
+            kind => path_for(kind, a, b),
         }
     }
 
@@ -932,7 +1114,7 @@ impl ShapeTool {
     /// The path as it would commit right now, for the live overlay.
     pub fn preview(&self) -> Option<Path> {
         let (a, b) = self.corners(self.current?, self.shift);
-        path_for(&self.kind, a, b).ok()
+        self.outline(a, b).ok()
     }
 
     /// The width and height of the box being dragged, in document pixels.
@@ -1017,7 +1199,7 @@ impl Tool for ShapeTool {
         self.anchor = None;
         self.current = None;
         self.shift = false;
-        let path = path_for(&self.kind, a, b)?;
+        let path = self.outline(a, b)?;
 
         match self.mode {
             ShapeMode::VectorLayer => {
@@ -1089,6 +1271,12 @@ impl Tool for ShapeTool {
     fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
         if let Some(answer) = self.paint.set(key, setting) {
             return answer;
+        }
+        // W13-I: the Line tool's arrowheads.
+        if matches!(self.kind, ShapeKind::Line { .. }) {
+            if let Some(answer) = self.arrows.set(key, setting) {
+                return answer;
+            }
         }
         let mismatch = || {
             Err(ToolError::OptionKindMismatch {
@@ -1624,5 +1812,142 @@ mod tests {
         };
         assert_eq!(corner_alpha(0.0), 255);
         assert_eq!(corner_alpha(20.0), 0);
+    }
+}
+
+/// W13-I: the Line tool's arrowheads, driven as the shell drives the tool:
+/// built by the registry, the options arriving through `set_setting` under
+/// the keys the registry declares, a real drag rasterising into a layer.
+#[cfg(test)]
+mod w13i_tests {
+    use super::*;
+    use crate::registry;
+    use crate::tiles::MemoryTiles;
+    use editor_core::PixelKey;
+    use layer_model::LayerId;
+
+    /// Alpha at each of `probes` after a weight-2 line from (10, 50) to
+    /// (90, 50) drawn in Rasterize mode with the given extra options.
+    fn line_alpha(options: &[(&str, ToolSetting)], probes: &[(i64, i64)]) -> Vec<u8> {
+        let declared: Vec<&str> = registry::info(ToolId::Line)
+            .unwrap()
+            .options
+            .iter()
+            .map(|o| o.key)
+            .collect();
+        let mut tool = registry::make(ToolId::Line);
+        tool.set_setting("mode", ToolSetting::Choice(1)).unwrap();
+        tool.set_setting("width", ToolSetting::Float(2.0)).unwrap();
+        for (key, value) in options {
+            assert!(declared.contains(key), "{key} is not in the Line bar");
+            tool.set_setting(key, *value).unwrap();
+        }
+        let mut tiles = MemoryTiles::new();
+        let layer = LayerId::new();
+        let key = PixelKey::Layer(layer);
+        let delta = {
+            let mut ctx =
+                ToolContext::new(&mut tiles, PixelRect::new(0, 0, 128, 128)).with_layer(layer);
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(10.0, 50.0))
+                .unwrap();
+            tool.on_pointer_move(&mut ctx, PointerEvent::at(90.0, 50.0))
+                .unwrap();
+            tool.on_pointer_up(&mut ctx, PointerEvent::at(90.0, 50.0))
+                .unwrap();
+            match ctx.drain().pop() {
+                Some(Command::PaintTiles { delta, .. }) => delta,
+                other => panic!("expected a paint: {other:?}"),
+            }
+        };
+        tiles.apply_delta(key, &delta);
+        probes
+            .iter()
+            .map(|(x, y)| tiles.pixel(key, *x, *y)[3])
+            .collect()
+    }
+
+    const ON: ToolSetting = ToolSetting::Bool(true);
+
+    #[test]
+    fn arrowheads_widen_the_line_at_the_ends_they_are_asked_for() {
+        // 15 px back from each end, 2.5 px off the axis: outside a 2 px
+        // line, inside a 500%-wide, 1000%-long head.
+        let (near_end, near_start, mid) = ((75, 52), (24, 52), (50, 52));
+        let probes = [near_end, near_start, mid];
+        assert_eq!(line_alpha(&[], &probes), vec![0, 0, 0], "a bare line");
+        assert_eq!(
+            line_alpha(&[("arrow_end", ON)], &probes),
+            vec![255, 0, 0],
+            "an end head only"
+        );
+        assert_eq!(
+            line_alpha(&[("arrow_start", ON)], &probes),
+            vec![0, 255, 0],
+            "a start head only"
+        );
+        assert_eq!(
+            line_alpha(&[("arrow_start", ON), ("arrow_end", ON)], &probes),
+            vec![255, 255, 0],
+            "both"
+        );
+        // The shaft is still drawn between them.
+        assert_eq!(line_alpha(&[("arrow_end", ON)], &[(50, 50)]), vec![255]);
+    }
+
+    #[test]
+    fn arrowhead_width_length_and_concavity_reach_the_outline() {
+        // Narrower: at 200% the head's half-width 15 px back is 1.5 px.
+        assert_eq!(
+            line_alpha(
+                &[
+                    ("arrow_end", ON),
+                    ("arrow_width", ToolSetting::Float(200.0))
+                ],
+                &[(75, 52)]
+            ),
+            vec![0]
+        );
+        // Shorter: a 500%-long head is 10 px, so 15 px back is shaft only.
+        assert_eq!(
+            line_alpha(
+                &[
+                    ("arrow_end", ON),
+                    ("arrow_length", ToolSetting::Float(500.0))
+                ],
+                &[(75, 52)]
+            ),
+            vec![0]
+        );
+        // Concave: at 50% the base's middle is pulled 10 px towards the tip,
+        // hollowing the head 18 px back, off the shaft.
+        let hollow = [(72, 52)];
+        assert_eq!(line_alpha(&[("arrow_end", ON)], &hollow), vec![255]);
+        assert_eq!(
+            line_alpha(
+                &[
+                    ("arrow_end", ON),
+                    ("arrow_concavity", ToolSetting::Float(50.0))
+                ],
+                &hollow
+            ),
+            vec![0]
+        );
+    }
+
+    #[test]
+    fn arrow_keys_belong_to_the_line_and_refuse_the_wrong_kind() {
+        let mut line = registry::make(ToolId::Line);
+        assert!(matches!(
+            line.set_setting("arrow_end", ToolSetting::Float(1.0)),
+            Err(ToolError::OptionKindMismatch { .. })
+        ));
+        assert!(matches!(
+            line.set_setting("arrow_width", ToolSetting::Float(f32::NAN)),
+            Err(ToolError::NotFinite { .. })
+        ));
+        assert!(matches!(
+            registry::make(ToolId::Rectangle).set_setting("arrow_end", ON),
+            Err(ToolError::UnknownOption { .. })
+        ));
     }
 }

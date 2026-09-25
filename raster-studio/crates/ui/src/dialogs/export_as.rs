@@ -338,6 +338,10 @@ pub struct ExportAsDialog {
     /// through [`Self::set_animation_frames`]. `None` (the host has not said)
     /// and `Some(0)` both mean the Animated option is not offered on any row.
     animation_frames: Option<usize>,
+    /// W13-L: `Some((fps, length_ms))` when the animation is the document's
+    /// timeline (Timeline mode) rather than its `_a_` frame layers, as the
+    /// host said through [`Self::set_timeline_frames`]; the caption says so.
+    timeline_frames: Option<(u32, u32)>,
     /// W10-E: the File Info XMP packet and the source file's EXIF the host
     /// offered ([`Self::set_metadata`]), and whether the job embeds them.
     metadata: raster::metadata::EmbeddedMetadata,
@@ -390,6 +394,7 @@ impl ExportAsDialog {
             measured: RefCell::new(Vec::new()),
             color_mode: 0,
             animation_frames: None,
+            timeline_frames: None,
             metadata: raster::metadata::EmbeddedMetadata::default(),
             embed_metadata: true,
         }
@@ -417,6 +422,15 @@ impl ExportAsDialog {
     /// Animated option is not offered at all.
     pub fn set_animation_frames(&mut self, frames: usize) {
         self.animation_frames = Some(frames);
+        self.timeline_frames = None;
+    }
+
+    /// W13-L: the document is in Timeline mode, so an animated export writes
+    /// `frames` frames of its timeline (`fps` frames a second over
+    /// `length_ms`), not its `_a_` frame layers.
+    pub fn set_timeline_frames(&mut self, frames: usize, fps: u32, length_ms: u32) {
+        self.animation_frames = Some(frames);
+        self.timeline_frames = Some((fps, length_ms));
     }
 
     /// W9-J: whether the selected row offers the Animated option: its format
@@ -561,6 +575,8 @@ impl ExportAsDialog {
                 ExportFormat::Avif(_) => ExportFormat::Avif(quality.unwrap_or(80)),
                 // W11-H: and lossy WebP.
                 ExportFormat::WebPLossy(_) => ExportFormat::WebPLossy(quality.unwrap_or(80)),
+                // W13-L: and MP4 (AV1) video.
+                ExportFormat::Mp4(_) => ExportFormat::Mp4(quality.unwrap_or(80)),
                 other => other,
             };
             if !entry.preset.format.supports_16_bit() {
@@ -575,6 +591,8 @@ impl ExportAsDialog {
     pub fn quality(&self) -> Option<u8> {
         match self.format() {
             ExportFormat::Jpeg(q) | ExportFormat::Avif(q) | ExportFormat::WebPLossy(q) => Some(q),
+            // W13-L: MP4 (AV1) video.
+            ExportFormat::Mp4(q) => Some(q),
             _ => None,
         }
     }
@@ -599,6 +617,11 @@ impl ExportAsDialog {
             }
             Some(entry) if matches!(entry.preset.format, ExportFormat::WebPLossy(_)) => {
                 entry.preset.format = ExportFormat::WebPLossy(quality);
+                true
+            }
+            // W13-L: MP4 (AV1) video.
+            Some(entry) if matches!(entry.preset.format, ExportFormat::Mp4(_)) => {
+                entry.preset.format = ExportFormat::Mp4(quality);
                 true
             }
             _ => false,
@@ -1036,16 +1059,26 @@ impl ExportAsDialog {
                     entry.animated = animated;
                 }
             }
-            let frames = self
-                .animation_frames
-                .map_or_else(String::new, |n| format!(" ({n})"));
-            caption(
-                ui,
-                format!(
-                    "{}: one frame per _a_ layer{frames}, bottom first; other layers show as the document has them",
-                    format_name(entry.preset.format)
-                ),
-            );
+            let text = match (self.timeline_frames, self.animation_frames) {
+                // W13-L: Timeline mode writes the timeline's frames.
+                (Some((fps, length)), Some(n)) => {
+                    crate::strings::tr("ui.export_as.timeline.frames")
+                        .replace("{format}", &format_name(entry.preset.format))
+                        .replace("{frames}", &n.to_string())
+                        .replace("{fps}", &fps.to_string())
+                        .replace("{length}", &length.to_string())
+                }
+                _ => {
+                    let frames = self
+                        .animation_frames
+                        .map_or_else(String::new, |n| format!(" ({n})"));
+                    format!(
+                        "{}: one frame per _a_ layer{frames}, bottom first; other layers show as the document has them",
+                        format_name(entry.preset.format)
+                    )
+                }
+            };
+            caption(ui, text);
         }
 
         design::section_header(ui, "Metadata");
@@ -1740,6 +1773,33 @@ mod tests {
         assert!(dialog.job().entries[0].animated, "on by default");
         dialog.entry_mut(0).unwrap().animated = false;
         assert!(!dialog.job().entries[0].animated);
+    }
+
+    /// W13-L: in Timeline mode the Animated caption names the timeline's
+    /// frames, not `_a_` layers.
+    #[test]
+    fn in_timeline_mode_the_animated_caption_names_the_timeline() {
+        let mut dialog = dialog();
+        dialog.set_format(ExportFormat::Mp4(80));
+        dialog.set_timeline_frames(90, 30, 3000);
+        assert!(dialog.offers_animation());
+        let texts = drawn_texts(&mut dialog);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("the timeline, 90 frames at 30 fps over 3000 ms")),
+            "no timeline caption in {texts:?}"
+        );
+        assert!(
+            !texts.iter().any(|t| t.contains("_a_ layer")),
+            "the frame-layer caption is gone: {texts:?}"
+        );
+        // Back to Frames mode: the frame-layer caption again.
+        dialog.set_animation_frames(2);
+        let texts = drawn_texts(&mut dialog);
+        assert!(texts
+            .iter()
+            .any(|t| t.contains("one frame per _a_ layer (2)")));
     }
 
     /// W10-F: the format list the dialog draws offers every new format, and

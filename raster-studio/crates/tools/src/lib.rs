@@ -138,6 +138,8 @@ pub mod select;
 pub mod shape;
 pub mod slice_select;
 pub mod stroke;
+pub mod stroke_options;
+pub mod symmetry;
 pub mod text;
 pub mod tiles;
 pub mod tool;

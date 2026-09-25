@@ -114,7 +114,7 @@ pub fn parse_frame_layer_name(name: &str) -> Option<(&str, u32)> {
 pub fn can_animate(format: ExportFormat) -> bool {
     matches!(
         format,
-        ExportFormat::Gif | ExportFormat::Png | ExportFormat::WebP
+        ExportFormat::Gif | ExportFormat::Png | ExportFormat::WebP | ExportFormat::Mp4(_)
     )
 }
 
@@ -344,6 +344,17 @@ pub fn encode_animation(
     match format {
         ExportFormat::Gif => encode_gif(width, height, frames),
         ExportFormat::Png => encode_apng(width, height, frames),
+        // W13-L: MP4 (AV1), every frame with its own duration.
+        ExportFormat::Mp4(quality) => {
+            let frames: Vec<crate::codec::formats::mp4::Mp4Frame<'_>> = frames
+                .iter()
+                .map(|f| crate::codec::formats::mp4::Mp4Frame {
+                    rgba8: &f.rgba8,
+                    duration_ms: f.delay_ms,
+                })
+                .collect();
+            crate::codec::formats::mp4::encode(width, height, &frames, quality)
+        }
         _ => encode_webp(width, height, frames),
     }
 }

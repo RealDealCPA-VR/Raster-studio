@@ -321,12 +321,13 @@ impl PaletteState {
             .is_some_and(|s| s.tools.contains(&self.active))
     }
 
-    /// The tool a keypress selects.
+    /// The tool a bare letter selects.
     ///
-    /// Delegates to `registry::cycle`, so the palette and the keymap cannot
-    /// disagree about what `M` does after `M`.
+    /// Delegates to [`crate::keys::tool_for_letter`] (W13-M), so the palette
+    /// and both key routes cannot disagree about what `M` does after `M`: it
+    /// keeps the tool, as in Photopea.
     pub fn tool_for_key(&self, key: char) -> Option<ToolId> {
-        registry::cycle(key, Some(self.active))
+        crate::keys::tool_for_letter(key, false, Some(self.active))
     }
 
     pub fn toggle_flyout(&mut self, slot: usize) {
@@ -669,7 +670,8 @@ mod tests {
         let first = state.tool_for_key('m').expect("m selects something");
         assert_eq!(first, group[0]);
         state.activate(&m, first);
-        assert_eq!(state.tool_for_key('m'), Some(group[1]));
+        // W13-M: pressed again it keeps the tool (Shift steps; see keys.rs).
+        assert_eq!(state.tool_for_key('m'), Some(group[0]));
     }
 
     #[test]

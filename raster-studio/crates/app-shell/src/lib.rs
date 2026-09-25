@@ -128,9 +128,13 @@ pub mod placement;
 pub mod prefs;
 pub mod presenter;
 pub mod recent;
+// W13-K: File > Script (Photoshop-DOM JavaScript on an embedded engine).
+pub mod script;
 pub mod session;
 pub mod shell;
 pub mod slices_export;
+// W13-L: the video timeline rendered: frames at time t, MP4 export.
+pub mod timeline;
 pub mod tool_input;
 // W10-E: Image > Variables (data sets) and Image > Vectorize Bitmap.
 pub mod variables;

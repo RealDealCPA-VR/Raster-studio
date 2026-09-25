@@ -776,7 +776,8 @@ impl Tally {
         let entries: [(&[String], &str); 13] = [
             (
                 &self.color_labels,
-                "the colour label on {names} is not shown by this layers panel and was not kept",
+                "the colour label on {names} is not one of the eight this build knows and was \
+                 not kept",
             ),
             (
                 &self.adjustments,
@@ -1505,6 +1506,7 @@ fn layer_common(
     source: &psd::PsdLayer,
     tally: &mut Tally,
     patterns: &psd::pattern::PatternLibrary,
+    canvas: [f32; 2],
 ) -> Layer {
     let mut layer = Layer::raster(&source.name);
     layer.visible = source.visible;
@@ -1531,7 +1533,16 @@ fn layer_common(
         // this build does not map keeps a note naming those kinds. The
         // verbatim `lfx2` bytes stay in the psd model either way — retention,
         // not rendering.
-        match psd::import_effects(effects, &psd::ReadOptions::default()) {
+        // W13-B: a pattern-filled stroke resolves against the file's
+        // patterns, and a gradient overlay's offset is a percentage of the
+        // layer's box (or the canvas).
+        let b = source.bounds;
+        let ctx = psd::effects::EffectsContext {
+            patterns: Some(patterns),
+            layer_box: Some([(b.right - b.left) as f32, (b.bottom - b.top) as f32]),
+            canvas_box: Some(canvas),
+        };
+        match psd::effects::import_effects_in(effects, &psd::ReadOptions::default(), ctx) {
             Some(mut imported) => {
                 if !imported.effects.is_default() {
                     layer.effects = imported.effects.clone();
@@ -1555,7 +1566,10 @@ fn layer_common(
             None => tally.effects.push(source.name.clone()),
         }
     }
-    if source.sheet_color.is_some_and(|c| c != 0) {
+    // W13-B: `lclr` 1..=7 is the layer's colour label (set on the document
+    // once the layer has its id, in `document_from_psd`); only an index past
+    // the eight Photoshop defines is dropped and named.
+    if source.sheet_color.is_some_and(|c| c > 7) {
         tally.color_labels.push(source.name.clone());
     }
     if let Some(mask) = &source.mask {
@@ -1728,7 +1742,7 @@ pub fn document_from_psd(
         let before = tally.signature();
         // W9-C: what the text mapping adds to this layer's report line.
         let mut text_detail: Option<String> = None;
-        let mut layer = layer_common(source, &mut tally, &patterns);
+        let mut layer = layer_common(source, &mut tally, &patterns, [width as f32, height as f32]);
         let mut wants_pixels = false;
         // W9-M: a vector shape layer or a placed smart object opens live.
         let live = if source.is_group() {
@@ -1900,6 +1914,11 @@ pub fn document_from_psd(
         }
 
         let id = document.layers.insert_at(layer, parent, index)?;
+        // W13-B: the `lclr` sheet colour becomes the layer's colour label.
+        if let Some(index) = source.sheet_color {
+            let label = layer_model::ColorLabel::from_psd_index(index);
+            document.extras.set_color_label(id, label);
+        }
 
         let mut placed = DocRect::EMPTY;
         // W9-M: a smart object's source pixels are its tiles (in source
@@ -2270,6 +2289,11 @@ fn psd_layers_for(
             continue;
         }
         let mut record = psd::PsdLayer::raster(&layer.name, psd::Rect::default());
+        // W13-B: the layer's colour label as its `lclr` sheet colour.
+        let label = document.extras.color_label(id);
+        if label != layer_model::ColorLabel::NoColor {
+            record.sheet_color = Some(label.psd_index());
+        }
         record.opacity = to_byte(layer.effective_opacity());
         let fill = layer.effective_fill_opacity();
         record.fill_opacity = (fill < 1.0).then(|| to_byte(fill));
@@ -2285,31 +2309,6 @@ fn psd_layers_for(
         if layer.locked.all {
             tally.locked_all.push(layer.name.clone());
         }
-        if !layer.effects.is_empty() {
-            // Card 080: the four supported effects are written as real lfx2
-            // descriptors — an independent reader can toggle and restyle
-            // them. Kinds this writer cannot produce are named, as before.
-            // W9-M: a pattern overlay whose pattern has pixels travels too,
-            // its pattern in the document's `Patt` block.
-            match psd::effects::export_effects_with_patterns(&layer.effects) {
-                Some((data, unmapped, patterns)) => {
-                    record.effects = Some(psd::Effects {
-                        key: *b"lfx2",
-                        data,
-                    });
-                    for pattern in patterns {
-                        if !extras.patterns.iter().any(|p| p.id == pattern.id) {
-                            extras.patterns.push(pattern);
-                        }
-                    }
-                    for kind in unmapped {
-                        tally.unmapped_effects.push((layer.name.clone(), kind));
-                    }
-                }
-                None => tally.effects.push(layer.name.clone()),
-            }
-        }
-
         let (dx, dy, expressible) = translation_of(layer.transform);
         let mut wants_pixels = false;
         let mut render_fallback = false;
@@ -2592,6 +2591,40 @@ fn psd_layers_for(
                     }
                     _ => tally.mask_params.push(layer.name.clone()),
                 }
+            }
+        }
+
+        if !layer.effects.is_empty() {
+            // Card 080: the effects are written as real lfx2 descriptors — an
+            // independent reader can toggle and restyle them. Kinds this
+            // writer cannot produce are named, as before. W9-M: a pattern
+            // overlay (W13-B: and a pattern stroke) whose pattern has pixels
+            // travels too, its pattern in the document's `Patt` block.
+            // W13-B: written once the record's box is known, because a
+            // gradient overlay's offset is a percentage of it (or of the
+            // canvas, for a ramp not aligned with the layer).
+            let b = record.bounds;
+            let ctx = psd::effects::EffectsContext {
+                patterns: None,
+                layer_box: Some([(b.right - b.left) as f32, (b.bottom - b.top) as f32]),
+                canvas_box: Some([document.width() as f32, document.height() as f32]),
+            };
+            match psd::effects::export_effects_in(&layer.effects, ctx) {
+                Some((data, unmapped, patterns)) => {
+                    record.effects = Some(psd::Effects {
+                        key: *b"lfx2",
+                        data,
+                    });
+                    for pattern in patterns {
+                        if !extras.patterns.iter().any(|p| p.id == pattern.id) {
+                            extras.patterns.push(pattern);
+                        }
+                    }
+                    for kind in unmapped {
+                        tally.unmapped_effects.push((layer.name.clone(), kind));
+                    }
+                }
+                None => tally.effects.push(layer.name.clone()),
             }
         }
 
@@ -3472,7 +3505,9 @@ mod tests {
             key: *b"lfx2",
             data: vec![0; 16],
         });
-        styled.sheet_color = Some(2);
+        // W13-B: 0..=7 are Photoshop's eight labels and map; an index past
+        // them is the one that is still dropped and named.
+        styled.sheet_color = Some(12);
 
         file.layers = vec![base, curves, invert, styled];
         let bytes = psd::write(&file).unwrap();
@@ -3501,6 +3536,123 @@ mod tests {
         // user can see it is there rather than wonder where it went.
         assert!(doc.layers.get(find(doc, "Curves 1")).is_some());
         assert_eq!(doc.layers.len(), 4);
+    }
+
+    #[test]
+    fn every_colour_label_round_trips_through_a_psd_as_its_lclr_index() {
+        // W13-B: `lclr` 0..=7 (none, red, orange, yellow, green, blue,
+        // violet, gray) opens as the layer's colour label, and a saved
+        // label is written back as its index.
+        use layer_model::ColorLabel;
+        let canvas = psd::Rect::sized(8, 8);
+        let mut file = psd::PsdFile::new(psd::PsdHeader::rgba8(8, 8));
+        file.layers = ColorLabel::ALL
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let mut l = psd::PsdLayer::raster(format!("L{i}"), canvas);
+                l.set_rgba8(&solid(canvas, RED)).unwrap();
+                l.sheet_color = Some(c.psd_index());
+                l
+            })
+            .collect();
+        let import = document_from_psd(&psd::write(&file).unwrap(), "labels.psd", 10).unwrap();
+        let doc = &import.imported.document;
+        for (i, c) in ColorLabel::ALL.iter().enumerate() {
+            assert_eq!(doc.extras.color_label(find(doc, &format!("L{i}"))), *c);
+        }
+        assert!(
+            import
+                .notes
+                .summary()
+                .is_none_or(|s| !s.contains("colour label")),
+            "a known label is kept, not reported: {:?}",
+            import.notes.summary()
+        );
+
+        let composite = flatten(doc, &import.imported.tiles);
+        let (bytes, _) = psd_from_document(doc, &import.imported.tiles, &composite).unwrap();
+        let written = psd::read(&bytes).unwrap();
+        for (i, c) in ColorLabel::ALL.iter().enumerate() {
+            let record = written
+                .all_layers()
+                .into_iter()
+                .find(|l| l.name == format!("L{i}"))
+                .unwrap();
+            let expected = (*c != ColorLabel::NoColor).then(|| c.psd_index());
+            assert_eq!(record.sheet_color, expected, "{c:?}");
+        }
+        let again = document_from_psd(&bytes, "again.psd", 10).unwrap();
+        let back = &again.imported.document;
+        for (i, c) in ColorLabel::ALL.iter().enumerate() {
+            assert_eq!(back.extras.color_label(find(back, &format!("L{i}"))), *c);
+        }
+    }
+
+    #[test]
+    fn repeated_gradient_pattern_and_offset_effects_survive_a_psd_save_and_reopen() {
+        // W13-B through the app's own save and open: two drop shadows, a
+        // gradient stroke plus a pattern stroke, a gradient outer glow and
+        // a gradient overlay with an offset (a percentage of the written
+        // layer box, 140 x 130 for "Inner").
+        use layer_model::effects::{
+            FillStyle, GlowEffect, GradientOverlayEffect, PatternFill, PatternTile, ShadowEffect,
+            ShadowInstance, StrokeEffect,
+        };
+        let first = document_from_psd(&layered_psd(), "fixture.psd", 50).unwrap();
+        let mut doc = first.imported.document.clone();
+        let id = find(&doc, "Inner");
+        let tile = PatternTile::new("Dots", 2, 1, vec![1, 2, 3, 255, 4, 5, 6, 128]).unwrap();
+        let mut fx = layer_model::LayerEffects {
+            drop_shadow: Some(ShadowEffect::default()),
+            stroke: Some(StrokeEffect {
+                fill: FillStyle::Gradient(layer_model::effects::Gradient::default()),
+                ..StrokeEffect::default()
+            }),
+            outer_glow: Some(GlowEffect {
+                fill: FillStyle::Gradient(layer_model::effects::Gradient::default()),
+                ..GlowEffect::default()
+            }),
+            gradient_overlay: Some(GradientOverlayEffect {
+                offset_px: [35.0, 65.0],
+                ..GradientOverlayEffect::default()
+            }),
+            ..Default::default()
+        };
+        fx.extras.drop_shadows = vec![ShadowInstance {
+            effect: ShadowEffect {
+                opacity: 0.5,
+                distance_px: 9.0,
+                ..ShadowEffect::default()
+            },
+            ..Default::default()
+        }];
+        fx.extras.strokes = vec![StrokeEffect {
+            fill: FillStyle::Pattern(PatternFill {
+                tile: Some(tile),
+                ..Default::default()
+            }),
+            ..StrokeEffect::default()
+        }];
+        doc.layers.get_mut(id).unwrap().effects = fx.clone();
+
+        let composite = flatten(&doc, &first.imported.tiles);
+        let (bytes, notes) = psd_from_document(&doc, &first.imported.tiles, &composite).unwrap();
+        assert!(
+            notes.summary().is_none_or(|s| !s.contains("effect")),
+            "nothing about the effects is lost: {:?}",
+            notes.summary()
+        );
+        let again = document_from_psd(&bytes, "again.psd", 50).unwrap();
+        let back = &again.imported.document;
+        assert!(
+            again.notes.summary().is_none_or(|s| !s.contains("effect")),
+            "{:?}",
+            again.notes.summary()
+        );
+        let effects = &back.layers.get(find(back, "Inner")).unwrap().effects;
+        assert_eq!(effects.drop_shadows().len(), 2, "two shadows out, two in");
+        assert_eq!(effects, &fx);
     }
 
     // ------------------------------------------------------- card 077
@@ -4123,7 +4275,7 @@ mod tests {
         // deleting any single note fails the gate rather than surviving via a
         // shared fragment).
         for phrase in [
-            "the colour label on {names} is not shown by this layers panel and was not kept",
+            "the colour label on {names} is not one of the eight this build knows and was              not kept",
             "adjustment layer(s) this build cannot evaluate ({names}) were kept as empty              layers; their effect is in the flattened image but not editable",
             "type layer(s) ({names}) were imported as pixels; the text is no longer editable",
             "type layer(s) ({names}) were imported as editable text with the default font, size and fill — the source font is not in this build's supported subset",

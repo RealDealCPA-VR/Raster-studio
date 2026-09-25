@@ -1,5 +1,5 @@
 //! W9-N: Photoshop / Photopea resource files — what File > Open does with a
-//! `.pat`, `.grd`, `.csh`, `.aco`, `.ase` or `.icc`.
+//! `.pat`, `.grd`, `.csh`, `.aco`, `.ase`, `.icc` or (W13-E) `.atn`.
 //!
 //! A resource file is not a picture. Opening one adds what it carries to a
 //! library: patterns to the pattern presets, gradients to the gradient
@@ -16,9 +16,7 @@
 //! | `.aco` | Photoshop colour swatches, version 1 and 2 | [`aco`] |
 //! | `.ase` | Adobe Swatch Exchange (`ASEF`) | [`ase`] |
 //! | `.icc`, `.icm` | an ICC colour profile | [`icc`] |
-//!
-//! `.atn` (Photoshop actions) is recognised by [`ResourceKind`] but has no
-//! parser: see [`ATN_REFUSAL`].
+//! | `.atn` | a Photoshop action set, version 16 (W13-E) | [`atn`] |
 //!
 //! # Untrusted input
 //!
@@ -35,6 +33,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod aco;
 pub mod ase;
+pub mod atn;
 pub mod csh;
 pub mod grd;
 pub mod icc;
@@ -58,20 +57,6 @@ pub const MAX_STOPS: usize = 1_024;
 /// Most knots one custom-shape file may carry in total.
 pub const MAX_KNOTS: usize = 1 << 20;
 
-/// Why `.atn` files are recognised but not imported.
-///
-/// A Photoshop action is a list of *parametric* steps ("Gaussian Blur,
-/// radius 4 px" on whatever document is active), each an event id plus an
-/// action descriptor. This application's Actions library records *concrete*
-/// edits — the commands a step produced and the tile bytes they wrote — and
-/// replays those; it has no step that takes parameters and runs a filter or
-/// adjustment afresh. A mapping from `.atn` events onto that library would
-/// replay nothing but the handful of steps that need no pixels, so it is
-/// refused by name instead of half-imported.
-pub const ATN_REFUSAL: &str = "Photoshop actions (.atn) cannot be imported: \
-    they are parametric steps, and this application's Actions library replays \
-    recorded edits, not parametric filter or adjustment steps";
-
 /// Which library a file extension feeds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResourceKind {
@@ -81,8 +66,7 @@ pub enum ResourceKind {
     SwatchesAco,
     SwatchesAse,
     IccProfile,
-    /// Recognised so the user is told why it does not import
-    /// ([`ATN_REFUSAL`]); never parsed.
+    /// W13-E: a Photoshop action set ([`atn`]).
     Actions,
 }
 
@@ -352,6 +336,8 @@ pub enum Resource {
     Shapes(Loaded<ShapeResource>),
     Swatches(Loaded<SwatchResource>),
     Icc(IccResource),
+    /// W13-E: an action set (`.atn`).
+    Actions(atn::AtnSet),
 }
 
 /// Parse `bytes` as a resource file of `kind`.
@@ -370,12 +356,7 @@ pub fn parse(kind: ResourceKind, bytes: &[u8]) -> Result<Resource, ResourceError
         ResourceKind::SwatchesAco => Resource::Swatches(aco::parse(bytes)?.non_empty()?),
         ResourceKind::SwatchesAse => Resource::Swatches(ase::parse(bytes)?.non_empty()?),
         ResourceKind::IccProfile => Resource::Icc(icc::parse(bytes)?),
-        ResourceKind::Actions => {
-            return Err(ResourceError::Unsupported {
-                what: "file",
-                detail: ATN_REFUSAL.to_string(),
-            })
-        }
+        ResourceKind::Actions => Resource::Actions(atn::parse(bytes)?),
     })
 }
 
@@ -386,9 +367,6 @@ pub fn load(path: &std::path::Path) -> Result<Resource, ResourceError> {
         what: "file type",
         detail: path.display().to_string(),
     })?;
-    if kind == ResourceKind::Actions {
-        return parse(kind, &[]);
-    }
     let io = |e: std::io::Error| ResourceError::Malformed(e.to_string());
     let size = std::fs::metadata(path).map_err(io)?.len();
     if size > MAX_RESOURCE_BYTES {

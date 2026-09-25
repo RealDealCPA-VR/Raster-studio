@@ -38,6 +38,8 @@ pub mod history;
 pub mod pixels;
 pub mod selection;
 pub mod slices;
+// W13-L: the video timeline record and its commands.
+pub mod timeline;
 
 pub use command::{layer_class_name, resolve_target, Command, CommandError, LayerPatch, Patch};
 pub use document::{

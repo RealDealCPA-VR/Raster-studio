@@ -485,7 +485,15 @@ fn menu_table() -> BTreeMap<Chord, MenuAction> {
 /// painted beside it. The menu paints one chord per row (Delete beside
 /// Edit > Clear); Photoshop's Backspace clears the selection too.
 pub fn menu_aliases() -> Vec<(Chord, MenuAction)> {
-    vec![(Chord::plain(Key::Backspace), MenuAction::ClearPixels)]
+    vec![
+        (Chord::plain(Key::Backspace), MenuAction::ClearPixels),
+        // W13-M: Photopea's Ctrl+F is Find — its search over the menu
+        // commands and the tools (`pp.js`: Ctrl+F with neither Shift nor Alt
+        // opens it; its shortcut sheet lists "Find  Ctrl+F"). Here that is
+        // Help > Search Commands, whose painted chord stays Ctrl+Shift+P.
+        // Last Filter moved to Photopea's Alt+Ctrl+F in the menu itself.
+        (Chord::ctrl(Key::character('f')), MenuAction::CommandSearch),
+    ]
 }
 
 /// The menu item that means the same thing as an application [`Action`].
@@ -782,6 +790,21 @@ impl Keymap {
         // Tools: one letter per registry cycle group.
         for key in ToolKey::all() {
             add(Chord::plain(Key::Char(key.char())), SelectTool(key));
+        }
+        // W13-M: Shift + a tool letter steps to the next tool of that group,
+        // Photopea's cycling chord (its key handler advances the group only
+        // while Shift is held). No menu item paints a Shift+letter chord that
+        // a tool letter uses (`shift_tool_letters_are_free_in_the_menu_table`).
+        for key in ToolKey::all() {
+            add(
+                Chord {
+                    ctrl_or_cmd: false,
+                    alt: false,
+                    shift: true,
+                    key: Key::Char(key.char()),
+                },
+                SelectTool(key),
+            );
         }
         out
     }

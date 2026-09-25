@@ -19,6 +19,11 @@
 //! | Apple ICNS (W11-H) | PNG, ARGB and 24-bit RLE entries, largest | no | [`icns`] |
 //! | IFF ILBM / PBM (W11-H) | 1-8 planes (EHB, HAM6/8), 24, 32; ByteRun1 | no | [`iff`] |
 //! | Krita KRA (W11-H) | the merged image only | no | [`kra`] |
+//! | PDF, PDF-compatible AI (W13-D) | every page, rendered by `hayro` (the flat decode answers page 1; `app-shell` opens one artboard per page) | no (the print path's writer is `crate::pdf`) | [`pdf`] |
+//! | WMF, EMF (W13-D) | the common GDI records, drawn through `resvg` | no | [`metafile`] |
+//! | EPS, Paint.NET PDN, Sketch, Adobe XD, Figma FIG (W13-D) | the embedded preview only, with a sentence saying so; a bare `fig-kiwi` canvas is refused by name | no | [`vector_docs`] |
+//! | DNG (W13-C) | CFA or linear raw, uncompressed or lossless JPEG: developed to 16-bit sRGB | no | [`raw`] |
+//! | CR2, CR3, NEF, ARW, RAF, ORF, RW2 (W13-C) | **refused by name**: no permissive reader (see [`raw`]) | no | [`raw`] |
 //!
 //! AVIF has no reader: `rav1d` (the pure-Rust dav1d port), the AV1 decoder
 //! this wave built a reader on, was found to abort the process on a damaged
@@ -28,11 +33,18 @@
 //! exercises `rav1d`), and a `.avif` is refused by name instead. What is
 //! tested is the refusal and the brand sniff.
 //!
-//! HEIC has no reader either. The pure-Rust HEVC decoders this wave found
-//! on crates.io are `heic` (AGPL-3.0-only or a commercial licence, which a
-//! proprietary build cannot take) and `heic-rs` (a 0.1.1 release that this
-//! wave did not evaluate for correctness, fuzz-safety or licence terms);
-//! everything else binds libheif / libde265 (C/C++). A `.heic` is refused
+//! HEIC has no reader either. The pure-Rust HEVC decoders on crates.io are
+//! `heic` (AGPL-3.0-only or a commercial licence, which a proprietary build
+//! cannot take) and permissive first releases: W13-C measured `heic-rs`
+//! 0.1.1 (MIT OR Apache-2.0), which decodes a clean file correctly but
+//! panics on damaged ones (3 of 4000 bit-flipped or truncated files, a
+//! slice index at `src/hevc/decode/recon.rs:70`) - and the release profile
+//! is `panic = "abort"`, so that would take the editor down; `heif-oxide`
+//! 0.1.0 and `gamut-heic` 0.2.2 were not evaluated. Everything else binds
+//! libheif / libde265 (C/C++). W13-C also found `rusty_av1d` 1.2.0, a
+//! BSD-2-Clause rav1d fork with a Rust API: it carries the same `unwrap()`
+//! on a missing reference frame header (`src/decode.rs:4993`), so under
+//! `panic = "abort"` AVIF stays refused too. A `.heic` is refused
 //! by name, see
 //! [`heic_refusal`], instead of reaching `image` and failing as "unknown
 //! format".
@@ -48,7 +60,19 @@ pub mod icns;
 pub mod iff;
 pub mod jxl;
 pub mod kra;
+/// W13-D: WMF / EMF.
+pub mod metafile;
+/// W13-D: PDF and PDF-compatible `.ai`.
+pub mod pdf;
+/// W13-D: EPS, PDN, Sketch, XD and FIG previews.
+pub mod vector_docs;
+// W13-C: lossless JPEG, the compression DNG raw data uses.
+mod ljpeg;
+// W13-L: MP4 (AV1) video export, and the refusal a video file gets on open.
+pub mod mp4;
 pub mod pnm;
+// W13-C: camera RAW: DNG developed, vendor RAWs refused by name.
+pub mod raw;
 pub mod xcf;
 
 /// How many leading bytes the sniff looks at.
@@ -78,6 +102,20 @@ pub fn sniff(head: &[u8]) -> Option<ImportFormat> {
         Some(ImportFormat::Iff)
     } else if kra::looks_like_kra(head) {
         Some(ImportFormat::Kra)
+    } else if pdf::looks_like_pdf(head) {
+        Some(ImportFormat::Pdf)
+    } else if vector_docs::looks_like_eps(head) {
+        Some(ImportFormat::Eps)
+    } else if vector_docs::looks_like_pdn(head) {
+        Some(ImportFormat::Pdn)
+    } else if vector_docs::looks_like_xd(head) {
+        Some(ImportFormat::Xd)
+    } else if vector_docs::looks_like_fig_kiwi(head) {
+        Some(ImportFormat::Fig)
+    } else if metafile::looks_like_emf(head) {
+        Some(ImportFormat::Emf)
+    } else if metafile::looks_like_wmf(head) {
+        Some(ImportFormat::Wmf)
     } else {
         None
     }
@@ -98,9 +136,10 @@ pub fn looks_like_heic(head: &[u8]) -> bool {
 /// The refusal a HEIC file gets, naming why rather than "unknown format".
 pub fn heic_refusal() -> CodecError {
     CodecError::Unsupported(
-        "HEIC/HEIF is not supported: this build has no HEVC decoder (the pure-Rust ones \
-         found are AGPL-licensed or not yet evaluated, see docs/parity-matrix.md); \
-         convert it to JPEG or PNG first"
+        "HEIC/HEIF is not supported: this build has no HEVC decoder. The pure-Rust ones \
+         are AGPL-licensed (heic) or first releases, and the permissive heic-rs 0.1.1 \
+         panics on damaged files, which would close the editor (see \
+         docs/parity-matrix.md); convert it to JPEG or PNG first"
             .into(),
     )
 }
@@ -115,8 +154,24 @@ pub(super) fn sniff_source<R: BufRead + Seek>(
     let filled = read_head(source, &mut head)?;
     source.seek(std::io::SeekFrom::Start(start))?;
     let head = &head[..filled];
+    // W13-C: a camera RAW is told apart from an ordinary TIFF by its IFDs,
+    // which lie past the first 64 bytes: read a larger prefix for those.
+    if raw::might_be_raw(head) {
+        let mut prefix = Vec::new();
+        source
+            .by_ref()
+            .take(raw::SNIFF_BYTES as u64)
+            .read_to_end(&mut prefix)?;
+        source.seek(std::io::SeekFrom::Start(start))?;
+        if let Some(kind) = raw::identify(&prefix) {
+            return Ok(Some(kind.format()));
+        }
+    }
     if looks_like_heic(head) {
         return Err(heic_refusal());
+    }
+    if mp4::looks_like_video(head) {
+        return Err(mp4::video_refusal());
     }
     Ok(sniff(head))
 }
@@ -162,6 +217,15 @@ pub(super) fn probe<R: Read>(
         ImportFormat::Icns => icns::probe(&bytes, limits),
         ImportFormat::Iff => iff::probe(&bytes, limits),
         ImportFormat::Kra => kra::probe(&bytes, limits),
+        ImportFormat::Pdf => pdf::probe(&bytes, limits),
+        ImportFormat::Wmf | ImportFormat::Emf => metafile::probe(format, &bytes, limits),
+        ImportFormat::Eps
+        | ImportFormat::Pdn
+        | ImportFormat::Sketch
+        | ImportFormat::Xd
+        | ImportFormat::Fig => vector_docs::probe(format, &bytes, limits),
+        ImportFormat::Dng => raw::probe(&bytes, limits),
+        ImportFormat::CameraRaw => Err(raw::refusal(&bytes)),
         ImportFormat::Avif => Err(avif::refusal()),
         other => Err(not_ours(other)),
     }
@@ -186,6 +250,15 @@ pub(super) fn decode<R: Read>(
         ImportFormat::Icns => icns::decode(&bytes, limits),
         ImportFormat::Iff => iff::decode(&bytes, limits),
         ImportFormat::Kra => kra::decode(&bytes, limits),
+        ImportFormat::Pdf => pdf::decode(&bytes, limits),
+        ImportFormat::Wmf | ImportFormat::Emf => metafile::decode(format, &bytes, limits),
+        ImportFormat::Eps
+        | ImportFormat::Pdn
+        | ImportFormat::Sketch
+        | ImportFormat::Xd
+        | ImportFormat::Fig => vector_docs::decode(format, &bytes, limits),
+        ImportFormat::Dng => raw::decode(&bytes, limits),
+        ImportFormat::CameraRaw => Err(raw::refusal(&bytes)),
         ImportFormat::Avif => Err(avif::refusal()),
         other => Err(not_ours(other)),
     }

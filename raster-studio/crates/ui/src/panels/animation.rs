@@ -47,6 +47,11 @@ use egui::{Align, Layout, Sense, Ui, Vec2};
 use layer_model::{Layer, LayerId};
 use raster::animation::{frame_layer_name, parse_frame_layer_name, DEFAULT_FRAME_DELAY_MS};
 
+// W13-L: Timeline mode (layer bars, opacity / position keyframes, the
+// playhead), behind the panel's Frames / Timeline switch.
+#[path = "animation_timeline.rs"]
+pub mod timeline;
+
 use crate::intent::Intent;
 use crate::view::{body, empty_state, hint, icon_action_id, text, ActionState};
 use crate::Workspace;
@@ -319,6 +324,11 @@ pub mod ids {
 pub(crate) fn animation_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     if doc.width() == 0 || doc.height() == 0 {
         empty_state(ui, tr(NO_DOCUMENT));
+        return;
+    }
+    // W13-L: the Frames / Timeline switch; Timeline mode draws its own body.
+    if timeline::mode_toggle(w, ui, doc) {
+        timeline::timeline_body(w, ui, doc);
         return;
     }
     let frames = frames(doc);

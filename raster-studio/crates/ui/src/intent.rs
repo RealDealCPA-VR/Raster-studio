@@ -192,6 +192,15 @@ pub enum Intent {
         layer: LayerId,
         text: String,
     },
+    /// W13-L: move the Animation timeline's playhead to `t_ms` — a ruler
+    /// scrub, each playback frame, Stop. The application puts the tracked
+    /// layers' values at that time on the document so the canvas shows the
+    /// frame, with no history step and no dirty flag
+    /// (`editor_core::timeline::seek`): the playhead is not an edit. An
+    /// absolute time, so absorbing it twice lands in one place.
+    SeekTimeline {
+        t_ms: u32,
+    },
 }
 
 impl Intent {
@@ -251,6 +260,10 @@ pub enum ViewFlag {
     SnapToBounds,
     /// View > Snap To > Slices (only while slices are showing).
     SnapToSlices,
+    // W13-F: appended (bit positions follow `ALL`).
+    /// View > Pattern Preview: the canvas repeated around itself, for
+    /// seamless-pattern work. A view setting; the document is untouched.
+    PatternPreview,
 }
 
 impl ViewFlag {
@@ -276,6 +289,7 @@ impl ViewFlag {
         ViewFlag::SnapToLayers,
         ViewFlag::SnapToBounds,
         ViewFlag::SnapToSlices,
+        ViewFlag::PatternPreview,
     ];
 
     /// W10-J: the View > Snap To submenu's targets, in Photoshop's order.
@@ -338,6 +352,9 @@ impl ViewFlag {
             ViewFlag::SnapToLayers => "Layers",
             ViewFlag::SnapToBounds => "Document Bounds",
             ViewFlag::SnapToSlices => "Slices",
+            // W13-F: the menu row reads `ui.w13f.menu.pattern_preview`
+            // (`MenuAction::label`); a const fn cannot call `tr`.
+            ViewFlag::PatternPreview => "Pattern Preview",
         }
     }
 }

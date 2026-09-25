@@ -15,17 +15,18 @@
 //! | `IrGl` | `inner_glow`: an outer glow's fields, source `glwS` (`SrcC` centre, `SrcE` edge), contour `TrnS` |
 //! | `ebbl` | `bevel_emboss`: `bvlS` style, `bvlT` technique, `bvlD` direction (`In  `/`Out `), `srgR` depth %, `blur` size px, `Sftn` soften px, `lagl` angle, `Lald` altitude, `uglg`, `hglM`/`hglC`/`hglO` highlight, `sdwM`/`sdwC`/`sdwO` shadow, gloss contour `TrnS` |
 //! | `ChFX` | `satin`: `Md  `, `Clr `, `Opct`, `lagl`, `Dstn`, `blur`, `Invr` |
-//! | `GrFl`/`Grdf` | `gradient_overlay`: `Md  `, `Opct`, `Grad` (`Grdn`: `Intr` smoothness on 0..=4096, `Clrs`/`Trns` stops with `Lctn` on 0..=4096 and `Mdpn` %), `Type`, `Rvrs`, `Algn`, `Angl`, `Scl `, `Dthr` |
+//! | `GrFl`/`Grdf` | `gradient_overlay`: `Md  `, `Opct`, `Grad` (`Grdn`: `Intr` smoothness on 0..=4096, `Clrs`/`Trns` stops with `Lctn` on 0..=4096 and `Mdpn` %), `Type`, `Rvrs`, `Algn`, `Angl`, `Scl `, `Dthr`, `Ofst` (a `Pnt ` of percentages of the layer's box, or of the canvas when `Algn` is off) |
 //! | `TrnS` (`ShpC`) | a contour: `Nm  ` names a picker preset, otherwise `Crv ` knots on 0..=255 |
 //!
 //! Pixel lengths are multiplied by the block's `Scl ` exactly as card 075's
-//! four are. The gradient overlay's `Ofst` is a percentage of a box this
-//! crate does not know: it is not read, and a non-zero `offset_px` is named
-//! as not written rather than dropped silently.
+//! four are. W13-B: the gradient overlay's `Ofst` is a percentage of a box
+//! the descriptor does not carry; [`super::EffectsContext`] supplies it. With
+//! no box, a non-zero offset is named (on read and on write) rather than
+//! guessed, and the ramp stays centred.
 
 use super::{
     angle_value, blnm, color_overlay, drop_shadow, enabled, enumerated, enumerated_value, flag,
-    outer_glow, percent_value, px_value, rgbc, stroke,
+    outer_glow, percent_value, px_value, rgbc, stroke, EffectsContext,
 };
 use crate::descriptor::{Descriptor, Value};
 use layer_model::effects::{
@@ -220,7 +221,7 @@ fn descriptors<'a>(d: &'a Descriptor, key: &str) -> Vec<&'a Descriptor> {
 /// A `Grdn` object with its own stops (`CstS`); a noise gradient has no
 /// stops to map. Stop locations are on 0..=4096 and `Intr` is the
 /// smoothness on the same span (4096 = 100 %).
-fn gradient(g: &Descriptor) -> Option<Gradient> {
+pub(super) fn gradient(g: &Descriptor) -> Option<Gradient> {
     if enumerated(g, "GrdF") == Some("ClNs") {
         return None;
     }
@@ -266,7 +267,41 @@ fn gradient(g: &Descriptor) -> Option<Gradient> {
     })
 }
 
-fn gradient_overlay(d: &Descriptor) -> Option<GradientOverlayEffect> {
+/// A gradient overlay's `Ofst` in pixels: `Ok(None)` when it is absent or
+/// zero, `Err(())` when it is not zero and its box is not known.
+fn gradient_offset(
+    d: &Descriptor,
+    ctx: EffectsContext<'_>,
+    align: bool,
+) -> Result<Option<[f32; 2]>, ()> {
+    let Some(p) = d.descriptor("Ofst") else {
+        return Ok(None);
+    };
+    let axis = |key: &str| match p.get(key) {
+        Some(Value::UnitFloat { unit, value }) if unit.as_slice() == b"#Pxl" => {
+            (Some(*value as f32), false)
+        }
+        Some(Value::UnitFloat { value, .. }) | Some(Value::Double(value)) => {
+            (Some(*value as f32), true)
+        }
+        _ => (None, false),
+    };
+    let (x, y) = (axis("Hrzn"), axis("Vrtc"));
+    let raw = [x.0.unwrap_or(0.0), y.0.unwrap_or(0.0)].map(|v| if v.is_finite() { v } else { 0.0 });
+    if raw == [0.0, 0.0] {
+        return Ok(None);
+    }
+    if !x.1 && !y.1 {
+        return Ok(Some(raw));
+    }
+    let b = ctx.offset_box(align).ok_or(())?;
+    Ok(Some([
+        if x.1 { raw[0] / 100.0 * b[0] } else { raw[0] },
+        if y.1 { raw[1] / 100.0 * b[1] } else { raw[1] },
+    ]))
+}
+
+fn gradient_overlay(d: &Descriptor, ctx: EffectsContext<'_>) -> Option<GradientOverlayEffect> {
     let p = paint(d, "Md  ", None, "Opct")?;
     let style = match enumerated(d, "Type") {
         Some("Lnr ") | None => GradientStyle::Linear,
@@ -277,20 +312,33 @@ fn gradient_overlay(d: &Descriptor) -> Option<GradientOverlayEffect> {
         Some(_) => return None,
     };
     let defaults = GradientOverlayEffect::default();
+    let align_with_layer = flag(d, "Algn").unwrap_or(true);
     Some(GradientOverlayEffect {
         blend_mode: p.blend_mode,
         opacity: p.opacity,
         gradient: gradient(d.descriptor("Grad")?)?,
         style,
         reverse: flag(d, "Rvrs").unwrap_or(false),
-        align_with_layer: flag(d, "Algn").unwrap_or(true),
+        align_with_layer,
         angle_deg: num(d, "Angl").unwrap_or(defaults.angle_deg),
         scale: num(d, "Scl ").map_or(1.0, |v| (v / 100.0).max(0.01)),
-        // `Ofst` is a percentage of a box this crate does not know; the
-        // ramp stays centred.
-        offset_px: [0.0, 0.0],
+        // W13-B: `Ofst` through the box the caller knows; an offset whose
+        // box is not known stays centred and is named by [`map_rest_in`].
+        offset_px: gradient_offset(d, ctx, align_with_layer)
+            .ok()
+            .flatten()
+            .unwrap_or([0.0, 0.0]),
         dither: flag(d, "Dthr").unwrap_or(false),
     })
+}
+
+/// Name an unreadable gradient overlay offset once.
+fn name_offset(d: &Descriptor, ctx: EffectsContext<'_>, unmapped: &mut Vec<String>) {
+    let align = flag(d, "Algn").unwrap_or(true);
+    let name = "gradient overlay offset";
+    if gradient_offset(d, ctx, align).is_err() && !unmapped.iter().any(|u| u == name) {
+        unmapped.push(name.into());
+    }
 }
 
 /// The enabled descriptors of a `...Multi` list, in file order.
@@ -314,6 +362,17 @@ fn multi(value: &Value) -> Vec<&Descriptor> {
 /// [`super::import_effects`] calls this on every block it decodes, so a
 /// `.psd` layer and an `.asl` style go through the same mapping.
 pub fn map_rest(lefx: &Descriptor, fx: &mut LayerEffects, unmapped: &mut Vec<String>) {
+    map_rest_in(lefx, fx, unmapped, EffectsContext::default());
+}
+
+/// W13-B: [`map_rest`] with what the caller knows about the layer (the
+/// file's patterns, the layer's and canvas's boxes).
+pub fn map_rest_in(
+    lefx: &Descriptor,
+    fx: &mut LayerEffects,
+    unmapped: &mut Vec<String>,
+    ctx: EffectsContext<'_>,
+) {
     let scale = num(lefx, "Scl ").map_or(1.0, |s| (s / 100.0).clamp(0.0, 10.0));
     for (key, value) in &lefx.items {
         if let Value::Descriptor(d) = value {
@@ -357,9 +416,10 @@ pub fn map_rest(lefx: &Descriptor, fx: &mut LayerEffects, unmapped: &mut Vec<Str
                 }
             }
             ("GrFl" | "Grdf", Value::Descriptor(d)) => {
-                if let Some(g) = gradient_overlay(d) {
+                if let Some(g) = gradient_overlay(d, ctx) {
                     fx.gradient_overlay = Some(g);
                     struck(unmapped, "gradient overlay");
+                    name_offset(d, ctx, unmapped);
                 }
             }
             // Photoshop CC's repeated effects: the first instance is the
@@ -384,7 +444,18 @@ pub fn map_rest(lefx: &Descriptor, fx: &mut LayerEffects, unmapped: &mut Vec<Str
                 struck(unmapped, &unknown(key));
             }
             ("frameFXMulti", list) => {
-                let mut found = multi(list).into_iter().filter_map(|d| stroke(d, scale));
+                let items = multi(list);
+                let total = items.len();
+                let found: Vec<_> = items
+                    .into_iter()
+                    .filter_map(|d| stroke(d, scale, ctx))
+                    .collect();
+                // W13-B: an instance whose fill does not resolve (a pattern
+                // the file does not carry) is named, not silently skipped.
+                if found.len() < total {
+                    unmapped.push("stroke".into());
+                }
+                let mut found = found.into_iter();
                 if let Some(first) = found.next() {
                     fx.stroke = Some(first);
                     fx.extras.strokes = found.collect();
@@ -400,7 +471,11 @@ pub fn map_rest(lefx: &Descriptor, fx: &mut LayerEffects, unmapped: &mut Vec<Str
                 struck(unmapped, &unknown(key));
             }
             ("gradientFillMulti", list) => {
-                let mut found = multi(list).into_iter().filter_map(gradient_overlay);
+                let items = multi(list);
+                for d in &items {
+                    name_offset(d, ctx, unmapped);
+                }
+                let mut found = items.into_iter().filter_map(|d| gradient_overlay(d, ctx));
                 if let Some(first) = found.next() {
                     fx.gradient_overlay = Some(first);
                     fx.extras.gradient_overlays = found.collect();
@@ -584,7 +659,7 @@ fn midpoint_value(midpoint: f32) -> Value {
 }
 
 /// A `Grdn` object with its own stops: the inverse of [`gradient`].
-fn gradient_descriptor(g: &Gradient) -> Descriptor {
+pub(super) fn gradient_descriptor(g: &Gradient) -> Descriptor {
     let mut d = Descriptor::new("Grdn");
     push(&mut d, "Nm  ", Value::Text("Custom".into()));
     push(&mut d, "GrdF", enumerated_value("GrdF", "CstS"));
@@ -621,9 +696,8 @@ fn gradient_descriptor(g: &Gradient) -> Descriptor {
     d
 }
 
-/// Gradient overlay: the inverse of [`gradient_overlay`]. `offset_px` has
-/// no descriptor form here (see the module notes); the caller names a
-/// non-zero one.
+/// Gradient overlay: the inverse of [`gradient_overlay`], without `Ofst` —
+/// the caller (`super::gradient_overlay_out`) adds it from the box it knows.
 pub(super) fn gradient_overlay_descriptor(g: &GradientOverlayEffect) -> Descriptor {
     let mut d = Descriptor::new("GrFl");
     push(&mut d, "enab", Value::Bool(true));

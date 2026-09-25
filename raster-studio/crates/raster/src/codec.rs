@@ -261,6 +261,32 @@ pub enum ImportFormat {
     Iff,
     /// W11-H: Krita `.kra`, its merged image ([`formats::kra`]).
     Kra,
+    /// W13-C: Adobe DNG, developed to a 16-bit sRGB surface
+    /// ([`formats::raw`]).
+    Dng,
+    /// W13-C: a proprietary camera RAW (CR2, CR3, NEF, ARW, RAF, ORF, RW2,
+    /// ...). **Recognised, refused by name** ([`formats::raw::refusal`]).
+    CameraRaw,
+    /// W13-D: PDF, and an Illustrator `.ai` saved PDF-compatible: pages
+    /// rendered by `hayro` ([`formats::pdf`]); the flat decode is page 1.
+    Pdf,
+    /// W13-D: EPS: its embedded TIFF / WMF / EPSI preview only
+    /// ([`formats::vector_docs`]).
+    Eps,
+    /// W13-D: Paint.NET `.pdn`: its flattened thumbnail only
+    /// ([`formats::vector_docs`]).
+    Pdn,
+    /// W13-D: Sketch: its saved preview PNG ([`formats::vector_docs`]).
+    Sketch,
+    /// W13-D: Adobe XD: its preview PNG ([`formats::vector_docs`]).
+    Xd,
+    /// W13-D: Figma `.fig`: a ZIP-packaged file's thumbnail; a bare
+    /// `fig-kiwi` canvas is refused by name ([`formats::vector_docs`]).
+    Fig,
+    /// W13-D: Windows Metafile, common records ([`formats::metafile`]).
+    Wmf,
+    /// W13-D: Enhanced Metafile, common records ([`formats::metafile`]).
+    Emf,
 }
 
 impl ImportFormat {
@@ -268,7 +294,7 @@ impl ImportFormat {
     ///
     /// Recognises, not decodes — see [`ImportFormat::Psd`] and
     /// [`ImportFormat::is_decodable_here`].
-    pub const ALL: [ImportFormat; 20] = [
+    pub const ALL: [ImportFormat; 30] = [
         ImportFormat::Png,
         ImportFormat::Jpeg,
         ImportFormat::WebP,
@@ -289,6 +315,16 @@ impl ImportFormat {
         ImportFormat::Icns,
         ImportFormat::Iff,
         ImportFormat::Kra,
+        ImportFormat::Dng,
+        ImportFormat::CameraRaw,
+        ImportFormat::Pdf,
+        ImportFormat::Eps,
+        ImportFormat::Pdn,
+        ImportFormat::Sketch,
+        ImportFormat::Xd,
+        ImportFormat::Fig,
+        ImportFormat::Wmf,
+        ImportFormat::Emf,
     ];
 
     /// Short stable name for logs and UI.
@@ -314,6 +350,16 @@ impl ImportFormat {
             ImportFormat::Icns => "ICNS",
             ImportFormat::Iff => "IFF",
             ImportFormat::Kra => "Krita",
+            ImportFormat::Dng => "DNG",
+            ImportFormat::CameraRaw => "camera RAW",
+            ImportFormat::Pdf => "PDF",
+            ImportFormat::Eps => "EPS",
+            ImportFormat::Pdn => "Paint.NET",
+            ImportFormat::Sketch => "Sketch",
+            ImportFormat::Xd => "Adobe XD",
+            ImportFormat::Fig => "Figma",
+            ImportFormat::Wmf => "WMF",
+            ImportFormat::Emf => "EMF",
         }
     }
 
@@ -335,7 +381,11 @@ impl ImportFormat {
     /// gap as a decode failure.
     pub fn is_decodable_here(self) -> bool {
         // W10-F: AVIF is recognised so it can be refused by name.
-        !matches!(self, ImportFormat::Psd | ImportFormat::Avif)
+        // W13-C: a proprietary camera RAW likewise.
+        !matches!(
+            self,
+            ImportFormat::Psd | ImportFormat::Avif | ImportFormat::CameraRaw
+        )
     }
 
     /// Match a file extension, case-insensitively and without a leading dot.
@@ -356,7 +406,7 @@ impl ImportFormat {
             "ico" | "cur" => ImportFormat::Ico,
             "tga" | "targa" | "icb" | "vda" | "vst" => ImportFormat::Tga,
             "psd" | "psb" => ImportFormat::Psd,
-            "svg" => ImportFormat::Svg,
+            "svg" | "svgz" => ImportFormat::Svg,
             "ppm" | "pgm" | "pbm" | "pnm" => ImportFormat::Pnm,
             "dds" => ImportFormat::Dds,
             "xcf" => ImportFormat::Xcf,
@@ -367,6 +417,18 @@ impl ImportFormat {
             "icns" => ImportFormat::Icns,
             "iff" | "ilbm" | "lbm" => ImportFormat::Iff,
             "kra" => ImportFormat::Kra,
+            "dng" => ImportFormat::Dng,
+            "cr2" | "cr3" | "nef" | "nrw" | "arw" | "srf" | "sr2" | "raf" | "orf" | "rw2"
+            | "pef" | "srw" => ImportFormat::CameraRaw,
+            // W13-D.
+            "pdf" | "ai" => ImportFormat::Pdf,
+            "eps" | "epsf" | "epsi" => ImportFormat::Eps,
+            "pdn" => ImportFormat::Pdn,
+            "sketch" => ImportFormat::Sketch,
+            "xd" => ImportFormat::Xd,
+            "fig" => ImportFormat::Fig,
+            "wmf" => ImportFormat::Wmf,
+            "emf" => ImportFormat::Emf,
             _ => return None,
         })
     }
@@ -410,7 +472,17 @@ impl ImportFormat {
             | ImportFormat::Hdr
             | ImportFormat::Icns
             | ImportFormat::Iff
-            | ImportFormat::Kra => return None,
+            | ImportFormat::Kra
+            | ImportFormat::Dng
+            | ImportFormat::CameraRaw
+            | ImportFormat::Pdf
+            | ImportFormat::Eps
+            | ImportFormat::Pdn
+            | ImportFormat::Sketch
+            | ImportFormat::Xd
+            | ImportFormat::Fig
+            | ImportFormat::Wmf
+            | ImportFormat::Emf => return None,
         })
     }
 
@@ -428,6 +500,16 @@ impl ImportFormat {
                 | ImportFormat::Icns
                 | ImportFormat::Iff
                 | ImportFormat::Kra
+                | ImportFormat::Dng
+                | ImportFormat::CameraRaw
+                | ImportFormat::Pdf
+                | ImportFormat::Eps
+                | ImportFormat::Pdn
+                | ImportFormat::Sketch
+                | ImportFormat::Xd
+                | ImportFormat::Fig
+                | ImportFormat::Wmf
+                | ImportFormat::Emf
         )
     }
 }
@@ -453,6 +535,16 @@ fn own_format<R: BufRead + Seek>(
     let mut head = [0u8; 32];
     let filled = read_head(source, &mut head)?;
     source.seek(std::io::SeekFrom::Start(start))?;
+    // W13-C: a TIFF-shaped file named as a vendor RAW (`.nef`, `.arw`, ...)
+    // whose raw IFD the sniff did not reach goes to the RAW reader, which
+    // refuses it by name, rather than to `image`, which would open the
+    // embedded preview (or fail) as if it were the photograph. This runs
+    // only when the caller passes the extension as a hint (the path
+    // routes); a bytes-only decode sniffs content and opens such a file as
+    // the TIFF it is.
+    if hinted == ImportFormat::CameraRaw && formats::raw::might_be_raw(&head[..filled]) {
+        return Ok(Some(hinted));
+    }
     let other =
         image::guess_format(&head[..filled]).is_ok() || head[..filled].starts_with(&PSD_SIGNATURE);
     Ok((!other).then_some(hinted))
@@ -1173,6 +1265,13 @@ pub enum ExportFormat {
     /// (so a transparent image stays large). No ICC. [`ExportFormat::WebP`]
     /// stays the lossless choice.
     WebPLossy(u8),
+    /// W13-L: MP4 video at the given quality (**`1..=100`**): AV1 through
+    /// `rav1e` (pure Rust) in an ISO BMFF container written by
+    /// [`formats::mp4`]; 8-bit 4:2:0, no alpha (flattened onto white), at
+    /// least 16x16. A still export writes one frame shown for a second; an
+    /// animated export (`raster::animation::encode_animation`) writes every
+    /// frame with its own duration. Write-only: there is no video decoder.
+    Mp4(u8),
 }
 
 /// The square sizes an [`ExportFormat::Ico`] file carries, smallest first.
@@ -1214,6 +1313,9 @@ impl ExportFormat {
     /// kept out of [`ExportFormat::ALL`]: lossy WebP (VP8).
     pub const LOSSY_READ_BACK: [ExportFormat; 1] = [ExportFormat::WebPLossy(80)];
 
+    /// W13-L: video formats, written only: MP4 (AV1).
+    pub const VIDEO: [ExportFormat; 1] = [ExportFormat::Mp4(80)];
+
     /// W10-F: every format the exporter can write: [`ExportFormat::ALL`]
     /// followed by [`ExportFormat::WRITE_ONLY`] and (W11-H)
     /// [`ExportFormat::MIN_TWO_PIXELS`].
@@ -1223,13 +1325,14 @@ impl ExportFormat {
             .chain(&Self::WRITE_ONLY)
             .chain(&Self::MIN_TWO_PIXELS)
             .chain(&Self::LOSSY_READ_BACK)
+            .chain(&Self::VIDEO)
             .copied()
             .collect()
     }
 
     /// W10-F: whether this crate can decode what the format writes.
     pub fn reads_back(self) -> bool {
-        !matches!(self, ExportFormat::Avif(_))
+        !matches!(self, ExportFormat::Avif(_) | ExportFormat::Mp4(_))
     }
 
     /// The inclusive range a JPEG quality value must fall in.
@@ -1253,6 +1356,9 @@ impl ExportFormat {
             ),
             ExportFormat::Avif(q) if !Self::JPEG_QUALITY_RANGE.contains(&q) => Err(
                 CodecError::InvalidParameter(format!("AVIF quality must be 1..=100, got {q}")),
+            ),
+            ExportFormat::Mp4(q) if !Self::JPEG_QUALITY_RANGE.contains(&q) => Err(
+                CodecError::InvalidParameter(format!("MP4 quality must be 1..=100, got {q}")),
             ),
             ExportFormat::WebPLossy(q) if !Self::JPEG_QUALITY_RANGE.contains(&q) => {
                 Err(CodecError::InvalidParameter(format!(
@@ -1285,9 +1391,11 @@ impl ExportFormat {
             | ExportFormat::Jxl
             | ExportFormat::WebPLossy(_) => AlphaSupport::Full,
             ExportFormat::Gif => AlphaSupport::Binary,
-            ExportFormat::Jpeg(_) | ExportFormat::Ppm | ExportFormat::Pgm | ExportFormat::Pbm => {
-                AlphaSupport::None
-            }
+            ExportFormat::Jpeg(_)
+            | ExportFormat::Ppm
+            | ExportFormat::Pgm
+            | ExportFormat::Pbm
+            | ExportFormat::Mp4(_) => AlphaSupport::None,
         }
     }
 
@@ -1335,6 +1443,7 @@ impl ExportFormat {
             ExportFormat::Exr => "exr",
             ExportFormat::Jxl => "jxl",
             ExportFormat::WebPLossy(_) => "webp",
+            ExportFormat::Mp4(_) => "mp4",
         }
     }
 
@@ -1358,6 +1467,7 @@ impl ExportFormat {
             ExportFormat::Exr => "image/x-exr",
             ExportFormat::Jxl => "image/jxl",
             ExportFormat::WebPLossy(_) => "image/webp",
+            ExportFormat::Mp4(_) => "video/mp4",
         }
     }
 }
@@ -1650,6 +1760,16 @@ pub fn encode_into<W: Write + Seek>(
             opts.quality = quality;
             let bytes = tiny_webp::encode_rgba(rgba, width, height, &opts)
                 .map_err(|e| CodecError::InvalidParameter(format!("lossy WebP: {e}")))?;
+            out.write_all(&bytes).map_err(image::ImageError::IoError)?;
+        }
+        // W13-L: a still as a one-frame MP4 (AV1), shown for one second.
+        ExportFormat::Mp4(quality) => {
+            let rgba = pixels.require_rgba8(format)?;
+            let frame = formats::mp4::Mp4Frame {
+                rgba8: rgba,
+                duration_ms: 1000,
+            };
+            let bytes = formats::mp4::encode(width, height, &[frame], quality)?;
             out.write_all(&bytes).map_err(image::ImageError::IoError)?;
         }
     }
@@ -2127,6 +2247,9 @@ mod tests {
                     let mean = total / px.len() as i64;
                     assert!(mean <= 64, "{format:?} drifted by {mean} on average");
                 }
+                // W13-L: MP4 is write-only (no video decoder), so not in
+                // `ALL`; `formats::mp4` reads its box structure back.
+                ExportFormat::Mp4(_) => unreachable!("MP4 is not in ExportFormat::ALL"),
                 // Lossy and alpha-free.
                 ExportFormat::Jpeg(_) => {
                     for (got, want) in decoded
@@ -2311,13 +2434,16 @@ mod tests {
         // containers this module decodes; PSD is recognised here and decoded
         // by `app-shell`, and AVIF is recognised and refused by name.
         // W11-H: EXR, HDR, ICNS, IFF and KRA in `formats` too.
-        assert_eq!(ImportFormat::ALL.len(), 20);
+        // W13-C: + DNG (decodable) and camera RAW (refused by name).
+        // W13-D: + PDF, EPS, PDN, Sketch, XD, FIG, WMF and EMF, all eight
+        // decodable (a bare FIG is refused by its reader, by name).
+        assert_eq!(ImportFormat::ALL.len(), 20 + 2 + 8);
         assert_eq!(
             ImportFormat::ALL
                 .iter()
                 .filter(|f| f.is_decodable_here())
                 .count(),
-            18
+            18 + 1 + 8
         );
     }
 

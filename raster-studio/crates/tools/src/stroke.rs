@@ -321,14 +321,14 @@ fn premul(c: [f32; 4]) -> [f32; 4] {
 }
 
 /// Perceptual luminance of a premultiplied pixel, on the display curve.
-fn encoded_luma(px: [f32; 4]) -> f32 {
+pub(crate) fn encoded_luma(px: [f32; 4]) -> f32 {
     let s = unpremultiply(px);
     linear_to_srgb(linear_srgb_luminance([s[0], s[1], s[2]]).clamp(0.0, 1.0))
 }
 
 /// How close two premultiplied pixels are, `1.0` identical and `0.0` further
 /// apart than `tolerance`.
-fn similarity(a: [f32; 4], b: [f32; 4], tolerance: f32) -> f32 {
+pub(crate) fn similarity(a: [f32; 4], b: [f32; 4], tolerance: f32) -> f32 {
     let t = tolerance.max(1e-4);
     let sa = unpremultiply(a);
     let sb = unpremultiply(b);
@@ -350,6 +350,15 @@ pub struct StrokeSources<'a> {
     /// W11-I: Sponge "Vibrance" — a Saturate dab boosts a dull colour more
     /// than an already-saturated one, so vivid colours do not clip.
     pub vibrance: bool,
+    /// W13-H: the Colour Replacement / Background Eraser / Sharpen options
+    /// ([`crate::stroke_options::RetouchOptions`]).
+    pub retouch: crate::stroke_options::RetouchOptions,
+    /// W13-H: the dabs being rendered, which Continuous sampling reads under
+    /// and Contiguous / Find Edges flood from.
+    pub dabs: &'a [Dab],
+    /// W13-H: the premultiplied foreground at the press, for the Background
+    /// Eraser's Protect Foreground Colour.
+    pub foreground: [f32; 4],
 }
 
 /// W11-I: Photoshop's Protect Tones. `adjusted` is what the plain dodge or
@@ -655,13 +664,15 @@ fn local_aux(
         StrokeOp::Sharpen { amount, radius } => {
             let s = radius.max(0.1);
             let a = area(gaussian_reach(s));
-            let sharp = unsharp_mask(
-                &crop(plane, origin, a)?,
-                amount.max(0.0),
-                s,
-                0.0,
-                EdgeMode::Clamp,
-            );
+            let read = crop(plane, origin, a)?;
+            let sharp = unsharp_mask(&read, amount.max(0.0), s, 0.0, EdgeMode::Clamp);
+            // W13-H: Protect Detail. The 3x3 clamp reads one pixel past the
+            // window, well inside the op's reach.
+            let sharp = if sources.retouch.protect_detail {
+                crate::stroke_options::protect_detail(&read, &sharp)?
+            } else {
+                sharp
+            };
             crop(&sharp, origin_of(a), window)
         }
         StrokeOp::SpotHealing => {
@@ -995,11 +1006,36 @@ fn prepare(
         },
         StrokeOp::ColorReplacement { color, tolerance } => {
             let repl = premul(*color);
-            let gate = collect_gate(patch, |dst| similarity(dst, base_color, *tolerance));
+            // W13-H: Sampling, Limits and Anti-alias decide the gate.
+            let opts = &sources.retouch;
+            let gate = crate::stroke_options::region_gate(
+                patch,
+                covered,
+                base_color,
+                *tolerance,
+                opts,
+                opts.antialias,
+                None,
+                sources.dabs,
+            );
+            // W13-H: Hue / Saturation / Luminosity take that component of
+            // the foreground through the layer blend of the same name.
+            let blend = match opts.replace_mode {
+                crate::stroke_options::ReplaceMode::Hue => Some(BlendMode::Hue),
+                crate::stroke_options::ReplaceMode::Saturation => Some(BlendMode::Saturation),
+                crate::stroke_options::ReplaceMode::Luminosity => Some(BlendMode::Luminosity),
+                crate::stroke_options::ReplaceMode::Color => None,
+            };
             // Keep the destination's own luminance so shading and texture
             // survive the recolour — replacing the flat colour is what makes
             // this different from painting.
             let aux = mapped(&|dst, _| {
+                if let Some(mode) = blend {
+                    let d = unpremultiply(dst);
+                    let s = unpremultiply(repl);
+                    let b = mode.blend_rgb([d[0], d[1], d[2]], [s[0], s[1], s[2]]);
+                    return premultiply([b[0], b[1], b[2], d[3]]);
+                }
                 let l_dst = linear_srgb_luminance(unpremultiply(dst)[..3].try_into().unwrap());
                 let s = unpremultiply(repl);
                 let l_src = linear_srgb_luminance([s[0], s[1], s[2]]).max(1e-4);
@@ -1014,9 +1050,20 @@ fn prepare(
         }
         StrokeOp::BackgroundErase { tolerance } => Prepared {
             aux: None,
-            gate: Some(collect_gate(patch, |dst| {
-                similarity(dst, base_color, *tolerance)
-            })),
+            // W13-H: Sampling, Limits and Protect Foreground Colour.
+            gate: Some(crate::stroke_options::region_gate(
+                patch,
+                covered,
+                base_color,
+                *tolerance,
+                &sources.retouch,
+                true,
+                sources
+                    .retouch
+                    .protect_foreground
+                    .then_some(sources.foreground),
+                sources.dabs,
+            )),
             blend: Blend::Erase,
         },
         StrokeOp::CloneStamp => {
@@ -1087,17 +1134,26 @@ fn prepare(
             gate: None,
             blend: Blend::Lerp,
         },
-        StrokeOp::Sharpen { amount, radius } => Prepared {
-            aux: Some(unsharp_mask(
+        StrokeOp::Sharpen { amount, radius } => {
+            let sharp = unsharp_mask(
                 patch.buffer(),
                 amount.max(0.0),
                 radius.max(0.1),
                 0.0,
                 EdgeMode::Clamp,
-            )),
-            gate: None,
-            blend: Blend::Lerp,
-        },
+            );
+            // W13-H: Protect Detail.
+            let sharp = if sources.retouch.protect_detail {
+                crate::stroke_options::protect_detail(patch.buffer(), &sharp)?
+            } else {
+                sharp
+            };
+            Prepared {
+                aux: Some(sharp),
+                gate: None,
+                blend: Blend::Lerp,
+            }
+        }
         StrokeOp::Smudge { .. } => {
             // Handled by `apply_smudge`; never reaches the plane compositor.
             Prepared {
@@ -1171,10 +1227,6 @@ fn prepare(
             }
         }
     })
-}
-
-fn collect_gate(patch: &ColorPatch, f: impl Fn([f32; 4]) -> f32) -> Vec<f32> {
-    patch.buffer().pixels().iter().map(|p| f(*p)).collect()
 }
 
 /// The source pixel a source-over dab lays down once the paint blend mode
@@ -1793,6 +1845,19 @@ pub struct StrokeTool {
     /// the straight line a Shift-click paints from. `None` until a stroke
     /// has been released.
     line_end: Option<Vec2>,
+    /// W13-H: the symmetry every dab is mirrored by ([`crate::symmetry`]);
+    /// set through [`Tool::set_setting`] on the Brush, Pencil and Eraser.
+    pub symmetry: crate::symmetry::Symmetry,
+    /// W13-H: the symmetry's centre, the canvas centre in paint-target
+    /// space, taken at the press.
+    sym_center: Vec2,
+    /// W13-H: the Eraser's Mode (Brush, Pencil, Block).
+    pub eraser_mode: crate::stroke_options::EraserMode,
+    /// W13-H: the Colour Replacement / Background Eraser / Sharpen options.
+    pub retouch: crate::stroke_options::RetouchOptions,
+    /// W13-H: the premultiplied foreground at the press (Protect
+    /// Foreground Colour).
+    press_fg: [f32; 4],
 }
 
 /// W7-I: the Spot Healing Brush's Type option key (a Choice: 0 Proximity
@@ -2054,6 +2119,11 @@ impl StrokeTool {
             vibrance: false,
             sampler: None,
             line_end: None,
+            symmetry: crate::symmetry::Symmetry::default(),
+            sym_center: Vec2::ZERO,
+            eraser_mode: crate::stroke_options::EraserMode::Brush,
+            retouch: crate::stroke_options::RetouchOptions::default(),
+            press_fg: [0.0; 4],
         }
     }
 
@@ -2201,6 +2271,37 @@ impl StrokeTool {
         }
     }
 
+    /// W13-H: the dabs a stroke stamps — the emitter's, each followed by its
+    /// mirror images under [`Self::symmetry`], and for the Eraser's Block
+    /// snapped to the pixel grid and kept square to it. The release and the
+    /// live preview both render these.
+    fn stamped<'a>(&self, raw: &'a [Dab]) -> std::borrow::Cow<'a, [Dab]> {
+        let mut dabs = self.symmetry.expand(raw, self.sym_center);
+        if self.is_block_eraser() {
+            for d in dabs.to_mut() {
+                d.center = d.center.round();
+                d.angle = 0.0;
+            }
+        }
+        dabs
+    }
+
+    /// W13-H: `true` for the Eraser in Block mode.
+    fn is_block_eraser(&self) -> bool {
+        matches!(self.op, StrokeOp::Erase)
+            && self.eraser_mode == crate::stroke_options::EraserMode::Block
+    }
+
+    /// W13-H: the opacity the stroke lands at — full for the Block, which
+    /// Photoshop draws at full strength whatever the options bar holds.
+    fn stroke_opacity(&self) -> f32 {
+        if self.is_block_eraser() {
+            1.0
+        } else {
+            self.settings.opacity
+        }
+    }
+
     /// Turn the finished stroke into one command.
     fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
         self.previewed = 0;
@@ -2209,7 +2310,8 @@ impl StrokeTool {
         let Some(emitter) = self.emitter.take() else {
             return Ok(());
         };
-        let dabs = emitter.dabs();
+        let stamped = self.stamped(emitter.dabs());
+        let dabs: &[Dab] = &stamped;
         if dabs.is_empty() {
             return Ok(());
         }
@@ -2342,7 +2444,7 @@ impl StrokeTool {
                             &mut patch,
                             &buf,
                             value,
-                            self.settings.opacity,
+                            self.stroke_opacity(),
                             env.selection,
                         );
                     }
@@ -2384,6 +2486,9 @@ impl StrokeTool {
                         pattern: env.pattern,
                         protect_tones: self.protect_tones,
                         vibrance: self.vibrance,
+                        retouch: self.retouch,
+                        dabs,
+                        foreground: self.press_fg,
                     };
                     apply_stroke(
                         &mut patch,
@@ -2392,7 +2497,7 @@ impl StrokeTool {
                         &sources,
                         self.base_color,
                         StrokeBlend {
-                            opacity: self.settings.opacity,
+                            opacity: self.stroke_opacity(),
                             mode: self.blend_mode,
                         },
                         env.selection,
@@ -2519,6 +2624,9 @@ impl StrokeTool {
                     pattern: env.pattern,
                     protect_tones: self.protect_tones,
                     vibrance: self.vibrance,
+                    retouch: self.retouch,
+                    dabs,
+                    foreground: self.press_fg,
                 };
                 let bounds = intersect(patch.rect(), clip).ok_or(ToolError::Degenerate)?;
                 let mut writes = Vec::new();
@@ -2644,7 +2752,8 @@ impl StrokeTool {
         let Some(emitter) = &self.emitter else {
             return Ok(None);
         };
-        let dabs = emitter.dabs();
+        let stamped = self.stamped(emitter.dabs());
+        let dabs: &[Dab] = &stamped;
         let from = self.previewed.min(dabs.len());
         if from == dabs.len() {
             return Ok(None);
@@ -2662,7 +2771,14 @@ impl StrokeTool {
             base: &*ctx.tiles,
             stored: HashMap::new(),
         };
-        let replace = from == 0;
+        // W13-H: a Continuous or Contiguous tolerance stroke is decided by
+        // dabs and pixels away from each tile, so every sample re-answers
+        // the whole stroke, exactly as the release will.
+        let regional = matches!(
+            self.op,
+            StrokeOp::ColorReplacement { .. } | StrokeOp::BackgroundErase { .. }
+        ) && self.retouch.is_regional();
+        let replace = from == 0 || regional;
         let mut tiles = Vec::new();
         let answer = |side: &mut SideStore<'_>, delta: &TileDelta, coord: TileCoord| match delta
             .get(coord)
@@ -2903,6 +3019,19 @@ impl Tool for StrokeTool {
             }
             _ => {}
         }
+        // W13-H: Background Swatch measures against the background colour
+        // instead; Protect Foreground Colour against the foreground.
+        if self.retouch.sampling == crate::stroke_options::Sampling::BackgroundSwatch {
+            self.base_color = premul(ctx.background);
+        }
+        self.press_fg = premul(ctx.foreground);
+        // W13-H: the symmetry axis runs through the canvas centre, taken
+        // into the paint target's space like every sample.
+        let canvas = ctx.canvas;
+        self.sym_center = to_layer.transform_point2(Vec2::new(
+            canvas.x as f32 + canvas.width as f32 * 0.5,
+            canvas.y as f32 + canvas.height as f32 * 0.5,
+        ));
         // W9-D: a stroke sampling the composite holds the shell's sampler
         // from its press to its release; refused when none was lent.
         self.sampler = if self.samples_composite() {
@@ -2910,7 +3039,13 @@ impl Tool for StrokeTool {
         } else {
             None
         };
-        let mut emitter = DabEmitter::begin(self.settings, start, event.pressure)?;
+        // W13-H: the Eraser's Pencil and Block modes stamp their own brush.
+        let press = if matches!(self.op, StrokeOp::Erase) {
+            self.eraser_mode.press_settings(self.settings)
+        } else {
+            self.settings
+        };
+        let mut emitter = DabEmitter::begin(press, start, event.pressure)?;
         if line_from.is_some() {
             emitter.extend(pos, event.pressure)?;
         }
@@ -3070,6 +3205,11 @@ impl Tool for StrokeTool {
             let brush = brush.validated()?;
             self.set_brush(brush);
             return Ok(());
+        }
+
+        // W13-H: symmetry, the Eraser's Mode and the retouching options.
+        if let Some(answer) = self.w13h_setting(key, setting) {
+            return answer;
         }
 
         match (key, setting, &mut self.op) {

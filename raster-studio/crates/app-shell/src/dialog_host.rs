@@ -435,6 +435,10 @@ pub enum ActiveDialog {
     ShortcutSheet(Box<ui::dialogs::ShortcutSheet>),
     /// W11-G: Help > Search Commands, over the rows enabled at open time.
     CommandSearch(Box<ui::dialogs::CommandSearchDialog>),
+    /// W13-F: Edit > Convert to Profile..., Image > Reduce Colors... /
+    /// Wavelet Decompose... Each confirmation is parked by
+    /// `crate::menu_bridge::menu_w13f` for its own menu arm.
+    W13f(Box<crate::menu_bridge::menu_w13f::W13fDialog>),
 }
 
 impl ActiveDialog {
@@ -504,7 +508,9 @@ impl ActiveDialog {
             | Self::SliceOptions(_)
             // W11-G: answered by `DialogHost::ui` (dismissed / run).
             | Self::ShortcutSheet(_)
-            | Self::CommandSearch(_) => DialogOutcome::Open,
+            | Self::CommandSearch(_)
+            // W13-F: driven by `menu_w13f::W13fDialog::drive`.
+            | Self::W13f(_) => DialogOutcome::Open,
         }
     }
 
@@ -536,6 +542,7 @@ impl ActiveDialog {
                 | Self::SliceOptions(_)
                 | Self::ShortcutSheet(_)
                 | Self::CommandSearch(_)
+                | Self::W13f(_)
         )
     }
 }
@@ -999,6 +1006,17 @@ impl DialogHost {
             // W10-E: Batch / Convert Formats, Export Color Lookup / PDF,
             // File Info (the XMP editor), Variables, Vectorize Bitmap; `None`
             // falls through to the arm, which says why.
+            // W13-F: Convert to Profile, Reduce Colors, Wavelet Decompose;
+            // `None` (no document) falls through to the arm, which says why.
+            action if crate::menu_bridge::menu_w13f::opens_dialog(action) => {
+                match crate::menu_bridge::menu_w13f::dialog_for(action, editor) {
+                    Some(dialog) => {
+                        self.open(ActiveDialog::W13f(Box::new(dialog)));
+                        true
+                    }
+                    None => false,
+                }
+            }
             action if crate::file_extras::opens_dialog(action) => {
                 match crate::file_extras::dialog_for(action, editor) {
                     Some(dialog) => {
@@ -1280,6 +1298,18 @@ impl DialogHost {
         match self.active_for_test() {
             ActiveDialog::FileExtras(dialog) => dialog,
             other => panic!("the active dialog is {other:?}, not a W10-E dialog"),
+        }
+    }
+
+    /// W13-F: the open Convert to Profile / Reduce Colors / Wavelet
+    /// Decompose dialog, for host-path tests.
+    #[cfg(test)]
+    pub(crate) fn active_w13f_for_test(
+        &mut self,
+    ) -> &mut crate::menu_bridge::menu_w13f::W13fDialog {
+        match self.active_for_test() {
+            ActiveDialog::W13f(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not a W13-F dialog"),
         }
     }
 
@@ -1847,6 +1877,13 @@ impl DialogHost {
         }
         // W10-H: so do Bitmap, Duotone, Apply Image and Calculations.
         if let ActiveDialog::ImageGap(dialog) = active {
+            if dialog.drive(ctx, out) {
+                self.active = None;
+            }
+            return;
+        }
+        // W13-F: and Convert to Profile, Reduce Colors, Wavelet Decompose.
+        if let ActiveDialog::W13f(dialog) = active {
             if dialog.drive(ctx, out) {
                 self.active = None;
             }
@@ -2585,7 +2622,13 @@ fn export_as_dialog(editor: &crate::Editor, format: raster::ExportFormat) -> Opt
     dialog.set_color_mode(open.document.meta.color_mode);
     // W9-J: the Animated option is offered only when the document has `_a_`
     // frame layers, and its caption names how many.
-    dialog.set_animation_frames(crate::import::animation_frame_layers(&open.document).len());
+    // W13-L: in Timeline mode, the timeline's frames, and the caption says so.
+    if crate::timeline::exports_timeline(&open.document) {
+        let tl = &open.document.timeline;
+        dialog.set_timeline_frames(tl.frame_times().len(), tl.fps, tl.duration_ms);
+    } else {
+        dialog.set_animation_frames(crate::import::animation_frame_layers(&open.document).len());
+    }
     // W10-E: File Info's XMP and the source's EXIF, embedded while the
     // dialog's Metadata box stays ticked.
     dialog.set_metadata(crate::file_extras::export_metadata(open));

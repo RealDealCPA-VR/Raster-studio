@@ -32,3 +32,9 @@ pub mod text_styles;
 pub mod tool_presets;
 // W11-I: Window > CSS.
 pub mod css;
+// W13-N: Window > Styles, Document Info, Guide Guy.
+pub mod doc_info;
+pub mod guide_guy;
+pub mod styles;
+#[cfg(test)]
+mod w13n_panel_tests;

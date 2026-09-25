@@ -598,7 +598,9 @@ mod tests {
                 "resolution",
                 "overlay",
                 "straighten_line",
-                "delete_cropped"
+                "delete_cropped",
+                // W13-I.
+                "content_aware"
             ]
         );
         let spec = ToolOptions::spec_for_test(ToolId::Crop, "ratio").unwrap();
@@ -1296,7 +1298,14 @@ mod type_reaches_the_engine_tests {
     /// 16:9 the bar is the preset, the overlay and the two switches.
     #[test]
     fn the_crop_size_fields_show_only_under_the_w_x_h_x_resolution_preset() {
-        let without = ["ratio", "overlay", "straighten_line", "delete_cropped"];
+        let without = [
+            "ratio",
+            "overlay",
+            "straighten_line",
+            "delete_cropped",
+            // W13-I.
+            "content_aware",
+        ];
         assert_eq!(crop_bar_keys(None), without, "Free (default)");
         assert_eq!(crop_bar_keys(Some(4)), without, "16:9");
         assert_eq!(
@@ -1309,7 +1318,9 @@ mod type_reaches_the_engine_tests {
                 "resolution",
                 "overlay",
                 "straighten_line",
-                "delete_cropped"
+                "delete_cropped",
+                // W13-I.
+                "content_aware"
             ],
             "W x H x Resolution"
         );

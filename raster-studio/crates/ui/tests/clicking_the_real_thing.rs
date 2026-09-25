@@ -309,13 +309,17 @@ fn a_bare_letter_switches_tools_and_a_modified_one_does_not() {
 }
 
 #[test]
-fn pressing_a_tool_letter_twice_cycles_to_the_next_variant() {
+fn pressing_a_tool_letter_twice_keeps_the_tool_and_shift_steps_to_the_next_variant() {
+    // W13-M: Photopea's rule — the bare letter again keeps the tool, and
+    // Shift + the letter steps to the next variant.
     let mut h = Harness::new();
     let group = tools::registry::by_shortcut('m');
     assert!(group.len() > 1);
     h.press(egui::Key::M, egui::Modifiers::default());
     assert_eq!(h.workspace.palette.active(), group[0]);
-    let intents = h.press(egui::Key::M, egui::Modifiers::default());
+    h.press(egui::Key::M, egui::Modifiers::default());
+    assert_eq!(h.workspace.palette.active(), group[0]);
+    let intents = h.press(egui::Key::M, egui::Modifiers::SHIFT);
     assert_eq!(h.workspace.palette.active(), group[1]);
     assert!(intents.contains(&Intent::SelectTool(group[1])));
 }

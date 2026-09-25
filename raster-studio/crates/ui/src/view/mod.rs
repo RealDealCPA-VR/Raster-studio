@@ -23,6 +23,8 @@ use design::{
 use egui::{Align, Layout, Response, RichText, Sense, Stroke, Ui, Vec2};
 
 mod docks;
+// W13-I: the Eyedropper's new-over-old sampling ring.
+pub mod eyedropper_ring;
 mod menu_bar;
 mod status;
 mod toolbar;

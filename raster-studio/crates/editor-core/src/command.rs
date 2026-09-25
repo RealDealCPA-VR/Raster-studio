@@ -566,6 +566,31 @@ pub enum Command {
     SetSlices {
         slices: Vec<crate::slices::DocumentSlice>,
     },
+    /// W13-L: replace the document's video timeline wholesale (Timeline
+    /// mode, length, frame rate, layer bars and keyframes). The inverse
+    /// carries the previous timeline. The playhead is kept as the document
+    /// has it (clamped to the length), on apply and on undo alike: moving it
+    /// is not an edit (`timeline::seek`). A record, not pixels: it
+    /// dirties nothing by itself; the layer edits that show the frame at the
+    /// playhead ride beside it in a [`Command::Transaction`]
+    /// ([`crate::timeline::set_timeline`]).
+    ///
+    /// # Wire format
+    ///
+    /// Appended after every other variant and purely additive.
+    SetTimeline {
+        timeline: Box<crate::timeline::DocumentTimeline>,
+    },
+    /// W13-F: re-tag the document with a colour profile (Edit > Assign
+    /// Profile, and the tag half of Convert to Profile). The inverse carries
+    /// the tag that was there, so the profile rides the same undo step as
+    /// the pixel rewrite it accompanies. No pixel number changes, but every
+    /// pixel is shown through the new profile: the reach is the whole canvas.
+    ///
+    /// # Wire format
+    ///
+    /// Appended after every other variant and purely additive.
+    SetMetaColorSpace { space: color::ColorSpace },
 }
 
 /// The class of a layer kind, as a word an error message can use.
@@ -1286,6 +1311,23 @@ impl Command {
                 Ok(Command::SetSlices { slices: previous })
             }
 
+            Command::SetTimeline { timeline } => {
+                // W13-L: the playhead is not an edit, so applying or undoing
+                // a timeline edit leaves it where the user put it (clamped
+                // to the length); `timeline::seek` is what moves it.
+                let mut next = timeline.as_ref().clone();
+                next.current_ms = doc.timeline.current_ms.min(next.duration_ms);
+                let previous = std::mem::replace(&mut doc.timeline, next);
+                Ok(Command::SetTimeline {
+                    timeline: Box::new(previous),
+                })
+            }
+
+            Command::SetMetaColorSpace { space } => {
+                let previous = std::mem::replace(&mut doc.meta.color_space, space.clone());
+                Ok(Command::SetMetaColorSpace { space: previous })
+            }
+
             Command::SetSavedSelection {
                 index,
                 name,
@@ -1353,6 +1395,8 @@ impl Command {
             Command::SetDocumentExtras { .. } => "Edit Document Records".into(),
             Command::SetSavedSelection { .. } => "Edit Saved Selection".into(),
             Command::SetSlices { .. } => "Edit Slices".into(),
+            Command::SetTimeline { .. } => "Edit Timeline".into(),
+            Command::SetMetaColorSpace { .. } => "Assign Profile".into(),
         }
     }
 }
@@ -1710,7 +1754,8 @@ impl Command {
             // W10-B: comps, notes and styles are records, not pixels.
             | Command::SetDocumentExtras { .. }
             | Command::SetSavedSelection { .. }
-            | Command::SetSlices { .. } => DirtyReach::nothing(),
+            | Command::SetSlices { .. }
+            | Command::SetTimeline { .. } => DirtyReach::nothing(),
             // One layer's whole extent, before and after. A create has no
             // "before" and a delete has no "after"; the shell's two-sided
             // query handles both by finding the layer missing on one side.
@@ -1725,7 +1770,9 @@ impl Command {
             // pixels exist at all. No rectangle is the honest answer.
             Command::MoveLayer { .. }
             | Command::SetCanvasSize { .. }
-            | Command::ResampleImage { .. } => DirtyReach::everything(),
+            | Command::ResampleImage { .. }
+            // W13-F: the same numbers shown through another profile.
+            | Command::SetMetaColorSpace { .. } => DirtyReach::everything(),
             Command::Transaction { commands, .. } => {
                 let mut out = DirtyReach::nothing();
                 for c in commands {

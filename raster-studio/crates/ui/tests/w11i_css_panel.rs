@@ -125,7 +125,14 @@ fn window_css_opens_the_panel_and_draws_its_body() {
         "a closed CSS panel draws nothing"
     );
 
-    assert_eq!(PanelId::ALL.last(), Some(&PanelId::Css), "appended last");
+    // Appended after the W10-B panels (W13-N's panels follow it): a saved
+    // dock stores placements by position, so its place never moves.
+    let at = PanelId::ALL.iter().position(|p| *p == PanelId::Css);
+    assert_eq!(
+        at.map(|i| PanelId::ALL[i - 1]),
+        Some(PanelId::ParagraphStyles),
+        "appended after Paragraph Styles"
+    );
     let window = ui::menu::menu_bar(0)
         .into_iter()
         .find(|m| m.title == "Window")

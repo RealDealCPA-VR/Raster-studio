@@ -103,6 +103,12 @@ pub struct MoveTool {
     start: Option<Vec2>,
     current: Vec2,
     layer: Option<LayerId>,
+    /// W13-A: Alt was held at the press (Photopea's Alt+drag): the drag
+    /// moves a COPY. With a pixel selection the tool floats a copy of the
+    /// selected pixels and leaves the originals; without one the shell
+    /// duplicates the layer(s) the tool's move names and moves the copies
+    /// (`app-shell` `move_duplicate`), either way as one undo step.
+    copy: bool,
 }
 
 impl Default for MoveTool {
@@ -118,11 +124,130 @@ impl Default for MoveTool {
             start: None,
             current: Vec2::ZERO,
             layer: None,
+            copy: false,
         }
     }
 }
 
 impl MoveTool {
+    /// W13-A: whether the running drag was begun with Alt held, so it moves
+    /// a copy rather than the original.
+    pub fn is_copying(&self) -> bool {
+        self.copy
+    }
+
+    /// W13-A: Alt+drag with a pixel selection: a COPY of the selected pixels
+    /// of the active layer is laid down `step` (whole document pixels) away,
+    /// over what was there, and the originals stay put. The marching ants
+    /// travel with the copy. One transaction, labelled `Duplicate Selection`
+    /// (ONE undo step). Nearest-sample, like the plain move's whole-pixel
+    /// step: a translation of an untransformed layer copies bytes exactly.
+    pub fn copy_selected_pixels(
+        ctx: &mut ToolContext<'_>,
+        step: Vec2,
+    ) -> Result<Command, ToolError> {
+        let selection = ctx.selection.clone();
+        let (min, max) = selection.bounds().ok_or(ToolError::Degenerate)?;
+        ctx.require_layer_target()?;
+        if let Some(layer) = ctx.active_layer {
+            if ctx.layer_lock(layer) == Some(true) {
+                return Err(ToolError::LayerLocked);
+            }
+        }
+        let target = ctx.pixel_target()?;
+        let key = ctx.pixel_key()?;
+        let to_layer = ctx.sample_to_layer.unwrap_or(glam::Affine2::IDENTITY);
+        let from_layer = to_layer.inverse();
+        // The layer-space boxes of the selection and of where it lands.
+        let layer_box = |offset: Vec2, grow: f32| -> Result<PixelRect, ToolError> {
+            let (lo, hi) = [
+                Vec2::new(min.x as f32, min.y as f32),
+                Vec2::new(max.x as f32, min.y as f32),
+                Vec2::new(min.x as f32, max.y as f32),
+                Vec2::new(max.x as f32, max.y as f32),
+            ]
+            .iter()
+            .map(|c| to_layer.transform_point2(*c + offset))
+            .fold(
+                (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
+                |(lo, hi), c| (lo.min(c), hi.max(c)),
+            );
+            let (lo, hi) = ((lo - grow).floor(), (hi + grow).ceil());
+            if !lo.is_finite() || !hi.is_finite() || hi.x <= lo.x || hi.y <= lo.y {
+                return Err(ToolError::Degenerate);
+            }
+            Ok(PixelRect::new(
+                lo.x as i64,
+                lo.y as i64,
+                (hi.x - lo.x) as u32,
+                (hi.y - lo.y) as u32,
+            ))
+        };
+        let dest = layer_box(step, 0.0)?;
+        let source = layer_box(Vec2::ZERO, 1.0)?;
+        let (x0, y0) = (dest.x.min(source.x), dest.y.min(source.y));
+        let (x1, y1) = (
+            dest.right().max(source.right()),
+            dest.bottom().max(source.bottom()),
+        );
+        let rect = PixelRect::new(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32);
+        let mut patch = ColorPatch::load_native(ctx.tiles, key, rect)?;
+        // Every read first, from the untouched plane, then every write: a
+        // copy that overlaps its source must not read its own output.
+        let mut writes = Vec::new();
+        for y in dest.y..dest.bottom() {
+            for x in dest.x..dest.right() {
+                let doc = from_layer.transform_point2(Vec2::new(x as f32 + 0.5, y as f32 + 0.5));
+                let from_doc = doc - step;
+                let c = selection.coverage_at(IVec2::new(
+                    from_doc.x.floor() as i32,
+                    from_doc.y.floor() as i32,
+                ));
+                if c <= 0.0 {
+                    continue;
+                }
+                let from = to_layer.transform_point2(from_doc);
+                let px = patch.get(IVec2::new(from.x.floor() as i32, from.y.floor() as i32));
+                let lifted = px.map(|v| v * c);
+                if lifted.iter().all(|v| *v == 0.0) {
+                    continue;
+                }
+                let at = IVec2::new(x as i32, y as i32);
+                let under = patch.get(at);
+                let keep = 1.0 - lifted[3].clamp(0.0, 1.0);
+                let out: [f32; 4] = std::array::from_fn(|i| lifted[i] + under[i] * keep);
+                writes.push((at, out));
+            }
+        }
+        let mut commands = Vec::new();
+        if !writes.is_empty() {
+            for (at, px) in writes {
+                patch.set(at, px);
+            }
+            let delta = patch.commit(ctx.tiles, key)?;
+            if !delta.is_empty() {
+                commands.push(Command::PaintTiles { target, delta });
+            }
+        }
+        let canvas = selection::rect::Rect::from_xywh(
+            ctx.canvas.x as i32,
+            ctx.canvas.y as i32,
+            ctx.canvas.width,
+            ctx.canvas.height,
+        );
+        let next = selection::transform_selection(
+            &selection,
+            canvas,
+            glam::Affine2::from_translation(step),
+            selection::transform::ResampleFilter::Bilinear,
+        )?;
+        commands.push(Command::SetSelection { selection: next });
+        Ok(Command::Transaction {
+            label: "Duplicate Selection".to_string(),
+            commands,
+        })
+    }
+
     /// W5-C: seed Show Transform Controls' box from the context alone, so
     /// ticking the option frames the active layer's ink straight away rather
     /// than after the next canvas click. No session, no commands.
@@ -262,6 +387,8 @@ impl Tool for MoveTool {
         crate::error::finite_pt("move start", event.pos)?;
         self.start = Some(event.pos);
         self.current = event.pos;
+        // W13-A: Alt at the press makes the whole drag a copy.
+        self.copy = event.modifiers.alt;
         self.layer = if self.auto_select {
             self.layer_under(ctx, event.pos).or(ctx.active_layer)
         } else {
@@ -334,6 +461,8 @@ impl Tool for MoveTool {
         let Some(start) = self.start.take() else {
             return Ok(());
         };
+        // W13-A: the copy flag dies with the gesture (read once, here).
+        let copy = std::mem::take(&mut self.copy);
         let end = if event.modifiers.shift {
             // Constrain to the dominant axis.
             let d = event.pos - start;
@@ -377,6 +506,12 @@ impl Tool for MoveTool {
             {
                 let step = d.round();
                 if step == Vec2::ZERO {
+                    return Ok(());
+                }
+                // W13-A: Alt+drag floats a COPY; the originals stay.
+                if copy {
+                    let command = Self::copy_selected_pixels(ctx, step)?;
+                    ctx.emit(command);
                     return Ok(());
                 }
                 let rect = PixelRect::new(
@@ -477,6 +612,8 @@ impl Tool for MoveTool {
         self.layer = None;
         // Card 042: the snap reference dies with the gesture.
         self.base_bounds = None;
+        // W13-A: and so does an Alt copy.
+        self.copy = false;
     }
 
     fn is_active(&self) -> bool {
@@ -614,7 +751,15 @@ pub struct CropTool {
     canvas: Option<PixelRect>,
     /// The committed box, once the drag has ended and before Enter.
     pub box_rect: Option<PixelRect>,
+    /// W13-I: the options bar's Content-Aware box ([`CROP_CONTENT_AWARE_KEY`]).
+    /// On, the box may be dragged past the canvas, and the application fills
+    /// the canvas the crop adds (past the old edges, or uncovered by a
+    /// straighten) from the image by PatchMatch.
+    pub content_aware: bool,
 }
+
+/// W13-I: the Crop tool's Content-Aware option key (a Bool).
+pub const CROP_CONTENT_AWARE_KEY: &str = "content_aware";
 
 impl Default for CropTool {
     fn default() -> Self {
@@ -635,11 +780,18 @@ impl Default for CropTool {
             current: None,
             canvas: None,
             box_rect: None,
+            content_aware: false,
         }
     }
 }
 
 impl CropTool {
+    /// W13-I: the canvas the box is clipped to — none with Content-Aware on,
+    /// where a box past the edges asks for new canvas to be filled.
+    fn clip_to(&self, canvas: Option<PixelRect>) -> Option<PixelRect> {
+        canvas.filter(|_| !self.content_aware)
+    }
+
     /// W4-D: the width/height the box is locked to right now: the Ratio
     /// preset's, the canvas's own for Original, the W and H fields' for the
     /// W x H x Resolution preset, and the bare `aspect` for Free.
@@ -728,7 +880,7 @@ impl CropTool {
     /// the box keeps its ratio to the nearest whole pixel however far past
     /// the canvas the drag ran.
     pub fn rect_for(&self, ctx: &ToolContext<'_>, a: Vec2, b: Vec2) -> Option<PixelRect> {
-        let (a, b) = self.constrained(a, b, Some(ctx.canvas));
+        let (a, b) = self.constrained(a, b, self.clip_to(Some(ctx.canvas)));
         if !a.x.is_finite() || !b.x.is_finite() || !a.y.is_finite() || !b.y.is_finite() {
             return None;
         }
@@ -750,10 +902,20 @@ impl CropTool {
                 a.y.max(b.y).ceil() as i64,
             )
         };
-        let x0 = x0.max(ctx.canvas.x);
-        let y0 = y0.max(ctx.canvas.y);
-        let x1 = x1.min(ctx.canvas.right());
-        let y1 = y1.min(ctx.canvas.bottom());
+        // W13-I: with Content-Aware on the box keeps what it covers past the
+        // canvas (up to the largest canvas a crop may make).
+        let (x0, y0, x1, y1) = match self.clip_to(Some(ctx.canvas)) {
+            Some(c) => (
+                x0.max(c.x),
+                y0.max(c.y),
+                x1.min(c.right()),
+                y1.min(c.bottom()),
+            ),
+            None => {
+                let max = CROP_MAX_OUTPUT_PX as i64;
+                (x0, y0, x1.min(x0 + max), y1.min(y0 + max))
+            }
+        };
         if x1 <= x0 || y1 <= y0 {
             return None;
         }
@@ -778,9 +940,9 @@ impl CropTool {
         }
         // W4-D: a Straighten line is not a box; the released box stays up.
         if let (false, Some(a), Some(b)) = (self.straighten_line, self.anchor, self.current) {
-            let (a, b) = self.constrained(a, b, self.canvas);
+            let (a, b) = self.constrained(a, b, self.clip_to(self.canvas));
             let (mut lo, mut hi) = (a.min(b), a.max(b));
-            if let Some(c) = self.canvas {
+            if let Some(c) = self.clip_to(self.canvas) {
                 let (cmin, cmax) = (
                     Vec2::new(c.x as f32, c.y as f32),
                     Vec2::new(c.right() as f32, c.bottom() as f32),
@@ -945,9 +1107,22 @@ impl Tool for CropTool {
                 self.straighten_line = v;
                 Ok(())
             }
+            (CROP_CONTENT_AWARE_KEY, ToolSetting::Bool(v)) => {
+                self.content_aware = v;
+                Ok(())
+            }
             (
-                "aspect" | "straighten" | "delete_cropped" | "ratio" | "width" | "height" | "units"
-                | "resolution" | "overlay" | "straighten_line",
+                "aspect"
+                | "straighten"
+                | "delete_cropped"
+                | "ratio"
+                | "width"
+                | "height"
+                | "units"
+                | "resolution"
+                | "overlay"
+                | "straighten_line"
+                | CROP_CONTENT_AWARE_KEY,
                 _,
             ) => Err(kind_mismatch(key)),
             _ => Err(unknown_option(key)),
@@ -1113,6 +1288,12 @@ pub struct EyedropperTool {
     /// Read the flattened composite rather than the active layer.
     pub sample_all_layers: bool,
     active: bool,
+    /// W13-I: the options bar's Sample choice
+    /// ([`crate::tool::SAMPLE_LAYERS_KEY`]): Current Layer, Current & Below
+    /// or All Layers. The last two read the composite the shell lends at the
+    /// press ([`ToolContext::composite_sampler`]), kept for the drag.
+    pub sample_layers: Option<crate::tool::SampleLayers>,
+    sampler: Option<std::sync::Arc<dyn crate::tool::CompositeSampler>>,
 }
 
 impl Default for EyedropperTool {
@@ -1121,6 +1302,9 @@ impl Default for EyedropperTool {
             sample_radius: 0,
             sample_all_layers: true,
             active: false,
+            // The registry's default Sample choice (All Layers).
+            sample_layers: Some(crate::tool::SampleLayers::All),
+            sampler: None,
         }
     }
 }
@@ -1131,7 +1315,48 @@ impl EyedropperTool {
             sample_radius,
             sample_all_layers,
             active: false,
+            sample_layers: None,
+            sampler: None,
         }
+    }
+
+    /// W13-I: the averaged colour of the lent composite of `layers` over the
+    /// sample square at `p`, or `None` when no composite applies (Current
+    /// Layer, no Sample choice set, or no sampler lent — a mask edit).
+    fn sample_composite(
+        &self,
+        ctx: &ToolContext<'_>,
+        p: Vec2,
+    ) -> Option<Result<[f32; 4], ToolError>> {
+        let layers = self.sample_layers?;
+        if layers == crate::tool::SampleLayers::Current {
+            return None;
+        }
+        let sampler = self.sampler.as_ref()?;
+        // The composite is addressed in the paint target's pixels.
+        let p = match ctx.sample_to_layer {
+            Some(m) => m.transform_point2(p),
+            None => p,
+        };
+        let c = IVec2::new(p.x.floor() as i32, p.y.floor() as i32);
+        let r = self.sample_radius.min(64) as i32;
+        let side = (r * 2 + 1) as u32;
+        let rect = PixelRect::new((c.x - r) as i64, (c.y - r) as i64, side, side);
+        Some(sampler.composite(layers, rect).map(|buf| {
+            let mut acc = [0.0f64; 4];
+            for px in buf.pixels() {
+                for i in 0..4 {
+                    acc[i] += f64::from(px[i]);
+                }
+            }
+            let n = buf.pixels().len().max(1) as f64;
+            unpremultiply([
+                (acc[0] / n) as f32,
+                (acc[1] / n) as f32,
+                (acc[2] / n) as f32,
+                (acc[3] / n) as f32,
+            ])
+        }))
     }
 
     /// The straight-alpha linear colour under `p`.
@@ -1140,7 +1365,12 @@ impl EyedropperTool {
     /// bias a mixed sample toward the darker pixels, which is why a "5 by 5
     /// average" eyedropper reads too dark in every tool that gets this wrong.
     pub fn sample(&self, ctx: &ToolContext<'_>, p: Vec2) -> Result<[f32; 4], ToolError> {
-        let key = if self.sample_all_layers {
+        // W13-I: Current & Below / All Layers read the lent composite.
+        if let Some(picked) = self.sample_composite(ctx, p) {
+            return picked;
+        }
+        let current = self.sample_layers == Some(crate::tool::SampleLayers::Current);
+        let key = if self.sample_all_layers && !current {
             ctx.sample_key()?
         } else {
             PixelKey::Layer(ctx.active_layer.ok_or(ToolError::NoActiveLayer)?)
@@ -1183,6 +1413,8 @@ impl Tool for EyedropperTool {
     ) -> Result<(), ToolError> {
         crate::error::finite_pt("eyedropper point", event.pos)?;
         self.active = true;
+        // W13-I: the composite the shell lent this press, kept for the drag.
+        self.sampler = ctx.composite_sampler.clone();
         let c = self.sample(ctx, event.pos)?;
         ctx.set_picked(c);
         Ok(())
@@ -1215,7 +1447,9 @@ impl Tool for EyedropperTool {
 
     /// The registry's two Eyedropper options: `sample_radius` (the bar's
     /// Sample Size, the half-width of the averaged square) and
-    /// `sample_all_layers`. Both are read by [`EyedropperTool::sample`].
+    /// `sample_all_layers`, plus the W13-I Sample choice. The legacy box is
+    /// mapped onto the choice (on = All Layers, off = Current Layer); all are
+    /// read by [`EyedropperTool::sample`].
     fn set_setting(&mut self, key: &str, setting: ToolSetting) -> Result<(), ToolError> {
         match (key, setting) {
             ("sample_radius", ToolSetting::Int(v)) => {
@@ -1223,10 +1457,24 @@ impl Tool for EyedropperTool {
                 Ok(())
             }
             ("sample_all_layers", ToolSetting::Bool(v)) => {
+                // W13-I round 2: the legacy box is the Sample choice's two
+                // ends — on is All Layers, off is Current Layer — so a
+                // caller still setting it gets what it asked for.
                 self.sample_all_layers = v;
+                self.sample_layers = Some(if v {
+                    crate::tool::SampleLayers::All
+                } else {
+                    crate::tool::SampleLayers::Current
+                });
                 Ok(())
             }
-            ("sample_radius" | "sample_all_layers", _) => Err(kind_mismatch(key)),
+            (crate::tool::SAMPLE_LAYERS_KEY, ToolSetting::Choice(i)) => {
+                self.sample_layers = Some(crate::tool::SampleLayers::from_choice(i));
+                Ok(())
+            }
+            ("sample_radius" | "sample_all_layers" | crate::tool::SAMPLE_LAYERS_KEY, _) => {
+                Err(kind_mismatch(key))
+            }
             _ => Err(unknown_option(key)),
         }
     }
@@ -1987,6 +2235,72 @@ mod tests {
             assert_eq!(&delta[4..], &[14.0, 10.0]);
         }
 
+        /// W13-A: an Alt+drag with a pixel selection lays a COPY of the
+        /// selected pixels down at the drop and keeps the originals, as one
+        /// transaction; the same drag without Alt lifts them.
+        #[test]
+        fn an_alt_drag_with_a_selection_copies_the_pixels_and_keeps_the_originals() {
+            let red = [200, 20, 20, 255];
+            let run = |alt: bool| {
+                let mut tiles = MemoryTiles::new();
+                let layer = layer_model::LayerId::new();
+                let key = PixelKey::Layer(layer);
+                for y in 8..16 {
+                    for x in 8..16 {
+                        tiles.put_pixel(key, x, y, red);
+                    }
+                }
+                let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64));
+                ctx.active_layer = Some(layer);
+                ctx.selection = Selection::Rect {
+                    min: IVec2::new(8, 8),
+                    max: IVec2::new(16, 16),
+                };
+                let mods = crate::tool::Modifiers {
+                    alt,
+                    ..Default::default()
+                };
+                let mut tool = MoveTool::default();
+                tool.on_pointer_down(&mut ctx, PointerEvent::at(10.0, 10.0).with_modifiers(mods))
+                    .unwrap();
+                assert_eq!(tool.is_copying(), alt);
+                tool.on_pointer_up(&mut ctx, PointerEvent::at(30.0, 10.0).with_modifiers(mods))
+                    .unwrap();
+                assert!(!tool.is_copying(), "the copy flag outlived the gesture");
+                let commands = ctx.drain();
+                drop(ctx);
+                // Land the gesture's pixels the way the shell's history does.
+                let mut stack: Vec<&Command> = commands.iter().collect();
+                while let Some(c) = stack.pop() {
+                    match c {
+                        Command::Transaction { commands, .. } => stack.extend(commands),
+                        Command::PaintTiles { delta, .. } => {
+                            tiles.apply_delta(key, delta);
+                        }
+                        _ => {}
+                    }
+                }
+                (commands, tiles.pixel(key, 10, 10), tiles.pixel(key, 30, 10))
+            };
+            let (commands, original, copy) = run(true);
+            assert_eq!(commands.len(), 1, "one transaction");
+            let Command::Transaction { label, commands } = &commands[0] else {
+                panic!("not a transaction: {:?}", commands[0]);
+            };
+            assert_eq!(label, "Duplicate Selection");
+            let moved = commands.iter().find_map(|c| match c {
+                Command::SetSelection { selection } => selection.bounds(),
+                _ => None,
+            });
+            assert_eq!(moved, Some((IVec2::new(28, 8), IVec2::new(36, 16))));
+            assert_eq!(original, red, "the original pixels left");
+            assert_eq!(copy, red, "no copy at the drop");
+            // Without Alt the same drag lifts the pixels.
+            let (_, original, copy) = run(false);
+            assert_eq!(original[3], 0, "a plain drag copied: {original:?}");
+            assert_eq!(copy, red);
+        }
+
         #[test]
         fn a_linked_participant_moves_the_whole_chain_together() {
             // Card 043: moving a linked layer drags every other linked
@@ -2216,6 +2530,93 @@ mod option_tests {
             tool.set_setting("tolerance", ToolSetting::Float(2.0)),
             Err(ToolError::UnknownOption { .. })
         ));
+    }
+
+    /// W13-I round 2: the legacy `sample_all_layers` box still decides the
+    /// source when the shell lends a composite sampler (it always does, with
+    /// the registry default All Layers): off reads the active layer, on reads
+    /// the composite.
+    #[test]
+    fn the_legacy_sample_all_layers_box_overrides_a_lent_composite() {
+        struct Blue;
+        impl crate::tool::CompositeSampler for Blue {
+            fn composite(
+                &self,
+                _layers: crate::tool::SampleLayers,
+                rect: PixelRect,
+            ) -> Result<filters::FilterBuffer, ToolError> {
+                let n = (rect.width * rect.height) as usize;
+                Ok(filters::FilterBuffer::from_rgba8(
+                    rect.width,
+                    rect.height,
+                    &[0, 0, 255, 255].repeat(n),
+                )
+                .unwrap())
+            }
+        }
+        let mut tiles = MemoryTiles::new();
+        let layer = LayerId::new();
+        paint(&mut tiles, PixelKey::Layer(layer), |_, _| [255, 0, 0, 255]);
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, W, H)).with_layer(layer);
+        ctx.composite_sampler = Some(std::sync::Arc::new(Blue));
+        let mut pick = |tool: &mut EyedropperTool| {
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(8.0, 8.0))
+                .unwrap();
+            tool.on_pointer_up(&mut ctx, PointerEvent::at(8.0, 8.0))
+                .unwrap();
+            ctx.picked().unwrap()
+        };
+        let mut tool = EyedropperTool::default();
+        assert!(pick(&mut tool)[2] > 0.99, "the default reads the composite");
+        tool.set_setting("sample_all_layers", ToolSetting::Bool(false))
+            .unwrap();
+        let off = pick(&mut tool);
+        assert!(
+            off[0] > 0.99 && off[2] < 0.01,
+            "Sample All Layers off reads the red layer: {off:?}"
+        );
+        tool.set_setting("sample_all_layers", ToolSetting::Bool(true))
+            .unwrap();
+        assert!(pick(&mut tool)[2] > 0.99, "on reads the composite again");
+    }
+
+    /// W13-I: with Content-Aware on (the registry's key, through
+    /// `set_setting`) a box dragged past the canvas keeps what it covers
+    /// there; off, it is clipped to the canvas as before.
+    #[test]
+    fn content_aware_lets_the_crop_box_run_past_the_canvas() {
+        let released = |content_aware: bool| {
+            let mut tiles = crate::tiles::MemoryTiles::new();
+            let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64));
+            let mut tool = crate::registry::make(ToolId::Crop);
+            assert!(crate::registry::info(ToolId::Crop)
+                .unwrap()
+                .options
+                .iter()
+                .any(|o| o.key == CROP_CONTENT_AWARE_KEY));
+            tool.set_setting(CROP_CONTENT_AWARE_KEY, ToolSetting::Bool(content_aware))
+                .unwrap();
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(4.0, 4.0))
+                .unwrap();
+            tool.on_pointer_move(&mut ctx, PointerEvent::at(80.0, 60.0))
+                .unwrap();
+            let Some(crate::tool::SessionGeometry::Crop { rect, .. }) = tool.live_geometry() else {
+                panic!("no live crop box");
+            };
+            tool.on_pointer_up(&mut ctx, PointerEvent::at(80.0, 60.0))
+                .unwrap();
+            tool.commit(&mut ctx).unwrap();
+            let Some(ToolRequest::Crop(req)) = ctx.drain_requests().pop() else {
+                panic!("no crop request");
+            };
+            (rect[1].x, req.rect)
+        };
+        let (live, rect) = released(true);
+        assert_eq!(live, 80.0, "the live box runs past the canvas");
+        assert_eq!((rect.x, rect.y, rect.width, rect.height), (4, 4, 76, 56));
+        let (live, rect) = released(false);
+        assert_eq!(live, 64.0);
+        assert_eq!((rect.x, rect.y, rect.width, rect.height), (4, 4, 60, 56));
     }
 
     #[test]

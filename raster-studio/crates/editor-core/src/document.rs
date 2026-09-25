@@ -217,6 +217,9 @@ struct DocumentRepr {
     /// W11-I: the Slice tool's regions and their options.
     #[serde(default)]
     slices: Vec<crate::slices::DocumentSlice>,
+    /// W13-L: the Animation panel's video timeline.
+    #[serde(default)]
+    timeline: crate::timeline::DocumentTimeline,
 }
 
 impl TryFrom<DocumentRepr> for Document {
@@ -267,6 +270,7 @@ impl TryFrom<DocumentRepr> for Document {
             guides: r.guides,
             extras: r.extras,
             slices: r.slices,
+            timeline: r.timeline,
             dirty: false,
             path: None,
         })
@@ -354,6 +358,11 @@ pub struct Document {
     /// slice store whenever the set changes (a record, not an undoable edit:
     /// the Slice tool's gestures are not history steps).
     pub slices: Vec<crate::slices::DocumentSlice>,
+    /// W13-L: the video timeline ([`crate::timeline::DocumentTimeline`]):
+    /// Timeline mode, length, frame rate, playhead and the layer tracks.
+    /// Persisted but omitted while it is the default; edited through
+    /// [`crate::Command::SetTimeline`], one undo step per edit.
+    pub timeline: crate::timeline::DocumentTimeline,
     /// Unsaved-changes flag. Session state, not document content: never
     /// serialized, and a freshly loaded document is clean.
     dirty: bool,
@@ -401,7 +410,9 @@ impl Serialize for Document {
         let assets = (!self.assets.is_empty()).then_some(&self.assets);
         let extras = (!self.extras.is_empty()).then_some(&self.extras);
         let slices = (!self.slices.is_empty()).then_some(&self.slices);
+        let timeline = (!self.timeline.is_empty()).then_some(&self.timeline);
         let fields = 3
+            + usize::from(timeline.is_some())
             + usize::from(extras.is_some())
             + usize::from(slices.is_some())
             + usize::from(selection.is_some())
@@ -442,6 +453,9 @@ impl Serialize for Document {
         if let Some(slices) = slices {
             s.serialize_field("slices", slices)?;
         }
+        if let Some(timeline) = timeline {
+            s.serialize_field("timeline", timeline)?;
+        }
         s.end()
     }
 }
@@ -458,6 +472,7 @@ impl PartialEq for Document {
             || self.assets != other.assets
             || self.extras != other.extras
             || self.slices != other.slices
+            || self.timeline != other.timeline
             // Through the accessor, not the field: a cursor left pointing at a
             // deleted layer reads as "no active layer" everywhere else, so it
             // must here too.
@@ -493,6 +508,7 @@ impl Document {
             guides: Guides::default(),
             extras: layer_model::DocumentExtras::default(),
             slices: Vec::new(),
+            timeline: crate::timeline::DocumentTimeline::default(),
             dirty: false,
             path: None,
         }

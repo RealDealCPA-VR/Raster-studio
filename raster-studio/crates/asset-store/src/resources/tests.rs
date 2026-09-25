@@ -667,10 +667,21 @@ fn icc_files_that_lie_error_instead_of_panicking() {
 
 // -------------------------------------------------------------- dispatch
 
+/// W13-E: `.atn` is parsed now (see `atn_tests`); bytes that are not an
+/// action set are an error, not a refusal by design.
 #[test]
-fn actions_are_refused_with_the_documented_reason() {
+fn actions_route_to_the_atn_parser() {
     let err = parse(ResourceKind::Actions, b"anything").unwrap_err();
-    assert!(err.to_string().contains(".atn"), "{err}");
+    assert!(
+        matches!(
+            err,
+            ResourceError::Unsupported {
+                what: "actions file version",
+                ..
+            }
+        ),
+        "{err}"
+    );
     assert_eq!(
         ResourceKind::from_extension("atn"),
         Some(ResourceKind::Actions)

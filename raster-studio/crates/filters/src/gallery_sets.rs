@@ -43,14 +43,19 @@ pub enum GallerySet {
     BrushStrokes,
     Sketch,
     Texture,
+    // W13-J: Photoshop's Distort and Stylize folders.
+    Distort,
+    Stylize,
 }
 
 impl GallerySet {
     /// Every set, in the gallery's folder order.
-    pub const ALL: [GallerySet; 4] = [
+    pub const ALL: [GallerySet; 6] = [
         GallerySet::Artistic,
         GallerySet::BrushStrokes,
+        GallerySet::Distort,
         GallerySet::Sketch,
+        GallerySet::Stylize,
         GallerySet::Texture,
     ];
 
@@ -61,6 +66,8 @@ impl GallerySet {
             GallerySet::BrushStrokes => "Brush Strokes",
             GallerySet::Sketch => "Sketch",
             GallerySet::Texture => "Texture",
+            GallerySet::Distort => "Distort",
+            GallerySet::Stylize => "Stylize",
         }
     }
 
@@ -109,7 +116,7 @@ macro_rules! effects {
 
         impl GalleryEffect {
             /// Every effect, grouped by set in Photoshop's order.
-            pub const ALL: [GalleryEffect; 43] = [$(GalleryEffect::$variant,)*];
+            pub const ALL: [GalleryEffect; 47] = [$(GalleryEffect::$variant,)*];
 
             /// The effect's name as Photoshop shows it.
             pub fn name(self) -> &'static str {
@@ -346,6 +353,29 @@ effects! {
         p("texture", "Texture", 0.0, 3.0, 2.0),
         p("light", "Light", 0.0, 7.0, 0.0),
     ];
+    // ---- W13-J: Distort -----------------------------------------------------
+    DiffuseGlow => "Diffuse Glow", Distort, [
+        p("graininess", "Graininess", 0.0, 10.0, 6.0),
+        p("glow_amount", "Glow Amount", 0.0, 20.0, 10.0),
+        p("clear_amount", "Clear Amount", 0.0, 20.0, 15.0),
+    ];
+    Glass => "Glass", Distort, [
+        p("distortion", "Distortion", 0.0, 20.0, 3.0),
+        p("smoothness", "Smoothness", 1.0, 15.0, 1.0),
+        p("texture", "Texture", 0.0, 6.0, 3.0),
+        p("scaling", "Scaling", 50.0, 200.0, 100.0),
+        p("invert_texture", "Invert Texture", 0.0, 1.0, 0.0),
+    ];
+    OceanRipple => "Ocean Ripple", Distort, [
+        p("ripple_size", "Ripple Size", 1.0, 15.0, 5.0),
+        p("ripple_magnitude", "Ripple Magnitude", 0.0, 20.0, 15.0),
+    ];
+    // ---- W13-J: Stylize -----------------------------------------------------
+    GlowingEdges => "Glowing Edges", Stylize, [
+        p("edge_width", "Edge Width", 1.0, 14.0, 1.0),
+        p("edge_brightness", "Edge Brightness", 0.0, 20.0, 10.0),
+        p("smoothness", "Smoothness", 1.0, 15.0, 1.0),
+    ];
 }
 
 impl GalleryEffect {
@@ -408,6 +438,27 @@ impl GalleryEffect {
             GalleryEffect::Patchwork => patchwork(&img, &v, seed),
             GalleryEffect::StainedGlass => stained_glass(&img, &v, seed),
             GalleryEffect::Texturizer => texturizer(&img, &v, seed),
+            // W13-J: the Distort and Stylize sets work on the buffer itself.
+            GalleryEffect::DiffuseGlow => {
+                return crate::gallery_extra::diffuse_glow(src, v.get(0), v.get(1), v.get(2), seed)
+            }
+            GalleryEffect::Glass => {
+                return crate::gallery_extra::glass(
+                    src,
+                    v.get(0),
+                    v.get(1),
+                    v.get(2),
+                    v.get(3),
+                    v.get(4) >= 0.5,
+                    seed,
+                )
+            }
+            GalleryEffect::OceanRipple => {
+                return crate::gallery_extra::ocean_ripple(src, v.get(0), v.get(1), seed)
+            }
+            GalleryEffect::GlowingEdges => {
+                return crate::gallery_extra::glowing_edges(src, v.get(0), v.get(1), v.get(2))
+            }
         };
         out.to_buffer()
     }
@@ -1573,16 +1624,31 @@ mod tests {
     }
 
     #[test]
-    fn there_are_forty_three_effects_in_four_photoshop_sets() {
+    fn there_are_forty_seven_effects_in_six_photoshop_sets() {
         let count = |s: GallerySet| s.effects().count();
         assert_eq!(count(GallerySet::Artistic), 15);
         assert_eq!(count(GallerySet::BrushStrokes), 8);
         assert_eq!(count(GallerySet::Sketch), 14);
         assert_eq!(count(GallerySet::Texture), 6);
+        // W13-J: Distort (Diffuse Glow, Glass, Ocean Ripple) and Stylize
+        // (Glowing Edges), in Photoshop's folder order.
+        assert_eq!(count(GallerySet::Distort), 3);
+        assert_eq!(count(GallerySet::Stylize), 1);
+        assert_eq!(
+            GallerySet::ALL.map(GallerySet::name),
+            [
+                "Artistic",
+                "Brush Strokes",
+                "Distort",
+                "Sketch",
+                "Stylize",
+                "Texture"
+            ]
+        );
         let mut names: Vec<_> = GalleryEffect::ALL.iter().map(|e| e.name()).collect();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 43, "names are unique");
+        assert_eq!(names.len(), 47, "names are unique");
         for e in GalleryEffect::ALL {
             assert!(!e.params().is_empty(), "{e:?} has parameters");
             for p in e.params() {

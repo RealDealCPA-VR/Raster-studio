@@ -57,6 +57,11 @@ serde_json.workspace = true
 rmp-serde.workspace = true
 rfd = "0.15"
 dirs = "5"
+# W13-K: File > Script. A pure-Rust JavaScript engine (Unlicense OR MIT) runs
+# Photoshop-DOM scripts in-process with no filesystem or network surface of
+# its own; `crate::script` exposes the DOM subset over editor commands.
+# Default features off: no ICU / Intl data, no float16 / xsum extras.
+boa_engine = { version = "0.21", default-features = false }
 
 # Asking the OS whether a recorded process id is still alive, which is what
 # tells a crashed run's session marker apart from a second running instance's.
@@ -65,6 +70,11 @@ dirs = "5"
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
   "Win32_System_Threading",
+  # W13-M: File > Print opens the system Print dialog (comdlg32) and
+  # sends the flattened image to the printer through GDI (`crate::editor::print`).
+  "Win32_Graphics_Gdi",
+  "Win32_Storage_Xps",
+  "Win32_UI_Controls_Dialogs",
 ] }
 
 [target.'cfg(unix)'.dependencies]

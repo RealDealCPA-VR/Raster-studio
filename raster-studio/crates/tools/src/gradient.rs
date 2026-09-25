@@ -310,17 +310,26 @@ pub enum GradientShape {
     Reflected,
     /// Square rings around the start point, rotated to the drag direction.
     Diamond,
+    /// W13-I: Shape Burst — the distance inward from the edge of the target
+    /// layer's own alpha (its opaque pixels; the render rect's border counts
+    /// as an edge), in units of the drag's length: `0` on the edge, `1` at a
+    /// depth of one drag length and beyond. The renderers build the distance
+    /// field ([`shape_burst::BurstField`]); [`GradientShape::parameter`]
+    /// alone has no layer to measure and answers the Radial value.
+    ShapeBurst,
 }
 
 impl GradientShape {
     /// The options bar's Style choices, in the registry's order (Linear,
-    /// Radial, Angle, Reflected, Diamond). A choice index is looked up here.
-    pub const ALL: [GradientShape; 5] = [
+    /// Radial, Angle, Reflected, Diamond, W13-I Shape Burst). A choice index
+    /// is looked up here.
+    pub const ALL: [GradientShape; 6] = [
         GradientShape::Linear,
         GradientShape::Radial,
         GradientShape::Angle,
         GradientShape::Reflected,
         GradientShape::Diamond,
+        GradientShape::ShapeBurst,
     ];
 
     /// The ramp parameter at `p` for a drag from `start` to `end`.
@@ -334,7 +343,11 @@ impl GradientShape {
         match self {
             GradientShape::Linear => (v.dot(d) / len2).clamp(0.0, 1.0),
             GradientShape::Reflected => (v.dot(d) / len2).abs().clamp(0.0, 1.0),
-            GradientShape::Radial => (v.length() / len2.sqrt()).clamp(0.0, 1.0),
+            // W13-I: Shape Burst needs the layer's alpha; with none to hand
+            // this is the Radial value (see the variant's docs).
+            GradientShape::Radial | GradientShape::ShapeBurst => {
+                (v.length() / len2.sqrt()).clamp(0.0, 1.0)
+            }
             GradientShape::Angle => {
                 let a = v.y.atan2(v.x) - d.y.atan2(d.x);
                 let tau = std::f32::consts::TAU;
@@ -423,13 +436,30 @@ pub(crate) fn composite_over(mode: BlendMode, src: [f32; 4], dst: [f32; 4]) -> [
     ]
 }
 
+/// [`ramp_at_in`] with no Shape Burst field: the value the tests read.
+#[cfg(test)]
+fn ramp_at(settings: &GradientSettings, p: IVec2, start: Vec2, end: Vec2) -> [f32; 4] {
+    ramp_at_in(settings, p, start, end, None)
+}
+
 /// The dithered straight-alpha linear colour the ramp puts at one pixel.
 ///
 /// Both renderers below go through this, so the layer and the mask see exactly
-/// the same ramp, the same reversal and the same dither pattern.
-fn ramp_at(settings: &GradientSettings, p: IVec2, start: Vec2, end: Vec2) -> [f32; 4] {
+/// the same ramp, the same reversal and the same dither pattern. W13-I: when
+/// `burst` is given (Shape Burst) the ramp parameter is its depth at `p` over
+/// the drag's length.
+fn ramp_at_in(
+    settings: &GradientSettings,
+    p: IVec2,
+    start: Vec2,
+    end: Vec2,
+    burst: Option<&shape_burst::BurstField>,
+) -> [f32; 4] {
     let pt = Vec2::new(p.x as f32 + 0.5, p.y as f32 + 0.5);
-    let mut t = settings.shape.parameter(pt, start, end);
+    let mut t = match burst {
+        Some(field) => field.parameter(p, (end - start).length()),
+        None => settings.shape.parameter(pt, start, end),
+    };
     if settings.reverse {
         t = 1.0 - t;
     }
@@ -496,6 +526,9 @@ pub fn render_gradient_with_mode(
     mode: BlendMode,
 ) {
     let opacity = settings.opacity.clamp(0.0, 1.0);
+    // W13-I: Shape Burst measures the layer's alpha as it is before the fill.
+    let burst = (settings.shape == GradientShape::ShapeBurst)
+        .then(|| shape_burst::BurstField::new(rect, |p| patch.get(p)[3]));
     for y in rect.y..rect.bottom() {
         for x in rect.x..rect.right() {
             let p = IVec2::new(x as i32, y as i32);
@@ -503,7 +536,7 @@ pub fn render_gradient_with_mode(
             if clip <= 0.0 {
                 continue;
             }
-            let c = ramp_at(settings, p, start, end);
+            let c = ramp_at_in(settings, p, start, end, burst.as_ref());
             let a = c[3] * opacity * clip;
             let src = premultiply([c[0], c[1], c[2], a]);
             let dst = patch.get(p);
@@ -529,6 +562,9 @@ pub fn render_gradient_coverage(
     selection: &Selection,
 ) {
     let opacity = settings.opacity.clamp(0.0, 1.0);
+    // W13-I: on a mask, Shape Burst measures the mask's own coverage.
+    let burst = (settings.shape == GradientShape::ShapeBurst)
+        .then(|| shape_burst::BurstField::new(rect, |p| patch.get(p)));
     for y in rect.y..rect.bottom() {
         for x in rect.x..rect.right() {
             let p = IVec2::new(x as i32, y as i32);
@@ -536,7 +572,7 @@ pub fn render_gradient_coverage(
             if clip <= 0.0 {
                 continue;
             }
-            let c = ramp_at(settings, p, start, end);
+            let c = ramp_at_in(settings, p, start, end, burst.as_ref());
             patch.blend(p, mask_coverage_of(c), c[3] * opacity * clip);
         }
     }
@@ -783,6 +819,161 @@ impl Tool for GradientTool {
 
     fn is_active(&self) -> bool {
         self.start.is_some()
+    }
+}
+
+/// W13-I: the Shape Burst gradient's distance field.
+pub mod shape_burst {
+    use glam::IVec2;
+    use raster::PixelRect;
+
+    /// Alpha above this is inside the shape.
+    const INSIDE: f32 = 0.5;
+
+    /// For every pixel of a render rect, its Euclidean distance (pixel
+    /// centre to pixel centre) to the nearest pixel outside the shape — `0`
+    /// outside. The shape is the pixels whose alpha is over one half; the
+    /// ring of pixels just past the rect is outside, so a fully opaque layer
+    /// bursts from the rect's own border. A rect with no opaque pixel at all
+    /// (an empty layer) is measured as if it were all inside, which is the
+    /// same burst from the border.
+    #[derive(Debug, Clone)]
+    pub struct BurstField {
+        rect: PixelRect,
+        dist: Vec<f32>,
+    }
+
+    impl BurstField {
+        /// Measure the shape `alpha` answers over `rect`.
+        pub fn new(rect: PixelRect, alpha: impl Fn(IVec2) -> f32) -> Self {
+            let (w, h) = (rect.width as usize, rect.height as usize);
+            let mut inside = vec![false; w * h];
+            let mut any = false;
+            for y in 0..h {
+                for x in 0..w {
+                    let p = IVec2::new((rect.x + x as i64) as i32, (rect.y + y as i64) as i32);
+                    let a = alpha(p);
+                    if a.is_finite() && a > INSIDE {
+                        inside[y * w + x] = true;
+                        any = true;
+                    }
+                }
+            }
+            if !any {
+                inside.iter_mut().for_each(|v| *v = true);
+            }
+            Self {
+                rect,
+                dist: distance_to_outside(&inside, w, h),
+            }
+        }
+
+        /// The depth of `p` inside the shape, in pixels (`0` outside it or
+        /// outside the rect).
+        pub fn depth(&self, p: IVec2) -> f32 {
+            let (x, y) = (i64::from(p.x) - self.rect.x, i64::from(p.y) - self.rect.y);
+            if x < 0 || y < 0 || x >= i64::from(self.rect.width) || y >= i64::from(self.rect.height)
+            {
+                return 0.0;
+            }
+            self.dist[y as usize * self.rect.width as usize + x as usize]
+        }
+
+        /// The ramp parameter at `p` for a drag `length` pixels long.
+        pub fn parameter(&self, p: IVec2, length: f32) -> f32 {
+            let t = self.depth(p) / length.max(1e-3);
+            if t.is_finite() {
+                t.clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        }
+    }
+
+    /// Exact Euclidean distance transform (Felzenszwalb and Huttenlocher's
+    /// lower envelope of parabolas, one pass per axis) of the grid padded by
+    /// one outside pixel on every side.
+    fn distance_to_outside(inside: &[bool], w: usize, h: usize) -> Vec<f32> {
+        let (pw, ph) = (w + 2, h + 2);
+        let far = ((pw * pw + ph * ph) as f64) * 4.0;
+        let mut grid = vec![0.0f64; pw * ph];
+        for y in 0..h {
+            for x in 0..w {
+                if inside[y * w + x] {
+                    grid[(y + 1) * pw + x + 1] = far;
+                }
+            }
+        }
+        let mut line = Vec::new();
+        let mut out = Vec::new();
+        for y in 0..ph {
+            line.clear();
+            line.extend_from_slice(&grid[y * pw..(y + 1) * pw]);
+            edt_1d(&line, &mut out);
+            grid[y * pw..(y + 1) * pw].copy_from_slice(&out);
+        }
+        for x in 0..pw {
+            line.clear();
+            line.extend((0..ph).map(|y| grid[y * pw + x]));
+            edt_1d(&line, &mut out);
+            for (y, v) in out.iter().enumerate() {
+                grid[y * pw + x] = *v;
+            }
+        }
+        let mut dist = vec![0.0f32; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                dist[y * w + x] = grid[(y + 1) * pw + x + 1].sqrt() as f32;
+            }
+        }
+        dist
+    }
+
+    /// One axis of the squared distance transform of the sampled function `f`.
+    fn edt_1d(f: &[f64], out: &mut Vec<f64>) {
+        let n = f.len();
+        out.clear();
+        out.resize(n, 0.0);
+        if n == 0 {
+            return;
+        }
+        let mut v = vec![0usize; n];
+        let mut z = vec![0.0f64; n + 1];
+        let mut k = 0usize;
+        z[0] = f64::NEG_INFINITY;
+        z[1] = f64::INFINITY;
+        let sq = |q: usize| (q * q) as f64;
+        for q in 1..n {
+            loop {
+                let r = v[k];
+                let s = ((f[q] + sq(q)) - (f[r] + sq(r))) / (2.0 * (q as f64 - r as f64));
+                if s <= z[k] && k > 0 {
+                    k -= 1;
+                    continue;
+                }
+                if s <= z[k] {
+                    // k == 0 and the new parabola wins everywhere so far.
+                    v[0] = q;
+                    z[0] = f64::NEG_INFINITY;
+                    z[1] = f64::INFINITY;
+                    break;
+                }
+                k += 1;
+                v[k] = q;
+                z[k] = s;
+                z[k + 1] = f64::INFINITY;
+                break;
+            }
+        }
+        k = 0;
+        for (q, o) in out.iter_mut().enumerate() {
+            while z[k + 1] < q as f64 {
+                k += 1;
+            }
+            let r = v[k];
+            let d = q as f64 - r as f64;
+            *o = d * d + f[r];
+        }
     }
 }
 
@@ -1068,7 +1259,7 @@ mod option_tests {
             "radial {radial} vs linear {linear}"
         );
         assert!(matches!(
-            tool.set_setting("shape", ToolSetting::Choice(5)),
+            tool.set_setting("shape", ToolSetting::Choice(GradientShape::ALL.len())),
             Err(ToolError::OptionKindMismatch { .. })
         ));
         assert!(matches!(
@@ -1207,5 +1398,181 @@ mod w9l_tests {
                 .set_setting(crate::BLEND_MODE_KEY, ToolSetting::Float(1.0)),
             Err(ToolError::OptionKindMismatch { .. })
         ));
+    }
+}
+
+/// W13-I: the Shape Burst style, picked by its registry label and dragged
+/// over a layer holding an opaque square.
+#[cfg(test)]
+mod w13i_tests {
+    use super::*;
+
+    use crate::registry::{self, OptionKind};
+    use crate::tiles::MemoryTiles;
+    use editor_core::PixelKey;
+    use layer_model::LayerId;
+
+    /// A 64x64 layer, transparent but for an opaque square 16..48.
+    fn square_layer(tiles: &mut MemoryTiles, key: PixelKey) {
+        let ts = raster::TILE_SIZE as usize;
+        let mut data = vec![0u8; ts * ts * 4];
+        for y in 16..48 {
+            for x in 16..48 {
+                let i = (y * ts + x) * 4;
+                data[i..i + 4].copy_from_slice(&[128, 128, 128, 255]);
+            }
+        }
+        tiles.put(key, raster::TileCoord::new(0, 0, 0), data);
+    }
+
+    /// The Style choice whose label is `label`, as the options bar offers it.
+    fn style(label: &str) -> usize {
+        let spec = registry::info(ToolId::Gradient)
+            .unwrap()
+            .options
+            .iter()
+            .find(|o| o.key == "shape")
+            .unwrap();
+        let OptionKind::Choice { choices, .. } = spec.kind else {
+            panic!("Style is a choice");
+        };
+        choices.iter().position(|c| *c == label).unwrap()
+    }
+
+    /// A black-to-white drag 16 px long in the Style `label`; the red channel
+    /// it leaves at each probe.
+    fn drag(label: &str, probes: &[(i64, i64)]) -> Vec<u8> {
+        let mut tiles = MemoryTiles::new();
+        let layer = LayerId::new();
+        let key = PixelKey::Layer(layer);
+        square_layer(&mut tiles, key);
+        let mut tool = registry::make(ToolId::Gradient);
+        tool.set_setting("dither", ToolSetting::Bool(false))
+            .unwrap();
+        tool.set_setting("shape", ToolSetting::Choice(style(label)))
+            .unwrap();
+        let delta = {
+            let mut ctx =
+                ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64)).with_layer(layer);
+            ctx.ramp = GradientRamp::black_to_white();
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(0.0, 2.0))
+                .unwrap();
+            tool.on_pointer_up(&mut ctx, PointerEvent::at(16.0, 2.0))
+                .unwrap();
+            match ctx.drain().pop() {
+                Some(Command::PaintTiles { delta, .. }) => delta,
+                other => panic!("expected a paint: {other:?}"),
+            }
+        };
+        tiles.apply_delta(key, &delta);
+        probes
+            .iter()
+            .map(|(x, y)| tiles.pixel(key, *x, *y)[0])
+            .collect()
+    }
+
+    #[test]
+    fn shape_burst_follows_the_layer_alpha_not_the_drag_axis() {
+        // Inside the square: on its edge, 4 px in from the top edge but far
+        // along the axis, and at its centre (16 px from every edge).
+        let (edge, shallow, centre) = ((16, 32), (40, 20), (32, 32));
+        let burst = drag("Shape Burst", &[edge, shallow, centre]);
+        // The edge pixel is 1 px from the transparent one beside it: t is
+        // 1/16, which a linear ramp encodes as sRGB ~71.
+        assert!(burst[0] < 80, "the alpha edge starts the ramp: {burst:?}");
+        assert!(
+            (60..200).contains(&burst[1]),
+            "4 px deep of a 16 px drag is part way: {burst:?}"
+        );
+        assert!(burst[2] > 250, "a drag length deep ends it: {burst:?}");
+        // Linear over the same drag would have the shallow point white: the
+        // style changes what the ramp follows.
+        let linear = drag("Linear", &[shallow]);
+        assert!(linear[0] > 250, "{linear:?}");
+        // Outside the shape is the edge of nothing: the ramp's start.
+        assert!(drag("Shape Burst", &[(4, 60)])[0] < 10);
+    }
+
+    /// The same drag onto a layer MASK whose coverage is the square: the
+    /// burst follows the mask's own coverage edge (round 2: the mask path had
+    /// no test).
+    fn drag_on_mask(label: &str, probes: &[(usize, usize)]) -> Vec<u8> {
+        use crate::tiles::TileAccess;
+        let ts = raster::TILE_SIZE as usize;
+        let mut tiles = MemoryTiles::new();
+        let layer = LayerId::new();
+        let mask = layer_model::MaskId::new();
+        let key = PixelKey::Mask(mask);
+        let mut data = vec![0u8; ts * ts];
+        for y in 16..48 {
+            for x in 16..48 {
+                data[y * ts + x] = 255;
+            }
+        }
+        tiles.put(key, raster::TileCoord::new(0, 0, 0), data);
+        let mut tool = registry::make(ToolId::Gradient);
+        tool.set_setting("dither", ToolSetting::Bool(false))
+            .unwrap();
+        tool.set_setting("shape", ToolSetting::Choice(style(label)))
+            .unwrap();
+        let delta = {
+            let mut ctx =
+                ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64)).with_layer(layer);
+            ctx.paint_target = PaintTarget::Mask;
+            ctx.active_mask = Some(mask);
+            ctx.ramp = GradientRamp::black_to_white();
+            tool.on_pointer_down(&mut ctx, PointerEvent::at(0.0, 2.0))
+                .unwrap();
+            tool.on_pointer_up(&mut ctx, PointerEvent::at(16.0, 2.0))
+                .unwrap();
+            match ctx.drain().pop() {
+                Some(Command::PaintTiles { delta, .. }) => delta,
+                other => panic!("expected a paint: {other:?}"),
+            }
+        };
+        tiles.apply_delta(key, &delta);
+        let bytes = tiles
+            .tile_bytes(key, raster::TileCoord::new(0, 0, 0))
+            .unwrap()
+            .to_vec();
+        probes.iter().map(|(x, y)| bytes[y * ts + x]).collect()
+    }
+
+    #[test]
+    fn shape_burst_on_a_mask_follows_the_mask_coverage() {
+        let (edge, shallow, centre) = ((16, 32), (40, 20), (32, 32));
+        let burst = drag_on_mask("Shape Burst", &[edge, shallow, centre]);
+        assert!(
+            burst[0] < 40,
+            "the coverage edge starts the ramp: {burst:?}"
+        );
+        assert!(
+            (20..200).contains(&burst[1]),
+            "4 px deep of a 16 px drag is part way: {burst:?}"
+        );
+        assert!(burst[2] > 250, "a drag length deep ends it: {burst:?}");
+        // Linear over the same drag: the shallow point is past the drag end.
+        let linear = drag_on_mask("Linear", &[shallow]);
+        assert!(linear[0] > 250, "{linear:?}");
+    }
+
+    #[test]
+    fn the_burst_field_measures_to_the_nearest_transparent_pixel() {
+        let rect = PixelRect::new(0, 0, 9, 9);
+        let field = shape_burst::BurstField::new(rect, |p| {
+            if (2..7).contains(&p.x) && (2..7).contains(&p.y) {
+                1.0
+            } else {
+                0.0
+            }
+        });
+        assert_eq!(field.depth(IVec2::new(0, 0)), 0.0);
+        assert_eq!(field.depth(IVec2::new(2, 4)), 1.0);
+        assert_eq!(field.depth(IVec2::new(4, 4)), 3.0);
+        assert!((field.depth(IVec2::new(3, 3)) - 2.0).abs() < 1e-6);
+        // An empty layer bursts from the rect's border.
+        let empty = shape_burst::BurstField::new(rect, |_| 0.0);
+        assert_eq!(empty.depth(IVec2::new(0, 4)), 1.0);
+        assert_eq!(empty.depth(IVec2::new(4, 4)), 5.0);
     }
 }

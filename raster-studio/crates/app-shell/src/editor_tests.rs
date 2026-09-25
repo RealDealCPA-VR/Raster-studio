@@ -1474,8 +1474,12 @@ fn space_borrows_the_hand_and_gives_it_back() {
     assert_eq!(ed.effective_tool(), ToolId::Brush);
 }
 
+/// W13-M: Photopea's rule. The bare letter (the `SelectTool` action) picks
+/// the group and, pressed again, keeps the tool; stepping through the group
+/// is Shift + the letter (`select_tool_letter(key, true)`, which
+/// `Shell::on_key` calls for it), wrapping.
 #[test]
-fn a_tool_letter_cycles_within_its_group() {
+fn a_tool_letter_keeps_its_tool_and_the_step_cycles_within_its_group() {
     let dir = tempfile::tempdir().unwrap();
     let mut ed = bare(dir.path(), ScriptedDialogs::new());
     let (key, group) = ToolKey::all()
@@ -1484,10 +1488,17 @@ fn a_tool_letter_cycles_within_its_group() {
         .find(|(_, g)| g.len() > 1)
         .expect("the registry has at least one cycle group");
 
-    ed.set_tool(group[group.len() - 1]);
+    let outside = *ToolId::ALL.iter().find(|t| !group.contains(t)).unwrap();
+    ed.set_tool(outside);
     ed.dispatch(Action::SelectTool(key)).unwrap();
-    assert_eq!(ed.tool(), group[0], "the cycle wraps");
+    assert_eq!(ed.tool(), group[0], "the letter enters its group");
+    let last = group[group.len() - 1];
+    ed.set_tool(last);
     ed.dispatch(Action::SelectTool(key)).unwrap();
+    assert_eq!(ed.tool(), last, "a repeated bare letter keeps the tool");
+    assert_eq!(ed.select_tool_letter(key, true), Some(group[0]));
+    assert_eq!(ed.tool(), group[0], "the step wraps");
+    ed.select_tool_letter(key, true);
     assert_eq!(ed.tool(), group[1]);
 }
 

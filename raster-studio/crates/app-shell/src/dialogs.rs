@@ -33,6 +33,13 @@ pub enum CloseChoice {
 pub const IMAGE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "tif", "tiff", "gif", "bmp", "ico", "tga", "svg", "ppm", "pgm",
     "pbm", "pnm", "dds", "xcf", "jxl", "exr", "hdr", "icns", "iff", "ilbm", "lbm", "kra",
+    // W13-D: gzip-compressed SVG; PDF / AI (one artboard per page); EMF /
+    // WMF; EPS, PDN, Sketch, XD and FIG through their embedded previews.
+    "svgz", "pdf", "ai", "eps", "wmf", "emf", "pdn", "sketch", "xd", "fig",
+    // W13-C: Adobe DNG, developed into a 16 Bits/Channel document. The
+    // vendor RAWs (CR2, CR3, NEF, ARW, RAF, ORF, RW2) are not offered: they
+    // are recognised and refused by name (`raster::codec::formats::raw`).
+    "dng",
 ];
 /// W10-F: extension of Photoshop's large-document format, opened through the
 /// same layered road as a `.psd` (both start `8BPS`; the `psd` crate reads
@@ -69,6 +76,10 @@ pub fn open_file_filters() -> Vec<(&'static str, Vec<&'static str>)> {
     everything.extend_from_slice(FONT_EXTENSIONS);
     // W9-H: a Photoshop style library adds its styles to the style presets.
     everything.push(ASL_EXTENSION);
+    // W13-D: a 3D LUT becomes a Color Lookup layer (`editor_open_any`).
+    everything.push(CUBE_EXTENSION);
+    // W13-K: a script opens in the File > Script window.
+    everything.extend_from_slice(crate::script::SCRIPT_EXTENSIONS);
     let mut images = IMAGE_EXTENSIONS.to_vec();
     images.push(PSD_EXTENSION);
     images.push(PSB_EXTENSION);
@@ -80,9 +91,15 @@ pub fn open_file_filters() -> Vec<(&'static str, Vec<&'static str>)> {
         ("Photoshop brushes", vec![ABR_EXTENSION]),
         ("Photoshop resources", RESOURCE_EXTENSIONS.to_vec()),
         ("Photoshop styles", vec![ASL_EXTENSION]),
+        ("Color lookup tables", vec![CUBE_EXTENSION]),
+        ("Scripts", crate::script::SCRIPT_EXTENSIONS.to_vec()),
         ("All files", vec!["*"]),
     ]
 }
+
+/// W13-D: extension of a 3D LUT, which File > Open turns into a Color Lookup
+/// adjustment layer ([`crate::editor::Editor::import_cube_lut`]).
+pub const CUBE_EXTENSION: &str = "cube";
 
 /// W9-H: extension of a Photoshop style library, whose styles
 /// [`crate::editor::Editor::import_style_library`] adds to the style presets.
@@ -715,6 +732,104 @@ mod tests {
         assert_eq!(d.pick_open_file(), None);
     }
 
+    /// W13-C: a `.dng` the picker offers opens as a 16 Bits/Channel document
+    /// of the developed size and colours on both open roads:
+    ///
+    /// - File > Open: `Action::Open` -> `act_open` -> `request_open` ->
+    ///   `jobs::spawn_import_with` (its worker calls
+    ///   `DecodedImage::decode_bytes`, no extension hint) -> `poll_imports`
+    ///   -> `apply_import` -> `OpenDocument::open_image_decoded`;
+    /// - the synchronous road Open Recent, startup files and drops take:
+    ///   `OpenDocument::open_image`.
+    ///
+    /// A vendor RAW is refused naming its format on both roads instead of
+    /// opening its embedded preview.
+    #[test]
+    fn a_dng_opens_as_a_sixteen_bit_document_and_a_vendor_raw_is_refused_by_name() {
+        use raster::codec::formats::raw::fixture::{dng, srgb16, Spec};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shot.dng");
+        let spec = Spec {
+            width: 20,
+            height: 12,
+            orientation: 6,
+            ..Spec::default()
+        };
+        std::fs::write(&path, dng(&spec, |_, _| [0.4, 0.25, 0.1])).unwrap();
+        let developed = |open: &mut crate::doc::OpenDocument, road: &str| {
+            assert_eq!(open.document.meta.bit_depth, 16, "{road}");
+            // Orientation 6: the 20x12 sensor image stands up as 12x20.
+            assert_eq!(
+                (open.document.width(), open.document.height()),
+                (12, 20),
+                "{road}"
+            );
+            let rect = open.canvas_rect();
+            let px = open.composite(rect).unwrap();
+            let centre = ((10 * 12 + 6) * 4) as usize;
+            for (c, want) in [0.4f64, 0.25, 0.1].into_iter().enumerate() {
+                let want = i32::from((srgb16(want) >> 8) as u8);
+                let got = i32::from(px[centre + c]);
+                assert!(
+                    (got - want).abs() <= 3,
+                    "{road}: channel {c}: {got} vs {want}"
+                );
+            }
+        };
+        // A TIFF-shaped Nikon file, to be refused as a NEF, by name.
+        let nef = dir.path().join("shot.nef");
+        let mut tiff = b"II*\0\x08\0\0\0\x03\0".to_vec();
+        for (tag, kind, value) in [(262u16, 3u16, 32803u32), (256, 4, 8), (271, 2, 50)] {
+            tiff.extend(tag.to_le_bytes());
+            tiff.extend(kind.to_le_bytes());
+            tiff.extend(if tag == 271 { 6u32 } else { 1u32 }.to_le_bytes());
+            tiff.extend(value.to_le_bytes());
+        }
+        tiff.extend(0u32.to_le_bytes());
+        tiff.extend(b"NIKON\0");
+        std::fs::write(&nef, &tiff).unwrap();
+
+        // File > Open: the picker answers, the job runs (the editor's
+        // default spawner is inline), the shell's poll applies it.
+        let mut ed = crate::editor::Editor::with_state(
+            crate::prefs::AppPaths::rooted(dir.path().join("config")),
+            crate::prefs::Preferences::default(),
+            crate::recent::RecentFiles::new(),
+            Box::new(ScriptedDialogs::new().opening(&path).opening(&nef)),
+        );
+        ed.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+        ed.dispatch(crate::action::Action::Open).unwrap();
+        ed.poll_imports();
+        assert!(!ed.imports_pending(), "the File > Open job finished");
+        let open = ed.active_mut().expect("File > Open made a document");
+        developed(open, "File > Open");
+        // The NEF on File > Open: no document, the failure reported.
+        let before = ed.documents().len();
+        ed.dispatch(crate::action::Action::Open).unwrap();
+        ed.poll_imports();
+        assert_eq!(ed.documents().len(), before, "a NEF makes no document");
+        let status = ed.status().unwrap_or_default().to_string();
+        assert!(status.starts_with("Could not open"), "{status}");
+        // The error the File > Open worker reports is its decode's, which
+        // names the format.
+        let Err(err) = crate::import::DecodedImage::decode_bytes(&tiff) else {
+            panic!("a NEF does not decode on the File > Open worker");
+        };
+        let text = err.to_string();
+        assert!(text.contains("Nikon NEF") && text.contains("DNG"), "{text}");
+
+        // The synchronous road (Open Recent, startup files, drops).
+        let mut open =
+            crate::doc::OpenDocument::open_image(crate::doc::DocumentId(1300), &path, 10).unwrap();
+        developed(&mut open, "OpenDocument::open_image");
+        let Err(err) = crate::doc::OpenDocument::open_image(crate::doc::DocumentId(1301), &nef, 10)
+        else {
+            panic!("a NEF does not open");
+        };
+        let text = err.to_string();
+        assert!(text.contains("Nikon NEF") && text.contains("DNG"), "{text}");
+    }
+
     #[test]
     fn the_import_filter_covers_what_the_codec_reads() {
         // A filter that offers a format the decoder cannot read (or hides one
@@ -744,12 +859,39 @@ mod tests {
                 ".{ext} not in Images"
             );
         }
-        for ext in ["avif", "heic"] {
+        // W13-C: nor are the vendor RAWs, which are refused by name; DNG is
+        // offered.
+        for ext in [
+            "avif", "heic", "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2",
+        ] {
             assert!(
                 !default_filter.contains(&ext),
                 ".{ext} is offered but cannot open"
             );
         }
+        assert!(default_filter.contains(&"dng") && open_file_filters()[2].1.contains(&"dng"));
+        // W13-D: the new document formats are offered as images, and a
+        // `.cube` (which File > Open routes to a Color Lookup layer) is
+        // offered by the default filter and a filter of its own.
+        for ext in [
+            "svgz", "pdf", "ai", "eps", "wmf", "emf", "pdn", "sketch", "xd", "fig",
+        ] {
+            assert!(default_filter.contains(&ext), ".{ext} is not offered");
+            assert!(
+                open_file_filters()[2].1.contains(&ext),
+                ".{ext} not in Images"
+            );
+        }
+        assert!(default_filter.contains(&"cube"), ".cube is not offered");
+        assert!(
+            open_file_filters()
+                .iter()
+                .any(|(_, exts)| exts.as_slice() == [CUBE_EXTENSION]),
+            "no Color lookup tables filter"
+        );
+        assert!(crate::editor::Editor::is_library_file(Path::new(
+            "/luts/film.cube"
+        )));
         // Every export picker filter names a format the exporter writes by
         // that extension.
         let request = ExportPickerRequest::next(Path::new("/work/photo.png"));

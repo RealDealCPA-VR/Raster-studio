@@ -61,6 +61,13 @@ pub enum PanelId {
     ParagraphStyles,
     /// W11-I: the CSS of the active layer, with a Copy button.
     Css,
+    /// W13-N: the saved layer styles as swatches; a click applies one.
+    Styles,
+    /// W13-N: the document's size, resolution, mode, profile and memory.
+    DocumentInfo,
+    /// W13-N: margins, columns / rows with gutters and centre guides,
+    /// previewed and applied as guides.
+    GuideGuy,
 }
 
 impl PanelId {
@@ -95,6 +102,10 @@ impl PanelId {
         PanelId::ParagraphStyles,
         // W11-I: appended last for the same by-position reason.
         PanelId::Css,
+        // W13-N: appended last for the same by-position reason.
+        PanelId::Styles,
+        PanelId::DocumentInfo,
+        PanelId::GuideGuy,
     ];
 
     /// Panel title, as shown on its header and in the Window menu.
@@ -123,6 +134,9 @@ impl PanelId {
             PanelId::CharacterStyles => "Character Styles",
             PanelId::ParagraphStyles => "Paragraph Styles",
             PanelId::Css => "CSS",
+            PanelId::Styles => "Styles",
+            PanelId::DocumentInfo => "Document Info",
+            PanelId::GuideGuy => "Guide Guy",
         }
     }
 
@@ -152,6 +166,9 @@ impl PanelId {
             PanelId::CharacterStyles => "character-styles",
             PanelId::ParagraphStyles => "paragraph-styles",
             PanelId::Css => "css",
+            PanelId::Styles => "styles",
+            PanelId::DocumentInfo => "document-info",
+            PanelId::GuideGuy => "guide-guy",
         }
     }
 }

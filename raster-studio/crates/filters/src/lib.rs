@@ -98,6 +98,16 @@ pub mod stylize_extra;
 pub mod support;
 // W10-D: Vanishing Point.
 pub mod vanishing_point;
+// W13-J: Kaleidoscope, Dents, Shape Mosaic, Flame, Particles, Repeat, Color
+// to Alpha, Dither, Fourier, Normal Map, Texture Dilation, and the gallery's
+// Distort and Stylize sets.
+pub mod distort_extra;
+pub mod fourier;
+pub mod gallery_extra;
+pub mod other_extra;
+pub mod render_extra;
+pub mod shape_mosaic;
+pub mod three_d;
 
 pub use buffer::{FilterBuffer, FilterError};
 pub use support::{EdgeMode, Interpolation, Sampling};

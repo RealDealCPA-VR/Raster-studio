@@ -12,7 +12,7 @@
 //! | `.csh` | the Custom Shape tool's Shape list (after the built-in library), persisted in the shape presets |
 //! | `.aco`, `.ase` | the Swatches panel (and so the preferences file) |
 //! | `.icc`, `.icm` | assigned to the active document (re-tags it; exports carry it) |
-//! | `.atn` | refused with [`asset_store::resources::ATN_REFUSAL`] |
+//! | `.atn` | W13-E: a new set in the Actions library (`actions_library`), its steps kept parametric; a step with no equivalent here is listed and skipped on play |
 //!
 //! The Swatches panel and the options bar live in the chrome's workspace,
 //! not in the editor, so what they receive is queued here
@@ -183,6 +183,12 @@ impl Editor {
                     loaded.refused,
                 )
             }
+            // W13-E: an action set joins the Actions library as a new set.
+            Resource::Actions(set) => (
+                self.import_action_set(set, &file),
+                Effect::Panels,
+                Vec::new(),
+            ),
             Resource::Icc(icc) => {
                 let label = icc.description.clone().unwrap_or_else(|| file.clone());
                 if !icc.is_rgb() {

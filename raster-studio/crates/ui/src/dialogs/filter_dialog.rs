@@ -35,7 +35,9 @@ use design::tokens::{Radius, Space};
 use egui::{vec2, Context, TextureHandle};
 use filters::{blur, distort, noise, other, pixelate, render, sharpen, stylize};
 use filters::{camera_raw, hsb, lens_correction, lighting};
+// W13-J.
 use filters::{displace, pixelate_extra, quick, smart_blur, stylize_extra};
+use filters::{distort_extra, fourier, other_extra, render_extra, shape_mosaic, three_d};
 use filters::{EdgeMode, FilterBuffer, Interpolation, Sampling};
 use tools::{OptionKind, OptionSpec};
 
@@ -773,6 +775,109 @@ fn channel_model(p: &FilterParams, key: &str) -> hsb::ChannelModel {
         ],
     )
     .unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
+// W13-J: Kaleidoscope, Dents, Shape Mosaic, Flame, Repeat, Color to Alpha,
+// Dither, Particles, Fourier / Inverse Fourier, Normal Map, Texture Dilation.
+// ---------------------------------------------------------------------------
+
+// Photopea's own controls, ranges and defaults (its descriptors and filter
+// dialogs), except Flame's, which are this build's: Photopea's Flame renders
+// only along a path, which a filter here is not handed.
+const KALEIDOSCOPE: &[OptionSpec] = &[
+    int("mirrors", "Mirrors", 2, 20, 6),
+    int("angle", "Angle", 0, 360, 0),
+];
+const DENTS: &[OptionSpec] = &[
+    float("scale", "Scale", 0.0, 200.0, 25.0),
+    float("refraction", "Refraction", 0.0, 200.0, 50.0),
+    float("turbulence", "Turbulence", 0.0, 100.0, 10.0),
+];
+const MOSAIC_SHAPES: &[&str] = &["Square", "Circle", "Star"];
+const MOSAIC_SPREADS: &[&str] = &["XY", "X", "Y"];
+const SHAPE_MOSAIC: &[OptionSpec] = &[
+    int("cell_size", "Cell Size", 2, 200, 12),
+    choice("shape", "Shape", MOSAIC_SHAPES, 0),
+    choice("spread", "Spread", MOSAIC_SPREADS, 0),
+    flag("monochromatic", "Monochromatic", false),
+    flag("invert", "Invert", false),
+];
+const FLAME_KINDS: &[&str] = &["Natural", "Blue"];
+const FLAME: &[OptionSpec] = &[
+    int("count", "Flames", 1, 64, 5),
+    float("length", "Length", 10.0, 2000.0, 120.0),
+    float("width", "Width", 2.0, 400.0, 20.0),
+    choice("kind", "Colour", FLAME_KINDS, 0),
+    int("seed", "Seed", 0, 9999, 1),
+];
+const REPEAT: &[OptionSpec] = &[
+    float("scale", "Scale (%)", 1.0, 300.0, 100.0),
+    float("row_shift", "Row Shift (%)", -50.0, 50.0, 0.0),
+    float("space_x", "Space X (%)", -99.0, 200.0, 0.0),
+    float("space_y", "Space Y (%)", -99.0, 200.0, 0.0),
+    flag("auto_color", "Auto Color", false),
+    float("angle", "Angle", -180.0, 180.0, 0.0),
+];
+const COLOR_TO_ALPHA: &[OptionSpec] = &[
+    color("color", "Color", [0.0, 0.0, 0.0, 1.0]),
+    float(
+        "transparency",
+        "Transparency Threshold (%)",
+        0.0,
+        100.0,
+        0.0,
+    ),
+    float("opacity", "Opacity Threshold (%)", 0.0, 100.0, 100.0),
+];
+const DITHER_PALETTES: &[&str] = &["Black & White", "RGB 2x2x2", "RGB 4x4x4", "RGB 8x8x4"];
+const DITHER_METHODS: &[&str] = &["None", "Floyd-Steinberg", "Bayer 4x4"];
+const DITHER: &[OptionSpec] = &[
+    choice("palette", "Palette", DITHER_PALETTES, 0),
+    choice("method", "Method", DITHER_METHODS, 1),
+];
+const PARTICLES: &[OptionSpec] = &[
+    float("count", "Count (%)", 0.0, 100.0, 10.0),
+    int("size", "Size (px)", 1, 50, 8),
+    float("depth", "Depth (%)", 0.0, 100.0, 100.0),
+    float("brightness", "Brightness (%)", 10.0, 1000.0, 800.0),
+    color("color", "Color", [1.0, 1.0, 1.0, 1.0]),
+    float("time", "Time", 0.0, 1.0, 0.0),
+    float("turbulence", "Turbulence (%)", 0.0, 100.0, 0.0),
+    flag("blink", "Blink", true),
+    flag("fall", "Fall", false),
+];
+const NORMAL_MAP: &[OptionSpec] = &[
+    float("blur", "Blur (px)", 0.0, 100.0, 0.0),
+    float("scale", "Scale (%)", 0.0, 200.0, 100.0),
+    flag("invert", "Invert", false),
+    float("high", "High (%)", 0.0, 100.0, 100.0),
+    float("medium", "Medium (%)", 0.0, 100.0, 100.0),
+    float("low", "Low (%)", 0.0, 100.0, 100.0),
+];
+const TEXTURE_DILATION: &[OptionSpec] = &[
+    int("crop", "Crop (px)", 0, 20, 0),
+    int("radius", "Radius (px)", 0, 400, 10),
+];
+
+/// W13-J: a colour parameter as straight linear RGB, the convention the
+/// `filters` renderers take.
+fn rgb_of(p: &FilterParams, key: &str) -> [f32; 3] {
+    let c = p.color(key);
+    [c[0], c[1], c[2]]
+}
+
+/// W13-J: Fourier Transform's summary. It says what an 8-bit document costs:
+/// the spectrum is stored in 8 bits, and the way back is off by several
+/// levels (`filters::fourier`'s `eight_bit_storage_loses_the_round_trip`
+/// measures it); a 16-bit document comes back within 1/255.
+pub const FOURIER_SUMMARY: &str = "Replaces each channel with its spectrum: log magnitude left, \
+     phase right. In an 8-bit document the spectrum is stored in 8 bits, and Inverse Fourier \
+     Transform cannot restore the image exactly: convert to 16 bits first.";
+
+/// W13-J: a percentage parameter as a fraction.
+fn fraction(p: &FilterParams, key: &str) -> f32 {
+    p.float(key) / 100.0
 }
 
 /// Every filter that has a dialog: exactly the entries of [`FilterId::ALL`],
@@ -1530,6 +1635,169 @@ pub const FILTERS: &[FilterSpec] = &[
         summary: "Rewrites the RGB channels as HSB or HSL values, or back.",
         params: HSB_HSL,
         apply: |src, p| hsb::hsb_hsl(src, channel_model(p, "input"), channel_model(p, "output")),
+    },
+    // W13-J ---------------------------------------------------------------
+    FilterSpec {
+        id: FilterId::Kaleidoscope,
+        summary: "Folds the image into mirrored wedges around its centre.",
+        params: KALEIDOSCOPE,
+        apply: |src, p| {
+            distort_extra::kaleidoscope(
+                src,
+                p.uint("mirrors"),
+                p.int("angle") as f32,
+                Sampling::new(EdgeMode::Mirror, Interpolation::default()),
+            )
+        },
+    },
+    FilterSpec {
+        id: FilterId::Dents,
+        summary: "Pushes every pixel the same distance, in a direction a seeded noise field turns.",
+        params: DENTS,
+        apply: |src, p| {
+            distort_extra::dents(
+                src,
+                p.float("scale"),
+                p.float("refraction"),
+                distort_extra::DENTS_DEFAULT_DETAIL,
+                p.float("turbulence"),
+                distort_extra::DENTS_DEFAULT_SEED,
+                Sampling::new(EdgeMode::Mirror, Interpolation::default()),
+            )
+        },
+    },
+    FilterSpec {
+        id: FilterId::ShapeMosaic,
+        summary: "Draws a red, a green and a blue shape in every cell, each sized by its channel.",
+        params: SHAPE_MOSAIC,
+        apply: |src, p| {
+            shape_mosaic::shape_mosaic(
+                src,
+                p.uint("cell_size"),
+                p.choose("shape", &shape_mosaic::MosaicShape::ALL)
+                    .unwrap_or(shape_mosaic::MosaicShape::Square),
+                p.choose("spread", &shape_mosaic::MosaicSpread::ALL)
+                    .unwrap_or(shape_mosaic::MosaicSpread::XY),
+                p.flag("monochromatic"),
+                p.flag("invert"),
+            )
+        },
+    },
+    FilterSpec {
+        id: FilterId::Flame,
+        summary: "Renders seeded flames rising from the lower half of the layer.",
+        params: FLAME,
+        apply: |src, p| {
+            render_extra::flame(
+                src,
+                p.uint("count"),
+                p.float("length"),
+                p.float("width"),
+                p.choose("kind", &render_extra::FlameKind::ALL)
+                    .unwrap_or(render_extra::FlameKind::Natural),
+                u64::from(p.uint("seed")),
+            )
+        },
+    },
+    FilterSpec {
+        id: FilterId::Repeat,
+        summary: "Tiles the layer's content across the canvas.",
+        params: REPEAT,
+        apply: |src, p| {
+            other_extra::repeat(
+                src,
+                p.float("scale"),
+                p.float("row_shift"),
+                p.float("space_x"),
+                p.float("space_y"),
+                p.flag("auto_color"),
+                p.float("angle"),
+            )
+        },
+    },
+    FilterSpec {
+        id: FilterId::ColorToAlpha,
+        summary: "Turns a colour into transparency, keeping what was blended over it.",
+        params: COLOR_TO_ALPHA,
+        apply: |src, p| {
+            other_extra::color_to_alpha(
+                src,
+                rgb_of(p, "color"),
+                fraction(p, "transparency"),
+                fraction(p, "opacity"),
+            )
+        },
+    },
+    FilterSpec {
+        id: FilterId::Dither,
+        summary: "Reduces the image to a fixed palette, dithering the difference.",
+        params: DITHER,
+        apply: |src, p| {
+            other_extra::dither(
+                src,
+                p.choose("palette", &other_extra::DitherPalette::ALL)
+                    .unwrap_or(other_extra::DitherPalette::BlackWhite),
+                p.choose("method", &other_extra::DitherMethod::ALL)
+                    .unwrap_or(other_extra::DitherMethod::FloydSteinberg),
+            )
+        },
+    },
+    FilterSpec {
+        id: FilterId::Particles,
+        summary: "Renders glowing particles over the layer, scattered by a fixed seed.",
+        params: PARTICLES,
+        apply: |src, p| {
+            render_extra::particles(
+                src,
+                &render_extra::ParticleSettings {
+                    count: fraction(p, "count"),
+                    size: p.uint("size"),
+                    depth: fraction(p, "depth"),
+                    brightness: fraction(p, "brightness"),
+                    color: rgb_of(p, "color"),
+                    time: p.float("time"),
+                    turbulence: fraction(p, "turbulence"),
+                    blink: p.flag("blink"),
+                    fall: p.flag("fall"),
+                    seed: render_extra::PARTICLES_DEFAULT_SEED,
+                },
+            )
+        },
+    },
+    FilterSpec {
+        id: FilterId::FourierTransform,
+        summary: FOURIER_SUMMARY,
+        params: NO_PARAMS,
+        apply: |src, _| fourier::fourier_transform(src),
+    },
+    FilterSpec {
+        id: FilterId::InverseFourierTransform,
+        summary: "Turns a spectrum made by Fourier Transform back into pixels.",
+        params: NO_PARAMS,
+        apply: |src, _| fourier::inverse_fourier_transform(src),
+    },
+    FilterSpec {
+        id: FilterId::NormalMap,
+        summary:
+            "Reads the layer's brightness as height and writes its surface normals as colours.",
+        params: NORMAL_MAP,
+        apply: |src, p| {
+            three_d::normal_map(
+                src,
+                p.float("blur"),
+                fraction(p, "scale"),
+                p.flag("invert"),
+                fraction(p, "high"),
+                fraction(p, "medium"),
+                fraction(p, "low"),
+            )
+        },
+    },
+    FilterSpec {
+        id: FilterId::TextureDilation,
+        summary: "Fills the clear areas near the opaque ones with the nearest opaque colour.",
+        params: TEXTURE_DILATION,
+        apply: |src, p| three_d::texture_dilation(src, p.uint("crop"), p.uint("radius")),
     },
 ];
 
@@ -2304,6 +2572,36 @@ mod tests {
             "white_high",
             "the default texture channel is None, so there is no bump map to invert",
         ),
+        (
+            FilterId::TextureDilation,
+            "radius",
+            "the proxy is opaque, so there is no transparent pixel for the growth to reach",
+        ),
+        (
+            FilterId::TextureDilation,
+            "crop",
+            "the proxy is opaque, so no covered pixel has a clear neighbour to be shaved back from",
+        ),
+        (
+            FilterId::Repeat,
+            "row_shift",
+            "the proxy fills the canvas, so at the default scale the only copy on it is row 0,              which a row shift does not move",
+        ),
+        (
+            FilterId::Repeat,
+            "auto_color",
+            "at the default spacing the copies leave no gap for the colour to fill",
+        ),
+        (
+            FilterId::Particles,
+            "time",
+            "with Turbulence 0 and Fall off, Time moves only the blink, whose period is half a              unit of Time, and the values tried (0.5 and 1) are whole periods",
+        ),
+        (
+            FilterId::Particles,
+            "fall",
+            "Fall moves the particles down by Time, and the default Time is 0",
+        ),
     ];
 
     /// W10-C: the four new filters' inert-at-default controls come alive as
@@ -2723,5 +3021,248 @@ mod tests {
         assert!(dialog.set_param("scale_x", ParamValue::Float(0.0)));
         assert!(dialog.set_param("scale_y", ParamValue::Float(0.0)));
         assert_eq!(dialog.preview_buffer().pixels(), source.pixels());
+    }
+
+    /// W13-J: the twelve new Filter-menu rows, each with the dialog (and
+    /// live preview) that runs the real kernel.
+    const W13J: [FilterId; 12] = [
+        FilterId::Kaleidoscope,
+        FilterId::Dents,
+        FilterId::ShapeMosaic,
+        FilterId::Flame,
+        FilterId::Repeat,
+        FilterId::ColorToAlpha,
+        FilterId::Dither,
+        FilterId::Particles,
+        FilterId::FourierTransform,
+        FilterId::InverseFourierTransform,
+        FilterId::NormalMap,
+        FilterId::TextureDilation,
+    ];
+
+    #[test]
+    fn w13j_every_new_row_has_a_dialog_whose_preview_runs_the_filter() {
+        let source = busy_buffer(32);
+        for id in W13J {
+            let spec = filter_by_id(id).unwrap_or_else(|| panic!("{id:?} has no dialog"));
+            assert_eq!(spec.id, id);
+            let dialog = FilterDialog::new(spec, source.clone());
+            let preview = dialog.preview_buffer();
+            assert_eq!(preview.dimensions(), (32, 32), "{id:?}");
+            // Texture Dilation has nothing to grow into on an opaque proxy,
+            // and Repeat at its defaults (100 %, no spacing, no angle) tiles
+            // a layer that fills the canvas onto itself — both the identity
+            // there, as in Photopea. Every other new filter changes it.
+            if !matches!(id, FilterId::TextureDilation | FilterId::Repeat) {
+                assert_ne!(preview, source, "{id:?} changed nothing at its defaults");
+            }
+            // The preview is the confirmed invocation's result, bit for bit.
+            assert_eq!(dialog.invocation().run(&source), preview, "{id:?}");
+        }
+        // Filter ▸ Fourier: Fourier Transform then Inverse Fourier Transform,
+        // each through its own dialog, restores the image within 1/255.
+        let forward = FilterDialog::new(
+            filter_by_id(FilterId::FourierTransform).unwrap(),
+            source.clone(),
+        )
+        .preview_buffer();
+        let back = FilterDialog::new(
+            filter_by_id(FilterId::InverseFourierTransform).unwrap(),
+            forward.clone(),
+        )
+        .preview_buffer();
+        assert_ne!(forward, source);
+        for (a, b) in source.to_rgba8().iter().zip(back.to_rgba8()) {
+            assert!((i32::from(*a) - i32::from(b)).abs() <= 1, "{a} vs {b}");
+        }
+        // Texture Dilation comes alive over a layer with clear pixels: at
+        // Photopea's default Radius 10 every pixel under 10 px from the one
+        // covered pixel is filled; at Radius 2, the 9 under 2 px.
+        let mut sparse = FilterBuffer::transparent(32, 32).unwrap();
+        sparse.set(16, 16, [0.5, 0.25, 0.0, 1.0]);
+        let under = |r: i64| {
+            (0..32i64)
+                .flat_map(|y| (0..32i64).map(move |x| (x - 16).pow(2) + (y - 16).pow(2)))
+                .filter(|d2| *d2 < r * r)
+                .count()
+        };
+        let mut dialog =
+            FilterDialog::new(filter_by_id(FilterId::TextureDilation).unwrap(), sparse);
+        let grown = dialog.preview_buffer();
+        assert_eq!(
+            grown.pixels().iter().filter(|p| p[3] == 1.0).count(),
+            under(10)
+        );
+        assert!(dialog.set_param("radius", ParamValue::Int(2)));
+        let two = dialog.preview_buffer();
+        assert_eq!(two.pixels().iter().filter(|p| p[3] > 0.0).count(), 9);
+        // Repeat comes alive when its tile is smaller than the canvas.
+        let mut dialog = FilterDialog::new(filter_by_id(FilterId::Repeat).unwrap(), source.clone());
+        assert!(dialog.set_param("scale", ParamValue::Float(50.0)));
+        assert_ne!(dialog.preview_buffer(), source, "Repeat at 50 %");
+    }
+
+    /// W13-J: the new filters' inert-at-default controls (in
+    /// `EXPECTED_INERT`) come alive as soon as the control they depend on
+    /// moves, or the layer gives them something to act on.
+    #[test]
+    fn w13j_inert_parameters_come_alive_once_their_neighbour_moves() {
+        let live = |id: FilterId,
+                    source: &FilterBuffer,
+                    first: Option<(&str, ParamValue)>,
+                    then: (&str, ParamValue)| {
+            let mut dialog = FilterDialog::new(filter_by_id(id).unwrap(), source.clone());
+            if let Some((key, value)) = first {
+                assert!(dialog.set_param(key, value));
+            }
+            let before = dialog.preview_buffer().to_rgba8();
+            assert!(dialog.set_param(then.0, then.1));
+            assert_ne!(
+                dialog.preview_buffer().to_rgba8(),
+                before,
+                "{id:?}/{} does nothing",
+                then.0
+            );
+        };
+        let busy = busy_buffer(24);
+        live(
+            FilterId::Repeat,
+            &busy,
+            Some(("scale", ParamValue::Float(50.0))),
+            ("row_shift", ParamValue::Float(50.0)),
+        );
+        live(
+            FilterId::Particles,
+            &busy,
+            Some(("turbulence", ParamValue::Float(50.0))),
+            ("time", ParamValue::Float(0.25)),
+        );
+        live(
+            FilterId::Particles,
+            &busy,
+            Some(("time", ParamValue::Float(0.25))),
+            ("fall", ParamValue::Bool(true)),
+        );
+        // A 6x6 island on a clear layer: a green core in a white rim.
+        let mut island = FilterBuffer::transparent(32, 32).unwrap();
+        for y in 13..19 {
+            for x in 13..19 {
+                let rim = x == 13 || x == 18 || y == 13 || y == 18;
+                island.set(x, y, if rim { [1.0; 4] } else { [0.0, 1.0, 0.0, 1.0] });
+            }
+        }
+        // Repeat tiles the island's core (its white rim is trimmed as the
+        // corner colour); spaced out, the gaps take that white.
+        live(
+            FilterId::Repeat,
+            &island,
+            Some(("space_x", ParamValue::Float(50.0))),
+            ("auto_color", ParamValue::Bool(true)),
+        );
+        live(
+            FilterId::TextureDilation,
+            &island,
+            None,
+            ("radius", ParamValue::Int(3)),
+        );
+        live(
+            FilterId::TextureDilation,
+            &island,
+            None,
+            ("crop", ParamValue::Int(1)),
+        );
+    }
+
+    /// W13-J: the dialogs carry Photopea's controls — the names, ranges and
+    /// defaults of its own filter dialogs (read from its descriptors and
+    /// dialog definitions) — for every new filter but Flame, whose Photopea
+    /// original draws only along a path.
+    #[test]
+    fn w13j_dialogs_carry_photopeas_controls() {
+        let keys = |id: FilterId| -> Vec<&str> {
+            filter_by_id(id)
+                .unwrap()
+                .params
+                .iter()
+                .map(|s| s.key)
+                .collect()
+        };
+        assert_eq!(keys(FilterId::Kaleidoscope), ["mirrors", "angle"]);
+        assert_eq!(keys(FilterId::Dents), ["scale", "refraction", "turbulence"]);
+        assert_eq!(
+            keys(FilterId::ShapeMosaic),
+            ["cell_size", "shape", "spread", "monochromatic", "invert"]
+        );
+        assert_eq!(
+            keys(FilterId::Repeat),
+            [
+                "scale",
+                "row_shift",
+                "space_x",
+                "space_y",
+                "auto_color",
+                "angle"
+            ]
+        );
+        assert_eq!(
+            keys(FilterId::ColorToAlpha),
+            ["color", "transparency", "opacity"]
+        );
+        assert_eq!(keys(FilterId::Dither), ["palette", "method"]);
+        assert_eq!(
+            keys(FilterId::Particles),
+            [
+                "count",
+                "size",
+                "depth",
+                "brightness",
+                "color",
+                "time",
+                "turbulence",
+                "blink",
+                "fall"
+            ]
+        );
+        assert_eq!(
+            keys(FilterId::NormalMap),
+            ["blur", "scale", "invert", "high", "medium", "low"]
+        );
+        assert_eq!(keys(FilterId::TextureDilation), ["crop", "radius"]);
+        // Defaults that differ from what a guess would pick.
+        let defaults = |id: FilterId| FilterParams::defaults(filter_by_id(id).unwrap().params);
+        assert_eq!(
+            defaults(FilterId::ColorToAlpha).get("color"),
+            Some(ParamValue::Color([0.0, 0.0, 0.0, 1.0])),
+            "Photopea removes black by default"
+        );
+        let dither = defaults(FilterId::Dither);
+        assert_eq!(dither.get("palette"), Some(ParamValue::Choice(0)));
+        assert_eq!(
+            dither.get("method"),
+            Some(ParamValue::Choice(1)),
+            "Floyd-Steinberg"
+        );
+        assert_eq!(
+            defaults(FilterId::Kaleidoscope).get("mirrors"),
+            Some(ParamValue::Int(6))
+        );
+        assert_eq!(
+            defaults(FilterId::Particles).get("brightness"),
+            Some(ParamValue::Float(800.0))
+        );
+        assert_eq!(
+            defaults(FilterId::TextureDilation).get("radius"),
+            Some(ParamValue::Int(10))
+        );
+        // Ranges are Photopea's: Mirrors 2..=20, Space X down to -99 %.
+        let mut k = defaults(FilterId::Kaleidoscope);
+        assert!(k.set("mirrors", ParamValue::Int(50)));
+        assert_eq!(k.get("mirrors"), Some(ParamValue::Int(20)));
+        let mut r = defaults(FilterId::Repeat);
+        assert!(r.set("space_x", ParamValue::Float(-500.0)));
+        assert_eq!(r.get("space_x"), Some(ParamValue::Float(-99.0)));
+        // Fourier Transform says what an 8-bit document costs.
+        let fourier = filter_by_id(FilterId::FourierTransform).unwrap();
+        assert!(fourier.summary.contains("8-bit") && fourier.summary.contains("16 bits"));
     }
 }

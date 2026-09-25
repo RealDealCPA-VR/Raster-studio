@@ -154,6 +154,18 @@ mod sampler;
 // W11-G: the Object Selection tool's rectangle runs on a job worker.
 #[path = "tool_input_object_select.rs"]
 pub(crate) mod object_select;
+// W13-A: the Move tool's Alt+drag duplicates the layers it moves.
+#[path = "move_duplicate.rs"]
+pub(crate) mod move_duplicate;
+// W13-I: the Crop tool's Content-Aware fill of the canvas a crop adds.
+#[path = "tool_input_crop_fill.rs"]
+pub(crate) mod crop_fill;
+// W13-I: the Move options bar's Quick Export (the active layer as a PNG).
+#[path = "tool_input_quick_export.rs"]
+pub(crate) mod quick_export;
+#[cfg(test)]
+#[path = "tool_input_w13i_tests.rs"]
+mod w13i_tests;
 // The tests read tile bytes back; the lib reads them through `NarrowedReads`.
 #[cfg(test)]
 use compositor::TileSource;
@@ -1075,6 +1087,15 @@ pub struct ToolPointer {
     /// W5-C: the (document, layer) Show Transform Controls last framed, so a
     /// hover re-seeds the Move tool's box only when something changed.
     move_display_seeded: Option<(DocumentId, Option<layer_model::LayerId>)>,
+    /// W13-A: the running Move gesture was pressed with Alt held, so its
+    /// layer move lands on a duplicate ([`move_duplicate`]). Written at
+    /// every Down, taken at the Up.
+    move_copy: bool,
+    /// W13-I: the Crop options bar's Content-Aware box as the last Crop
+    /// press carried it — what the tool's box was drawn under, and what
+    /// [`ToolPointer::commit`] reads to fill the canvas the crop adds
+    /// ([`crop_fill`]).
+    crop_content_aware: bool,
 }
 
 thread_local! {
@@ -2086,6 +2107,30 @@ impl ToolPointer {
                     let command = editor
                         .active_mut()
                         .and_then(|doc| crate::crop_apply::crop(doc, &req));
+                    // W13-I: Content-Aware fills the canvas the crop adds, in
+                    // the same transaction (one Ctrl+Z). A refused fill still
+                    // crops; the status line says why nothing was filled.
+                    let mut fill_note = None;
+                    let command = match command {
+                        Some(Ok(Command::Transaction {
+                            label,
+                            mut commands,
+                        })) if self.crop_content_aware => {
+                            match editor
+                                .active_mut()
+                                .map(|doc| crop_fill::fill_new_area(doc, &req, &commands))
+                            {
+                                Some(Ok(Some(fill))) => {
+                                    commands.push(fill);
+                                    fill_note = Some("; the new canvas was filled".to_string());
+                                }
+                                Some(Err(why)) => fill_note = Some(format!("; {why}")),
+                                _ => {}
+                            }
+                            Some(Ok(Command::Transaction { label, commands }))
+                        }
+                        other => other,
+                    };
                     match command {
                         Some(Ok(command)) => {
                             let depth = editor.active().map(|d| d.history_depth());
@@ -2096,7 +2141,8 @@ impl ToolPointer {
                                 out.cropped_to = Some(req.rect);
                                 if let Some(doc) = editor.active() {
                                     let (w, h) = (doc.document.width(), doc.document.height());
-                                    editor.set_status(format!("Cropped to {w} x {h}"));
+                                    let note = fill_note.unwrap_or_default();
+                                    editor.set_status(format!("Cropped to {w} x {h}{note}"));
                                 }
                             }
                         }
@@ -2523,6 +2569,11 @@ impl ToolPointer {
         // one sample of it.
         let mut pinned_paint_target = self.pinned_paint_target;
         let brush = (routed.phase == PointerPhase::Down).then(|| editor.brush_for(id));
+        // W13-A: Alt at a Move press makes the gesture a copy (pinned for
+        // the gesture, like the tool itself).
+        if routed.phase == PointerPhase::Down {
+            self.move_copy = id == ToolId::Move && routed.event.modifiers.alt;
+        }
         // W10-A: Slice Select edits the document's committed slice set (the
         // one File > Export > Slices writes), so it is built over that set at
         // every press; its release hands the edited set back as
@@ -2537,6 +2588,13 @@ impl ToolPointer {
                 editor.slices.set_picked(doc_id, picked);
                 self.current = Some((id, Box::new(tool)));
             }
+        }
+        // W13-I: remember the Crop press's Content-Aware box for Enter.
+        if brush.is_some() && id == ToolId::Crop {
+            self.crop_content_aware = settings.iter().any(|(key, setting)| {
+                key == tools::edit::CROP_CONTENT_AWARE_KEY
+                    && *setting == tools::ToolSetting::Bool(true)
+            });
         }
         let tool = self.tool(id);
         if let Some(brush) = brush {
@@ -2734,12 +2792,29 @@ impl ToolPointer {
             // lends the stroke the composite it reads (built here, before the
             // tile store is borrowed mutably; composited lazily, only where
             // the stroke reads). The stroke keeps it until its release.
+            // W13-I: the Eyedropper's Sample choice rides the same lend; an
+            // untouched bar holds no value, so the choice read is the
+            // registry's default for the tool (All Layers for the
+            // Eyedropper, Current Layer for the retouching tools).
+            let sample_choice = settings
+                .iter()
+                .find(|(key, _)| key == tools::tool::SAMPLE_LAYERS_KEY)
+                .map(|(_, setting)| *setting)
+                .or_else(|| {
+                    registry::info(id)?
+                        .options
+                        .iter()
+                        .find(|o| o.key == tools::tool::SAMPLE_LAYERS_KEY)
+                        .and_then(|o| match o.kind {
+                            tools::OptionKind::Choice { default, .. } => {
+                                Some(tools::ToolSetting::Choice(default))
+                            }
+                            _ => None,
+                        })
+                });
             let composite_sampler = (routed.phase == PointerPhase::Down
                 && target.paint == tools::PaintTarget::Layer
-                && settings.iter().any(|(key, setting)| {
-                    key == tools::tool::SAMPLE_LAYERS_KEY
-                        && matches!(setting, tools::ToolSetting::Choice(i) if *i > 0)
-                }))
+                && matches!(sample_choice, Some(tools::ToolSetting::Choice(i)) if i > 0))
             .then(|| {
                 std::sync::Arc::new(sampler::DocumentCompositeSampler::new(
                     &doc.document,
@@ -2987,6 +3062,17 @@ impl ToolPointer {
         // Through the editor, so a gesture is undone by exactly the Ctrl+Z that
         // undoes a panel edit. The count is what history really took, not what
         // the tool offered: a command History refuses is not a step.
+        // W13-A: an Alt+drag Move gesture's layer move lands on duplicates,
+        // made and moved as ONE step; the rest of its output (a selection
+        // copy's transaction) takes the ordinary route below.
+        let (commands, requests) = if routed.phase == PointerPhase::Up
+            && id == ToolId::Move
+            && std::mem::take(&mut self.move_copy)
+        {
+            move_duplicate::copy_and_move(editor, commands, requests)
+        } else {
+            (commands, requests)
+        };
         // W10-H: a paint stroke may keep a 32-bit layer's clipped HDR pixels.
         crate::depth32::with_in_place_stroke(crate::depth32::in_place_tool(id), || {
             for command in commands {
@@ -8730,6 +8816,269 @@ mod tests {
                 && near(landed.y as f32, predicted[0].y)
                 && near((landed.x + landed.width as i64) as f32, predicted[2].x),
             "the release landed off the drawn box: {landed:?} vs {predicted:?}"
+        );
+    }
+
+    /// W13-H: the shell's boundary conversion (shell.rs), verbatim, over the
+    /// chrome's forward set for `tool`.
+    fn w13h_forwarded(
+        chrome: &crate::chrome::Chrome,
+        tool: tools::ToolId,
+    ) -> Vec<(String, tools::ToolSetting)> {
+        chrome
+            .tool_options(tool)
+            .into_iter()
+            .map(|(key, value)| {
+                let setting = match value {
+                    ui::OptionValue::Float(v) => tools::ToolSetting::Float(v),
+                    ui::OptionValue::Int(v) => tools::ToolSetting::Int(v),
+                    ui::OptionValue::Bool(v) => tools::ToolSetting::Bool(v),
+                    ui::OptionValue::Choice(v) => tools::ToolSetting::Choice(v),
+                    ui::OptionValue::Color(v) => tools::ToolSetting::Color(v),
+                };
+                (key, setting)
+            })
+            .collect()
+    }
+
+    /// W13-H: one stroke of `tool` from document `from` to `to` on the white
+    /// fixture, the forwarded `settings` applied at the press (a refusal
+    /// fails the test), and the composite after it.
+    fn w13h_stroke(
+        tool: tools::ToolId,
+        settings: &[(String, tools::ToolSetting)],
+        from: (f32, f32),
+        to: (f32, f32),
+        fg: [f32; 4],
+    ) -> Vec<u8> {
+        let dir = tempfile::tempdir().unwrap();
+        let mut editor = editor(dir.path());
+        editor.set_tool(tool);
+        editor.set_foreground(fg);
+        let mut pointer = ToolPointer::new();
+        let out = pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Down, screen(from.0, from.1)),
+            false,
+            settings,
+        );
+        assert!(
+            out.failed.is_none(),
+            "{tool:?} refused a forwarded option: {:?}",
+            out.failed
+        );
+        for i in 1..=4 {
+            let t = i as f32 / 4.0;
+            let at = screen(from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
+            pointer.handle(&mut editor, sample(PointerPhase::Move, at), false, settings);
+        }
+        pointer.handle(
+            &mut editor,
+            sample(PointerPhase::Up, screen(to.0, to.1)),
+            false,
+            settings,
+        );
+        composite(&mut editor)
+    }
+
+    /// W13-H: the Symmetry drop-down is DRAWN in the Brush's options bar (the
+    /// real `ui::view::tool_options`, headless), clicking its Vertical entry
+    /// comes out as the option write, the chrome holds it, and the press that
+    /// receives the chrome's forward set paints the stroke's mirror image —
+    /// the whole route from the drawn control to the pixels.
+    #[test]
+    fn w13h_the_symmetry_picked_in_the_drawn_options_bar_mirrors_a_real_brush_stroke() {
+        use tools::ToolId;
+        let key = tools::symmetry::SYMMETRY_KEY;
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        let mut w = ui::Workspace::new();
+        w.absorb(&ui::Intent::SelectTool(ToolId::Brush));
+        let frame = |w: &mut ui::Workspace, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(6000.0, 400.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |c| ui::view::tool_options(w, c));
+            w.drain_intents()
+        };
+        let click = |at: egui::Pos2| {
+            let button = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            };
+            vec![egui::Event::PointerMoved(at), button(true), button(false)]
+        };
+        for _ in 0..3 {
+            frame(&mut w, Vec::new());
+        }
+        let combo = ctx
+            .read_response(ui::view::ids::tool_option(ToolId::Brush, key))
+            .expect("the Symmetry drop-down is drawn in the Brush's options bar")
+            .rect;
+        assert!(
+            ctx.read_response(ui::view::ids::tool_option(
+                ToolId::Brush,
+                tools::symmetry::SYMMETRY_SEGMENTS_KEY
+            ))
+            .is_some(),
+            "the Segments field is drawn beside it"
+        );
+        frame(&mut w, click(combo.center()));
+        for _ in 0..2 {
+            frame(&mut w, Vec::new());
+        }
+        let vertical = ctx
+            .read_response(ui::view::ids::tool_option_choice(ToolId::Brush, key, 1))
+            .expect("the drop-down opened on its entries")
+            .rect;
+        let mut intents = frame(&mut w, click(vertical.center()));
+        intents.extend(frame(&mut w, Vec::new()));
+        let written = intents
+            .iter()
+            .find_map(|i| match i {
+                ui::Intent::SetToolOption {
+                    tool: ToolId::Brush,
+                    key: k,
+                    value,
+                } if *k == key => Some(*value),
+                _ => None,
+            })
+            .expect("clicking the entry writes the option");
+        assert_eq!(written, ui::OptionValue::Choice(1), "Vertical");
+
+        let mut chrome = crate::chrome::Chrome::new();
+        chrome.set_tool_option(ToolId::Brush, key, written);
+        let settings = w13h_forwarded(&chrome, ToolId::Brush);
+        assert!(
+            settings.iter().any(|(k, _)| k == key),
+            "the chrome forwards the Symmetry: {settings:?}"
+        );
+        let black = [0.0, 0.0, 0.0, 1.0];
+        let plain = w13h_stroke(ToolId::Brush, &[], (8.0, 20.0), (14.0, 20.0), black);
+        let mirrored = w13h_stroke(ToolId::Brush, &settings, (8.0, 20.0), (14.0, 20.0), black);
+        assert!(
+            pixel_at(&plain, 11, 20)[0] < 100,
+            "control: the stroke paints"
+        );
+        assert_eq!(
+            pixel_at(&plain, 53, 20),
+            [255, 255, 255, 255],
+            "control: nothing at the mirror without symmetry"
+        );
+        assert!(
+            pixel_at(&mirrored, 11, 20)[0] < 100,
+            "the stroke still paints"
+        );
+        // x = 8..14 mirrors across the centre line x = 32 to x = 50..56.
+        assert!(
+            pixel_at(&mirrored, 53, 20)[0] < 100,
+            "the mirrored stroke: {:?}",
+            pixel_at(&mirrored, 53, 20)
+        );
+    }
+
+    /// W13-H: every new option, held by the chrome at a non-default value,
+    /// reaches its tool at a real press without a refusal; and the Colour
+    /// Replacement Mode held there changes the pixels (Luminosity over white
+    /// leaves grey where the default Colour mode leaves red).
+    #[test]
+    fn w13h_every_new_option_reaches_its_tool_through_the_chrome_and_the_press() {
+        use tools::stroke_options as so;
+        use tools::symmetry as sy;
+        use tools::ToolId;
+        use ui::OptionValue as V;
+        let held: &[(ToolId, &[(&str, V)])] = &[
+            (
+                ToolId::Brush,
+                &[
+                    (sy::SYMMETRY_KEY, V::Choice(6)),
+                    (sy::SYMMETRY_SEGMENTS_KEY, V::Int(8)),
+                ],
+            ),
+            (
+                ToolId::Pencil,
+                &[
+                    (sy::SYMMETRY_KEY, V::Choice(3)),
+                    (sy::SYMMETRY_SEGMENTS_KEY, V::Int(3)),
+                ],
+            ),
+            (
+                ToolId::Eraser,
+                &[
+                    (so::ERASER_MODE_KEY, V::Choice(2)),
+                    (sy::SYMMETRY_KEY, V::Choice(4)),
+                ],
+            ),
+            (
+                ToolId::ColorReplacement,
+                &[
+                    (so::REPLACE_MODE_KEY, V::Choice(3)),
+                    (so::SAMPLING_KEY, V::Choice(2)),
+                    (so::LIMITS_KEY, V::Choice(2)),
+                    (so::ANTIALIAS_KEY, V::Bool(false)),
+                ],
+            ),
+            (
+                ToolId::BackgroundEraser,
+                &[
+                    // Continuous: not the Background Eraser's Once default.
+                    (so::SAMPLING_KEY, V::Choice(0)),
+                    (so::LIMITS_KEY, V::Choice(0)),
+                    (so::PROTECT_FOREGROUND_KEY, V::Bool(true)),
+                ],
+            ),
+            (ToolId::Sharpen, &[(so::PROTECT_DETAIL_KEY, V::Bool(false))]),
+        ];
+        let red = [1.0, 0.0, 0.0, 1.0];
+        for (tool, options) in held {
+            let mut chrome = crate::chrome::Chrome::new();
+            for (key, value) in *options {
+                chrome.set_tool_option(*tool, key, *value);
+            }
+            let settings = w13h_forwarded(&chrome, *tool);
+            for (key, _) in *options {
+                assert!(
+                    settings.iter().any(|(k, _)| k == key),
+                    "{tool:?}: {key} is forwarded: {settings:?}"
+                );
+            }
+            // `w13h_stroke` fails on a refusal.
+            w13h_stroke(*tool, &settings, (30.0, 30.0), (34.0, 30.0), red);
+        }
+
+        let mut chrome = crate::chrome::Chrome::new();
+        chrome.set_tool_option(ToolId::ColorReplacement, so::REPLACE_MODE_KEY, V::Choice(3));
+        let luminosity = w13h_forwarded(&chrome, ToolId::ColorReplacement);
+        let colour = w13h_stroke(
+            ToolId::ColorReplacement,
+            &[],
+            (30.0, 32.0),
+            (34.0, 32.0),
+            red,
+        );
+        let lum = w13h_stroke(
+            ToolId::ColorReplacement,
+            &luminosity,
+            (30.0, 32.0),
+            (34.0, 32.0),
+            red,
+        );
+        let c = pixel_at(&colour, 32, 32);
+        let l = pixel_at(&lum, 32, 32);
+        assert!(
+            c[0] > c[1] + 100,
+            "the default Colour mode paints red: {c:?}"
+        );
+        assert!(
+            l != [255, 255, 255, 255] && l[0] == l[1] && l[1] == l[2],
+            "Luminosity takes only red's lightness: {l:?}"
         );
     }
 }

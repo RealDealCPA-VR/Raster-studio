@@ -528,6 +528,10 @@ fn body_of(
         ),
         // W11-I: Window > CSS.
         PanelId::Css => crate::panels::css::css_body(w, ui, doc),
+        // W13-N: Window > Styles, Document Info, Guide Guy.
+        PanelId::Styles => crate::panels::styles::styles_body(w, ui, doc),
+        PanelId::DocumentInfo => crate::panels::doc_info::doc_info_body(w, ui, doc),
+        PanelId::GuideGuy => crate::panels::guide_guy::guide_guy_body(w, ui, doc),
     }
 }
 
@@ -1679,6 +1683,9 @@ fn mask_well(ui: &mut Ui, w: &mut Workspace, row: &LayerRow, size: Vec2) {
             w.layers.mask_menu_fresh = false;
         }
     }
+    // W13-M: the backslash key (rubylith overlay) is not read here: it is a
+    // canvas key the application's key route answers (`Shell::on_key`), so it
+    // works with the Layers panel closed or the layer inside a folded group.
     if !ui.is_rect_visible(rect) {
         return;
     }
@@ -1690,11 +1697,46 @@ fn mask_well(ui: &mut Ui, w: &mut Workspace, row: &LayerRow, size: Vec2) {
             crate::strings::tr("ui.docks.mask.thumbnail"),
         )
     });
+    let modifiers = ui.input(|i| i.modifiers);
     if response.clicked() {
         // W9-A: a Ctrl+click on the mask thumbnail loads the mask's coverage
         // as a selection, with the same modifier grammar as the content well.
         if let Some(action) = select_pixels_click(ui, row.id, true) {
             w.emit(Intent::Action(action));
+        } else if modifiers.alt {
+            // W13-M: Alt+click shows the mask alone on the canvas (Photopea;
+            // Alt+Shift+click shows it as the rubylith overlay instead), and
+            // Alt+click again puts the composite back. The click also aims
+            // edits at this row's mask, as a plain click does.
+            w.layers.select_only(row.id);
+            let selection = w.layers.selection().to_vec();
+            w.emit(Intent::SelectLayers {
+                layers: selection,
+                active: Some(row.id),
+            });
+            w.property_focus = crate::panels::properties::PropertyFocus::Mask;
+            w.emit(crate::Intent::SetEditTarget { mask: true });
+            w.mask_view = if w.mask_view != crate::MaskViewMode::Composite {
+                crate::MaskViewMode::Composite
+            } else if modifiers.shift {
+                crate::MaskViewMode::Overlay
+            } else {
+                crate::MaskViewMode::Grayscale
+            };
+        } else if modifiers.shift {
+            // W13-M: Shift+click disables the mask, and enables it again —
+            // Photopea's gesture. It rides the popup's own Disable / Enable
+            // row (Layer ▸ Layer Mask's Toggle, one undo step), after making
+            // this row the active layer so the toggle cannot land elsewhere.
+            w.layers.select_only(row.id);
+            let selection = w.layers.selection().to_vec();
+            w.emit(Intent::SelectLayers {
+                layers: selection,
+                active: Some(row.id),
+            });
+            w.emit(crate::Intent::Action(crate::menu::MenuAction::Mask(
+                crate::menu::MaskOp::Toggle,
+            )));
         } else {
             // Card 055: the click aims at THIS row's mask — selecting the row
             // first, so the target cannot resolve against another layer.
@@ -1758,6 +1800,16 @@ fn mask_well(ui: &mut Ui, w: &mut Workspace, row: &LayerRow, size: Vec2) {
         } else {
             super::paint_icon(ui, icon_rect, "mask", TextRole::Tertiary);
         }
+    }
+    // W13-M: a disabled mask is crossed out in red over its thumbnail, as in
+    // Photopea — the chrome's own `close` drawing, in the danger colour.
+    if !row.mask_enabled {
+        crate::icons::ui_icon("close").paint(
+            &ui.painter_at(rect),
+            rect,
+            color32(t.palette.color(ColorRole::Danger)),
+            t.borders.thick,
+        );
     }
     // Card 059: the active-target badge — a filled accent dot on the corner
     // of THE well the edit target is aimed at, so the indicator survives a
@@ -5723,6 +5775,8 @@ fn actions_body(w: &mut Workspace, ui: &mut Ui) {
             actions::request(&ctx, ActionsRequest::Load);
         }
     });
+    // W13-E: the Set -> Action -> Steps tree and its controls.
+    actions::draw_sets(ui);
     state.store(ui.ctx());
 }
 

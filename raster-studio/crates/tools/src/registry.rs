@@ -173,8 +173,29 @@ macro_rules! shape_opts {
     };
 }
 
-/// The controls every stamping tool shares.
-const BRUSH_OPTS: &[OptionSpec] = &[
+/// W13-H: the symmetry drop-down the Brush, Pencil and Eraser offer
+/// ([`crate::symmetry`]); the axis runs through the canvas centre.
+const SYMMETRY_OPT: OptionSpec = c(
+    crate::symmetry::SYMMETRY_KEY,
+    "Symmetry",
+    crate::symmetry::SymmetryMode::CHOICES,
+    0,
+);
+/// W13-H: how many segments a Radial or Mandala symmetry has.
+const SYMMETRY_SEGMENTS_OPT: OptionSpec = i(
+    crate::symmetry::SYMMETRY_SEGMENTS_KEY,
+    "Segments",
+    crate::symmetry::MIN_SEGMENTS,
+    crate::symmetry::MAX_SEGMENTS,
+    crate::symmetry::DEFAULT_SEGMENTS,
+);
+
+/// The controls every stamping tool shares, after the tool's own leading
+/// controls (W13-H: the Eraser's Mode) and ending with the symmetry.
+macro_rules! brush_opts {
+    ($($lead:expr),* $(,)?) => {
+        &[
+            $($lead,)*
     f("size", "Size", 1.0, 5000.0, 24.0),
     f("hardness", "Hardness", 0.0, 1.0, 0.8),
     f("spacing", "Spacing", 0.01, 10.0, 0.25),
@@ -191,7 +212,22 @@ const BRUSH_OPTS: &[OptionSpec] = &[
     b("size_pressure", "Size from Pressure", true),
     b("flow_pressure", "Flow from Pressure", false),
     b("opacity_pressure", "Opacity from Pressure", false),
-];
+            SYMMETRY_OPT,
+            SYMMETRY_SEGMENTS_OPT,
+        ]
+    };
+}
+
+/// The Brush's controls.
+const BRUSH_OPTS: &[OptionSpec] = brush_opts!();
+
+/// W13-H: the Eraser's controls — its Mode (Brush, Pencil, Block) first.
+const ERASER_OPTS: &[OptionSpec] = brush_opts!(c(
+    crate::stroke_options::ERASER_MODE_KEY,
+    "Mode",
+    crate::stroke_options::EraserMode::CHOICES,
+    0,
+));
 
 /// W9-L: the selection Mode every selection tool offers — New, Add,
 /// Subtract, Intersect and Exclude (XOR), index for index with
@@ -254,6 +290,33 @@ const CLONE_OPTS: &[OptionSpec] = &[
     // Layers); it always writes the active layer.
     SAMPLE_OPT,
 ];
+
+/// W13-H: Colour Replacement's Sampling choice (Continuous, Once,
+/// Background Swatch), Continuous by default.
+const SAMPLING_OPT: OptionSpec = c(
+    crate::stroke_options::SAMPLING_KEY,
+    "Sampling",
+    crate::stroke_options::Sampling::CHOICES,
+    0,
+);
+/// W13-H: the Limits choice they share (Discontiguous, Contiguous, Find
+/// Edges), Contiguous by default.
+const LIMITS_OPT: OptionSpec = c(
+    crate::stroke_options::LIMITS_KEY,
+    "Limits",
+    crate::stroke_options::Limits::CHOICES,
+    1,
+);
+/// W13-H: the Background Eraser's Sampling starts on Once, not Photopea's
+/// Continuous: the route test `background_eraser_clears_only_the_colour_first_touched`
+/// pins that a stroke started on one colour keeps the other colour it
+/// crosses, which Continuous would erase. [`make`] starts it the same way.
+const BG_SAMPLING_OPT: OptionSpec = c(
+    crate::stroke_options::SAMPLING_KEY,
+    "Sampling",
+    crate::stroke_options::Sampling::CHOICES,
+    1,
+);
 
 /// W9-D: the Sample choice the Clone Stamp, the healing brushes, Blur,
 /// Sharpen and Smudge share ([`crate::tool::SampleLayers`]).
@@ -745,6 +808,8 @@ const TOOLS: &[ToolInfo] = &[
             c("overlay", "Overlay", &crate::edit::CROP_OVERLAY_LABELS, 1),
             b("straighten_line", "Straighten", false),
             b("delete_cropped", "Delete Cropped Pixels", false),
+            // W13-I: fill the canvas the crop adds from the image.
+            b(crate::edit::CROP_CONTENT_AWARE_KEY, "Content-Aware", false),
         ],
     ),
     // W7-F: second in the Crop slot, as in Photopea.
@@ -805,7 +870,18 @@ const TOOLS: &[ToolInfo] = &[
         Some('i'),
         &[
             i("sample_radius", "Sample Size", 0, 64, 0),
-            b("sample_all_layers", "Sample All Layers", true),
+            // W13-I: Photopea's Sample choice (Current Layer, Current &
+            // Below, All Layers) replaces the Sample All Layers box. The tool
+            // maps a direct `sample_all_layers` set onto the choice (on = All
+            // Layers, off = Current Layer), but the options bar stores only
+            // the keys listed here, so a tool preset saved with the old box
+            // drops that value and gets the Sample default (All Layers).
+            c(
+                crate::tool::SAMPLE_LAYERS_KEY,
+                "Sample",
+                crate::tool::SampleLayers::CHOICES,
+                2,
+            ),
         ],
     ),
     // W4-G: Photoshop's order inside the Eyedropper slot, on the same `I`.
@@ -945,6 +1021,8 @@ const TOOLS: &[ToolInfo] = &[
             // W4-G: a stroke that starts on the foreground paints the
             // background (`crate::pencil::PencilTool`).
             b(crate::pencil::AUTO_ERASE_KEY, "Auto Erase", false),
+            SYMMETRY_OPT,
+            SYMMETRY_SEGMENTS_OPT,
         ],
     ),
     t(
@@ -959,6 +1037,17 @@ const TOOLS: &[ToolInfo] = &[
             f("size", "Size", 1.0, 5000.0, 30.0),
             f("tolerance", "Tolerance", 0.0, 1.0, 30.0 / 255.0),
             f("opacity", "Opacity", 0.0, 1.0, 1.0),
+            // W13-H: Photopea's Mode / Sampling / Limits / Anti-alias, at
+            // its defaults (Colour, Continuous, Contiguous, on).
+            c(
+                crate::stroke_options::REPLACE_MODE_KEY,
+                "Mode",
+                crate::stroke_options::ReplaceMode::CHOICES,
+                2,
+            ),
+            SAMPLING_OPT,
+            LIMITS_OPT,
+            b(crate::stroke_options::ANTIALIAS_KEY, "Anti-alias", true),
         ],
     ),
     // W7-F: last in the Brush slot, as in Photoshop.
@@ -1040,7 +1129,7 @@ const TOOLS: &[ToolInfo] = &[
         "eraser",
         Cursor::BrushRing,
         Some('e'),
-        BRUSH_OPTS,
+        ERASER_OPTS,
     ),
     t(
         ToolId::BackgroundEraser,
@@ -1053,6 +1142,14 @@ const TOOLS: &[ToolInfo] = &[
         &[
             f("size", "Size", 1.0, 5000.0, 40.0),
             f("tolerance", "Tolerance", 0.0, 1.0, 30.0 / 255.0),
+            // W13-H: Sampling / Limits / Protect Foreground Colour.
+            BG_SAMPLING_OPT,
+            LIMITS_OPT,
+            b(
+                crate::stroke_options::PROTECT_FOREGROUND_KEY,
+                "Protect Foreground Colour",
+                false,
+            ),
         ],
     ),
     t(
@@ -1077,7 +1174,15 @@ const TOOLS: &[ToolInfo] = &[
             c(
                 "shape",
                 "Style",
-                &["Linear", "Radial", "Angle", "Reflected", "Diamond"],
+                &[
+                    "Linear",
+                    "Radial",
+                    "Angle",
+                    "Reflected",
+                    "Diamond",
+                    // W13-I.
+                    "Shape Burst",
+                ],
                 0,
             ),
             b("dither", "Dither", true),
@@ -1138,6 +1243,12 @@ const TOOLS: &[ToolInfo] = &[
             f("amount", "Strength", 0.0, 4.0, 1.0),
             f("opacity", "Opacity", 0.0, 1.0, 1.0),
             SAMPLE_OPT,
+            // W13-H: on by default, as in Photopea.
+            b(
+                crate::stroke_options::PROTECT_DETAIL_KEY,
+                "Protect Detail",
+                true,
+            ),
         ],
     ),
     t(
@@ -1430,7 +1541,15 @@ const TOOLS: &[ToolInfo] = &[
         "shape-line",
         Cursor::Crosshair,
         Some('u'),
-        shape_opts!(f("width", "Weight", 0.1, 500.0, 2.0)),
+        // W13-I: Photoshop's Arrowheads set after the weight.
+        shape_opts!(
+            f("width", "Weight", 0.1, 500.0, 2.0),
+            b("arrow_start", "Arrow Start", false),
+            b("arrow_end", "Arrow End", false),
+            f("arrow_width", "Arrow Width %", 10.0, 1000.0, 500.0),
+            f("arrow_length", "Arrow Length %", 10.0, 5000.0, 1000.0),
+            f("arrow_concavity", "Concavity %", -50.0, 50.0, 0.0),
+        ),
     ),
     t(
         ToolId::CustomShape,
@@ -1650,14 +1769,19 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
             },
         )),
         ToolId::Pencil => Box::new(crate::pencil::PencilTool::default()),
-        ToolId::ColorReplacement => Box::new(StrokeTool::new(
-            id,
-            brush(30.0, 0.8, 0.1),
-            StrokeOp::ColorReplacement {
-                color: [0.0, 0.0, 0.0, 1.0],
-                tolerance: 30.0 / 255.0,
-            },
-        )),
+        ToolId::ColorReplacement => {
+            let mut t = StrokeTool::new(
+                id,
+                brush(30.0, 0.8, 0.1),
+                StrokeOp::ColorReplacement {
+                    color: [0.0, 0.0, 0.0, 1.0],
+                    tolerance: 30.0 / 255.0,
+                },
+            );
+            // W13-H: the options bar's defaults.
+            t.retouch = crate::stroke_options::RetouchOptions::photopea();
+            Box::new(t)
+        }
         ToolId::CloneStamp => {
             let mut t = StrokeTool::new(id, brush(40.0, 0.5, 0.05), StrokeOp::CloneStamp);
             t.clone.aligned = true;
@@ -1673,13 +1797,22 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
             BrushSettings::default(),
             StrokeOp::Erase,
         )),
-        ToolId::BackgroundEraser => Box::new(StrokeTool::new(
-            id,
-            brush(40.0, 1.0, 0.1),
-            StrokeOp::BackgroundErase {
-                tolerance: 30.0 / 255.0,
-            },
-        )),
+        ToolId::BackgroundEraser => {
+            let mut t = StrokeTool::new(
+                id,
+                brush(40.0, 1.0, 0.1),
+                StrokeOp::BackgroundErase {
+                    tolerance: 30.0 / 255.0,
+                },
+            );
+            // W13-H: the options bar's defaults; Sampling Once (see
+            // `BG_SAMPLING_OPT`), the rest Photopea's.
+            t.retouch = crate::stroke_options::RetouchOptions {
+                sampling: crate::stroke_options::Sampling::Once,
+                ..crate::stroke_options::RetouchOptions::photopea()
+            };
+            Box::new(t)
+        }
         ToolId::MagicEraser => Box::new(MagicEraserTool::default()),
         ToolId::Gradient => Box::new(GradientTool::default()),
         ToolId::PaintBucket => Box::new(PaintBucketTool::new(
@@ -1692,14 +1825,19 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
             brush(40.0, 0.0, 0.05),
             StrokeOp::Blur { radius: 3.0 },
         )),
-        ToolId::Sharpen => Box::new(StrokeTool::new(
-            id,
-            brush(40.0, 0.0, 0.05),
-            StrokeOp::Sharpen {
-                amount: 1.0,
-                radius: 1.5,
-            },
-        )),
+        ToolId::Sharpen => {
+            let mut t = StrokeTool::new(
+                id,
+                brush(40.0, 0.0, 0.05),
+                StrokeOp::Sharpen {
+                    amount: 1.0,
+                    radius: 1.5,
+                },
+            );
+            // W13-H: Protect Detail starts on, as the options bar shows.
+            t.retouch = crate::stroke_options::RetouchOptions::photopea();
+            Box::new(t)
+        }
         ToolId::RefineBoundary => Box::new(StrokeTool::new(
             id,
             brush(40.0, 0.0, 0.05),

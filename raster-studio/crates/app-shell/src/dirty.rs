@@ -134,7 +134,8 @@ pub fn touched_by(command: &Command) -> DirtyTiles {
         | Command::SetDocumentExtras { .. }
         // W10-B: a stored alpha channel is a saved selection, not pixels.
         | Command::SetSavedSelection { .. }
-        | Command::SetSlices { .. } => DirtyTiles::none(),
+        | Command::SetSlices { .. }
+        | Command::SetTimeline { .. } => DirtyTiles::none(),
         Command::Transaction { commands, .. } => {
             let mut out = DirtyTiles::none();
             for c in commands {
@@ -167,6 +168,8 @@ pub fn touched_by(command: &Command) -> DirtyTiles {
         // Image Size rewrites every layer's tile map, so every tile of the
         // new canvas is new for the same reason a crop's is.
         | Command::ResampleImage { .. }
+        // W13-F: a new profile tag shows every pixel differently.
+        | Command::SetMetaColorSpace { .. }
         | Command::TransformLayer { .. } => DirtyTiles::all(),
     }
 }

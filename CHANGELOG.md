@@ -22,6 +22,232 @@ green on the six fix-wave commits (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727`,
 35957810847, `05ec9b1` run 36026393650). Wave 11 (`fe978d3`) is run
 36048266245; whether it passed is what the Actions tab says.
 
+- **W13-N: Styles / Document Info / Guide Guy panels, Magic Cut, Merge
+  Channels, four File ▸ Automate rows, Convert to Point / Paragraph Text.**
+  Window ▸ Styles lists the style presets as swatches (a click applies one
+  to the active layer, + saves the active layer's); Document Info shows
+  size, resolution, mode / depth, profile, layer count and tile memory;
+  Guide Guy previews margins, gutters, columns / rows and centre guides and
+  applies them as one step. Select ▸ Magic Cut… turns painted foreground /
+  background strokes into a GrabCut mask refined by Refine Edge, landed as
+  the selection, a layer mask or a new layer (bounded preview texture;
+  keymap chords held off while it is up; lands only on the document it was
+  painted over). Image ▸ Merge Channels… (a Red / Green / Blue source
+  picker),
+  File ▸ Automate ▸ PDF Presentation… / Resize Images… / Crop and
+  Straighten Photos / Generate Mockups…, and Layer ▸ Text ▸ Convert to
+  Point / Paragraph Text. Not built: New Spot Channel, a Custom warp style
+  and Photopea's extra themes (each needs files outside W13-N; the parity
+  matrix says which). Verified by `ui` `panels::w13n_panel_tests::*`,
+  `app-shell` `menu_bridge::w13n_ops::tests::*` and `text-engine`
+  `frame_convert::tests::*`.
+- **W13-K: File ▸ Script.** Photoshop-DOM JavaScript runs in-process on
+  an embedded pure-Rust engine (`boa_engine` 0.21, Unlicense OR MIT): a
+  code box, Run and an output log; the DOM subset (documents, layers, layer
+  sets, text items, selection, resize / crop / flatten, `alert`) goes
+  through the existing menu and command routes, a run is one undo step per
+  document, a step budget and time limit stop an endless loop, and a
+  `.jsx` opened or dropped runs only when Run is pressed. Verified by
+  `app-shell` `script::tests::*` (each mutation-checked).
+- **W13-F: Assign / Convert to Profile, Reduce Colors, Wavelet Decompose,
+  Pattern Preview, Clear Slices, Slices from Guides.** Edit ▸ Assign
+  Profile ▸ (sRGB, Adobe RGB (1998), Display P3, ProPhoto RGB, a profile
+  from a file) re-tags without changing a number; Edit ▸ Convert to
+  Profile… (destination, rendering intent, black point compensation)
+  rewrites every pixel layer through linear light; each is one undo step
+  that carries the tag (`editor_core::Command::SetMetaColorSpace`). Image ▸
+  Reduce Colors… (palette, 2-256 colours, dither) and Image ▸ Wavelet
+  Decompose… (2-7 scales; a residual and N Linear Light detail layers that
+  recomposite to the layer within 1/255) are dialogs. View ▸ Pattern
+  Preview repeats the composite around the canvas; View ▸ Slices from
+  Guides (also on the Slice tool's options bar) and Clear Slices are one
+  undo step each. Every new label and message goes through
+  `ui::strings::tr`. `color::icc` writes matrix-shaper profiles with their
+  media white and reads real ones (the `acsp` signature at byte 36, `para`
+  parameters as s15Fixed16, kind 4 as ICC.1:2010 table 68 has it, the
+  `wtpt` tag). Verified by `app_shell::menu_bridge::menu_w13f::tests::*`
+  through the menu bar, the dialog host and whole chrome frames. Known
+  gaps: Perceptual and Saturation convert as Relative Colorimetric
+  (matrix-shaper profiles have no tables for them); Wavelet Decompose needs
+  an sRGB-tagged 8-bit document.
+- **W13-A: Alt+drag with the Move tool duplicates.** Pressed with Alt
+  held, a Move drag duplicates the moved layer(s) above their sources and
+  moves the copies, or, with a pixel selection, lays a copy of the selected
+  pixels down and keeps the originals; either is one undo step, and
+  Ctrl+Alt+drag does the same from the tools Ctrl already lends the Move
+  tool on (`tool_input::move_duplicate::tests`). Known gaps: no arrow-key nudge exists, so there
+  is no Alt+arrow copy; a group is refused rather than copied empty.
+- **W13-E: action sets and `.atn`.** File ▸ Open reads a Photoshop `.atn`
+  (version 16) into a new set in the Actions library, where it had been
+  refused. Mapped steps (new layer, selections, Fill, Image / Canvas Size,
+  Invert, Desaturate, Equalize, Brightness/Contrast, Gaussian Blur, Unsharp
+  Mask, Median, rotate / flip, Save) play through the menu and dialog
+  routes. Any other step is listed as skipped and named when Play runs. The
+  Actions panel draws the Set -> Action -> Steps tree, with New set,
+  Rename, Record into, Export set as `.atn`, Load `.atn`, Play from step,
+  Delete set and a check box per step. The exported set reads back through
+  the parser (`atn::tests`, and `actions_library::atn_route_tests`, which
+  click the drawn controls in the real chrome). Known gaps: the export writes only new-layer and rectangle / empty
+  selection steps, counting the rest; Batch plays recorded edits only.
+- **W13-G: the last Layer-menu rows.** Layer Style ▸ Create Layers splits
+  a style into raster layers (exterior passes under the layer, interior
+  effects clipped to it, strokes above) that recomposite the styled original
+  within 2/255, and Layer Style ▸ Scale Effects ▸ 25/50/75/150/200% scales
+  every size and distance; New ▸ Artboard from Layers wraps the selected
+  top-level layers in a transparent artboard at their ink bounds; Layer
+  Mask ▸ From Transparency moves the alpha into a new mask; Smart Object ▸
+  Reset Transform (source size, upright, same centre) and Stack Mode ▸ the
+  eleven statistics (baked into a new layer above the hidden object);
+  Animation ▸ Make Frames / Unmake Frames / Merge over the `_a_` frame
+  layers. Each is one undo step and tested through the menu bar's click
+  route (`menu_bridge::layer_ops_w13::tests`). Each row is greyed with the
+  reason the click would give for: no style, a switched-off style (Create
+  Layers), a locked layer anywhere (Merge), an empty layer (From
+  Transparency), a source with no recorded size (Reset Transform) and an
+  embedded PSD declaring fewer than two layers (Stack Mode; at 16 and 32
+  bits the count is read from the `Lr16` / `Lr32` block, so a deep layered
+  source is not greyed by mistake).
+  Known gaps: Scale Effects is fixed percentages, not a percent dialog (the
+  dialog host is outside this item's files); Stack Mode stays enabled, then
+  refuses, when a linked source cannot be read, an embedded one fails to
+  decode, or all but one of its layers are hidden; Stack Mode is not live; Create Layers
+  is inexact for a non-Normal stroke, a non-Normal interior effect under a
+  fill below 100%, and an overlapping stroke under an opacity below 100%;
+  Create Layers, From Transparency, Stack Mode and Merge are 8-bit only.
+
+- **W13-J: the rest of Photopea's Filter menu.** Distort ▸ Kaleidoscope and
+  Dents, Pixelate ▸ Shape Mosaic, Render ▸ Flame, Other ▸ Repeat, Color to
+  Alpha, Dither and Particles, the new 3D (Normal Map, Texture Dilation) and
+  Fourier (Fourier Transform, Inverse Fourier Transform) submenus, and the
+  Filter Gallery's Distort (Diffuse Glow, Glass, Ocean Ripple) and Stylize
+  (Glowing Edges) sets; each a live-preview dialog, one undo step or a smart
+  filter, with Photopea's controls and defaults — every one but Flame, whose
+  Photopea original draws only along a path. Shape Mosaic, Repeat, Color to
+  Alpha, Dither, Particles, Kaleidoscope, Normal Map and Texture Dilation
+  are ported from Photopea's filter code. The FFT is the crate's own
+  (radix-2 plus Bluestein, no new dependency); Fourier then Inverse restores
+  the image within 1/255 on the float pipeline and in a 16-bit document
+  (tested through the menu); on an 8-bit document the status bar says the
+  round trip will not be exact and names 16 Bits/Channel. Known gaps: Flame's
+  controls and placement are this build's, and Dents' noise, Glass's
+  textures and the gallery effects' pictures are not Photopea's.
+
+- **W13-I: tool options — Line arrowheads, Content-Aware crop, Shape Burst,
+  the Eyedropper's Sample choice and ring.** The Line tool draws arrowheads
+  at its start and/or end (width and length as a percentage of the weight,
+  concavity) into its outline; the Crop tool's Content-Aware box lets the
+  box run past the canvas and fills the canvas the crop adds on the active
+  raster layer with the PatchMatch fill, in the crop's one undo step; the
+  Gradient's Style gains Shape Burst (distance in from the layer's alpha
+  edge); the Eyedropper's Sample is Current Layer / Current & Below / All
+  Layers (the default now reads the composite in the running app), and a
+  ring at the pointer shows the new colour over the old while it is
+  dragged. Verified through the registry-built tools
+  (`shape::w13i_tests`, `gradient::w13i_tests`,
+  `edit::option_tests::content_aware_lets_the_crop_box_run_past_the_canvas`),
+  the pointer and commit routes (`tool_input::w13i_tests`) and headless
+  options-bar frames (`ui::view::eyedropper_ring::tests`). The Move bar
+  gains Quick Export (File > Export > Quick Export Layer as PNG): the
+  active layer alone, as one PNG where the user picks. Content-Aware with
+  Delete Cropped Pixels keeps the cropped pixels deleted. Known gaps: the
+  Content-Aware crop fills only the active layer of an 8-bit document (a
+  16- or 32-bit document crops unfilled, with a status note), on
+  the interaction thread; a tool preset saved with the old Sample All
+  Layers box drops it.
+
+- **W13-L: a video timeline and MP4 export.** The Animation panel gains a
+  Frames / Timeline switch; Timeline mode shows a bar per top-level layer
+  (in / out points) with opacity and position keyframes (add at the
+  playhead, drag, delete), fps and length fields, and a ruler whose scrub
+  (and Play, frame by frame) puts the values at that time on the layers
+  through `ui::Intent::SeekTimeline` → `Editor::seek_timeline`, so the
+  canvas follows live; moving the playhead is no history step and does not
+  dirty the document. The timeline is document state (`Document::timeline`,
+  `Command::SetTimeline`, one undo step per edit, the playhead kept on
+  undo) saved in `.rstudio`. File ▸ Export As ▸ MP4 (and the dialog's
+  Format list) offers MP4: AV1 from `rav1e` (BSD-2-Clause, pure Rust, already
+  in the tree) in an MP4 container written in `raster::codec::formats::mp4`,
+  with a quality field; an animated row writes the timeline at its frame
+  rate, rendered through the compositor, or the `_a_` frames with their
+  delays. Opening a video file is refused by name (no permissive pure-Rust
+  decoder). Verified by `editor_core::timeline::tests`,
+  `raster::codec::formats::mp4::tests` (box structure read back: frame
+  count, size, durations), `app_shell::timeline::tests` (save / open,
+  Export As through `Editor::request_export` and the File menu row),
+  `shell::w13l_tests` (a ruler drag and playback in real chrome frames move
+  the canvas composite before the release, with no history step) and
+  `ui::panels::animation::timeline::tests` (the drawn panel), and by
+  ffmpeg 8.1 decoding a written file.
+- **W13-C: DNG opens; the vendor RAWs, HEIC and AVIF are refused with the
+  exact reason.** `raster::codec::formats::raw` develops a DNG with its own
+  code (no new dependency): uncompressed or lossless-JPEG raw data, black
+  and white levels, `AsShotNeutral` white balance, an edge-directed Bayer
+  demosaic, `ColorMatrix` to sRGB, `BaselineExposure`, the sRGB curve,
+  `DefaultCrop` and `Orientation`, into a document that records 16 bits; the
+  file picker offers `.dng`. CR2, CR3, NEF, ARW, RAF, ORF and RW2 are
+  recognised by content and refused naming the format (their Rust readers
+  are LGPL/AGPL). HEIC stays refused: `heic-rs` 0.1.1, the permissive
+  decoder, panicked on 3 of 4000 damaged files, which `panic = "abort"`
+  makes a crash. Verified against DNGs built from a known scene
+  (`formats::raw::tests`), and through File > Open's import job and
+  `OpenDocument::open_image` (Open Recent, startup files, drops).
+
+- **W13-H: paint symmetry and the retouching options.** Brush, Pencil and
+  Eraser gain a Symmetry drop-down (Vertical, Horizontal, Dual Axis,
+  Diagonal, Radial, Mandala; 2-32 segments) that mirrors every dab about the
+  canvas centre; the Eraser a Mode (Brush, Pencil, Block); Colour
+  Replacement a Mode (Hue, Saturation, Colour, Luminosity), Sampling
+  (Continuous, Once, Background Swatch), Limits (Discontiguous, Contiguous,
+  Find Edges) and Anti-alias; the Background Eraser Sampling (Once by
+  default, unlike Photopea's Continuous), Limits and
+  Protect Foreground Colour; Sharpen Protect Detail. Verified by the pixels
+  each choice paints (`tools::stroke_options::tests`) and through the drawn
+  options bar to a real press (`tool_input` `w13h_*` tests). The axis is
+  fixed at the canvas centre.
+
+- **W13-D: PDF / AI, WMF / EMF, and the preview formats open.** PDF and
+  PDF-compatible `.ai` pages render through `hayro` 0.4 (pure Rust,
+  Apache-2.0) at one pixel per point; a multi-page file opens one
+  artboard per page on every open route and File > Revert rebuilds them.
+  WMF / EMF draw their common GDI records through `resvg`. EPS (TIFF / WMF /
+  EPSI preview), Paint.NET (thumbnail), Sketch, XD and ZIP-packaged Figma
+  files open their embedded preview and the status line says so; a bare
+  `fig-kiwi` canvas is refused by name. `.svgz` joins the Open filter and
+  `.cube` gets one. Verified by `raster::codec::formats::{pdf,metafile,
+  vector_docs}::tests::*` and `editor::open_any::open_pages::tests::*`.
+  Known gaps: no PostScript interpreter (EPS artwork), no Paint.NET layers,
+  no Sketch / XD / Figma vector artwork; arcs, clipping, dash styles and
+  EMF+ are not drawn; encrypted PDFs are refused; JPEG 2000 images in a
+  PDF are not drawn; no page picker.
+- **W13-M: Photopea's gestures and a real Print dialog.** A bare tool
+  letter picks its group and keeps the tool when pressed again, and Shift +
+  the letter steps through the group (one rule, `ui::keys::tool_for_letter`,
+  for both key routes); Ctrl+F opens Find (Help > Search Commands) and Last
+  Filter moves to Alt+Ctrl+F, as in Photopea; the wheel follows Photopea (Alt
+  inverts Scroll Wheel Zooms, Ctrl+wheel pans sideways); on a mask thumbnail
+  Shift+click disables/enables the mask under a red cross and Alt+click shows
+  the mask alone; backslash (rubylith overlay), backquote (mask alone) and
+  Escape are canvas keys on the shell's key route; on Windows File > Print
+  opens the system Print dialog owned by the app window and prints the
+  flattened image through GDI, and the new File > Print as PDF… keeps the
+  PDF route (the only Print route on macOS/Linux). Verified by
+  `shell::w13m_tests::*`, `editor::print::tests::*` (including a real GDI job
+  on "Microsoft Print to PDF", skipped where that printer is absent) and
+  `editor::tests::a_tool_letter_keeps_its_tool_and_the_step_cycles_within_its_group`.
+  Known gaps: entering a group picks its first tool, not the last used; the
+  dialog itself is not driven by a test; no print dialog on macOS/Linux.
+- **W13-B: PSD colour labels and the remaining layer-effect forms.** A
+  `.psd` layer's `lclr` 0..=7 opens as its colour label and a labelled
+  layer is saved with its `lclr` (the false "is not shown by this layers
+  panel" note is gone; only an unknown index is named). Layer-effect
+  export writes, and import reads back, a gradient- or pattern-filled
+  stroke, a gradient-filled outer/inner glow, a gradient overlay's offset
+  (`Ofst`, a percentage of the layer box) and repeated instances as the
+  `...Multi` lists. Verified by `psd` `effects::w11b_rest_effect_tests::*`
+  and `app-shell` `import::tests::every_colour_label_round_trips_through_a_psd_as_its_lclr_index`
+  / `repeated_gradient_pattern_and_offset_effects_survive_a_psd_save_and_reopen`;
+  not yet checked in Photoshop.
+
 ### Wave 11 — `fe978d3`
 
 The last gaps from the parity audit of `05ec9b1`.

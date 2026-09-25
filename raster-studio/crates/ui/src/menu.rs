@@ -33,6 +33,8 @@ use raster::ExportFormat;
 use crate::dock::{DockState, LayoutId, PanelId};
 use crate::intent::{ClipboardState, Intent, ViewFlag, ViewFlags};
 use crate::shortcut::{Key, Shortcut};
+// W13-F: the profile, Reduce Colors, Wavelet and slice rows' strings.
+use crate::strings::tr;
 
 // ---------------------------------------------------------------------------
 // Payload vocabularies
@@ -371,6 +373,19 @@ pub enum FilterId {
     LensCorrection,
     LightingEffects,
     HsbHsl,
+    // W13-J: the rest of Photopea's Filter menu. Appended, never reordered.
+    Kaleidoscope,
+    Dents,
+    ShapeMosaic,
+    Flame,
+    Repeat,
+    ColorToAlpha,
+    Dither,
+    Particles,
+    FourierTransform,
+    InverseFourierTransform,
+    NormalMap,
+    TextureDilation,
 }
 
 /// A submenu of the Filter menu.
@@ -384,6 +399,9 @@ pub enum FilterGroup {
     Render,
     Stylize,
     Other,
+    // W13-J: Photopea's 3D and Fourier submenus.
+    ThreeD,
+    Fourier,
 }
 
 impl FilterGroup {
@@ -396,6 +414,8 @@ impl FilterGroup {
         FilterGroup::Render,
         FilterGroup::Stylize,
         FilterGroup::Other,
+        FilterGroup::ThreeD,
+        FilterGroup::Fourier,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -408,6 +428,8 @@ impl FilterGroup {
             FilterGroup::Render => "Render",
             FilterGroup::Stylize => "Stylize",
             FilterGroup::Other => "Other",
+            FilterGroup::ThreeD => "3D",
+            FilterGroup::Fourier => "Fourier",
         }
     }
 }
@@ -473,6 +495,18 @@ impl FilterId {
         FilterId::LensCorrection,
         FilterId::LightingEffects,
         FilterId::HsbHsl,
+        FilterId::Kaleidoscope,
+        FilterId::Dents,
+        FilterId::ShapeMosaic,
+        FilterId::Flame,
+        FilterId::Repeat,
+        FilterId::ColorToAlpha,
+        FilterId::Dither,
+        FilterId::Particles,
+        FilterId::FourierTransform,
+        FilterId::InverseFourierTransform,
+        FilterId::NormalMap,
+        FilterId::TextureDilation,
     ];
 
     pub const fn group(self) -> FilterGroup {
@@ -537,6 +571,15 @@ impl FilterId {
             // Top-level rows (`is_top_level`): catalogued under Other, drawn
             // directly in the Filter menu and in no submenu.
             FilterId::CameraRaw | FilterId::LensCorrection => FilterGroup::Other,
+            // W13-J: where Photopea files them.
+            FilterId::Kaleidoscope | FilterId::Dents => FilterGroup::Distort,
+            FilterId::ShapeMosaic => FilterGroup::Pixelate,
+            FilterId::Flame => FilterGroup::Render,
+            FilterId::Repeat | FilterId::ColorToAlpha | FilterId::Dither | FilterId::Particles => {
+                FilterGroup::Other
+            }
+            FilterId::FourierTransform | FilterId::InverseFourierTransform => FilterGroup::Fourier,
+            FilterId::NormalMap | FilterId::TextureDilation => FilterGroup::ThreeD,
         }
     }
 
@@ -603,6 +646,18 @@ impl FilterId {
             FilterId::LensCorrection => "Lens Correction…",
             FilterId::LightingEffects => "Lighting Effects…",
             FilterId::HsbHsl => "HSB/HSL…",
+            FilterId::Kaleidoscope => "Kaleidoscope…",
+            FilterId::Dents => "Dents…",
+            FilterId::ShapeMosaic => "Shape Mosaic…",
+            FilterId::Flame => "Flame…",
+            FilterId::Repeat => "Repeat…",
+            FilterId::ColorToAlpha => "Color to Alpha…",
+            FilterId::Dither => "Dither…",
+            FilterId::Particles => "Particles…",
+            FilterId::FourierTransform => "Fourier Transform",
+            FilterId::InverseFourierTransform => "Inverse Fourier Transform",
+            FilterId::NormalMap => "Normal Map…",
+            FilterId::TextureDilation => "Texture Dilation…",
         }
     }
 
@@ -1658,6 +1713,88 @@ impl LayerLock {
     }
 }
 
+/// W13-F: the profiles Edit ▸ Assign Profile and Convert to Profile offer.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub enum ProfileChoice {
+    Srgb,
+    AdobeRgb,
+    DisplayP3,
+    ProPhotoRgb,
+    /// An `.icc` / `.icm` file the user picks.
+    FromFile,
+}
+
+impl ProfileChoice {
+    pub const ALL: &'static [ProfileChoice] = &[
+        ProfileChoice::Srgb,
+        ProfileChoice::AdobeRgb,
+        ProfileChoice::DisplayP3,
+        ProfileChoice::ProPhotoRgb,
+        ProfileChoice::FromFile,
+    ];
+
+    /// The row's name, which is also the profile's name in status lines.
+    pub fn label(self) -> &'static str {
+        match self {
+            ProfileChoice::Srgb => tr("ui.w13f.profile.srgb"),
+            ProfileChoice::AdobeRgb => tr("ui.w13f.profile.adobe_rgb"),
+            ProfileChoice::DisplayP3 => tr("ui.w13f.profile.display_p3"),
+            ProfileChoice::ProPhotoRgb => tr("ui.w13f.profile.prophoto"),
+            ProfileChoice::FromFile => tr("ui.w13f.profile.from_file"),
+        }
+    }
+}
+
+/// W13-F: what the profile and slice rows are gated on.
+#[derive(Clone, PartialEq, Debug, Default)]
+pub struct W13fFacts {
+    /// The built-in profile the document is tagged with — `None` for any
+    /// other tag, including a profile from a file — so that row is ticked
+    /// and greyed ("already") in both profile submenus.
+    pub profile: Option<ProfileChoice>,
+    /// The document has at least one slice for View ▸ Clear Slices.
+    pub has_slices: bool,
+}
+
+impl W13fFacts {
+    pub fn of(doc: &Document) -> Self {
+        use std::sync::OnceLock;
+        static ADOBE: OnceLock<Vec<u8>> = OnceLock::new();
+        static PROPHOTO: OnceLock<Vec<u8>> = OnceLock::new();
+        let profile = match &doc.meta.color_space {
+            color::ColorSpace::Srgb => Some(ProfileChoice::Srgb),
+            color::ColorSpace::DisplayP3 => Some(ProfileChoice::DisplayP3),
+            color::ColorSpace::IccProfile { profile, .. } => {
+                if *profile == *ADOBE.get_or_init(color::icc::adobe_rgb_1998_profile) {
+                    Some(ProfileChoice::AdobeRgb)
+                } else if *profile == *PROPHOTO.get_or_init(color::icc::prophoto_rgb_profile) {
+                    Some(ProfileChoice::ProPhotoRgb)
+                } else {
+                    None
+                }
+            }
+            color::ColorSpace::LinearSrgb => None,
+        };
+        Self {
+            profile,
+            has_slices: !doc.slices.is_empty(),
+        }
+    }
+}
+
+/// W13-F: why a profile row naming the document's own profile is greyed.
+pub fn profile_already() -> &'static str {
+    tr("ui.w13f.why.profile_already")
+}
+
+/// W13-F: why Image ▸ Wavelet Decompose is greyed on a document tagged with
+/// anything but sRGB. The split is solved per channel against the
+/// compositor's sRGB decode; any other profile mixes the channels on the way
+/// to linear light, so the stack could not recomposite to the source.
+pub fn wavelet_needs_srgb() -> &'static str {
+    tr("ui.w13f.why.wavelet_needs_srgb")
+}
+
 // ---------------------------------------------------------------------------
 // The action vocabulary
 // ---------------------------------------------------------------------------
@@ -2089,6 +2226,85 @@ pub enum MenuAction {
     /// Shift+Plus (`true`, next) / Shift+Minus (`false`, previous): step the
     /// same blend mode through [`layer_model::BlendMode::ALL`].
     CycleBlendMode(bool),
+
+    // ---- W13-F: profiles, Reduce Colors, Wavelet Decompose, slice rows ----
+    /// Edit ▸ Assign Profile ▸ …: tag the document with a profile without
+    /// changing a pixel number, so the same numbers show differently.
+    AssignProfile(ProfileChoice),
+    /// Edit ▸ Convert to Profile…: the dialog (destination, rendering
+    /// intent, black point compensation), then every pixel layer's numbers
+    /// rewritten so the picture looks the same under the new profile, and
+    /// the tag, as one undo step.
+    ConvertToProfile,
+    /// Image ▸ Reduce Colors…: the dialog (palette, colour count, dither),
+    /// then the active layer's colours onto that palette, one undo step. The
+    /// document stays RGB.
+    ReduceColors,
+    /// Image ▸ Wavelet Decompose…: the dialog (scale count), then the
+    /// active layer split into Linear Light detail layers over a residual,
+    /// which recomposite to it, one undo step.
+    WaveletDecompose,
+    /// View ▸ Clear Slices: every slice of the document gone, one undo step.
+    ClearSlices,
+    /// View ▸ Slices from Guides: the canvas cut into one slice per cell of
+    /// the guide grid, replacing the slices there were, one undo step.
+    SlicesFromGuides,
+
+    // ---- W13-G: the last Layer-menu gaps --------------------------------------
+    /// Layer ▸ Layer Style ▸ Scale Effects / Create Layers, New ▸ Artboard
+    /// from Layers, Layer Mask ▸ From Transparency, Smart Object ▸ Reset
+    /// Transform / Stack Mode, Animation ▸ Make Frames / Unmake Frames /
+    /// Merge. See [`LayerExtraOp`].
+    LayerExtra(LayerExtraOp),
+
+    // ---- W13-N: panels, Magic Cut, channels, automation, type -------------------
+    /// The Styles panel's swatch `index` (into the style presets, oldest
+    /// first) applied to the active layer, one undo step. Panel only.
+    ApplyStyleAt(usize),
+    /// Select ▸ Magic Cut…: paint foreground / background strokes over the
+    /// active layer; GrabCut turns them into a selection, a mask or a new
+    /// layer, one undo step.
+    MagicCut,
+    /// Image ▸ Merge Channels…: three open grayscale documents of one size
+    /// become the red, green and blue channels of a new RGB document.
+    MergeChannels,
+    /// File ▸ Automate ▸ PDF Presentation…: every open document as one page
+    /// of a multi-page PDF.
+    PdfPresentation,
+    /// File ▸ Automate ▸ Resize Images…: every image in a folder written,
+    /// resized to fit a box, into another folder.
+    ResizeImages,
+    /// File ▸ Automate ▸ Crop and Straighten Photos: each photo scanned onto
+    /// a flat background, straightened and cropped into its own document.
+    CropAndStraightenPhotos,
+    /// File ▸ Automate ▸ Generate Mockups…: the active smart object's
+    /// contents replaced by each image of a folder, each result exported.
+    GenerateMockups,
+    /// Layer ▸ Text ▸ Convert to Point Text: a paragraph box becomes point
+    /// text, a line break where each line wrapped, one undo step.
+    ConvertToPointText,
+    /// Layer ▸ Text ▸ Convert to Paragraph Text: point text becomes a box
+    /// the size of its laid-out lines, one undo step.
+    ConvertToParagraphText,
+
+    // ---- W13-K: File > Script ----------------------------------------------
+    /// File ▸ Script…: the script window (a code box, Run, an output log).
+    /// Run executes Photoshop-DOM JavaScript against the open documents as
+    /// one undo step per document (`app-shell::script`).
+    Script,
+
+    // ---- W13-M: File > Print as PDF ----------------------------------------
+    /// File ▸ Print as PDF…: the print-ready single-page PDF written where
+    /// the user picks — the route Print takes where no system print dialog
+    /// is wired, kept as its own row where one is (Windows).
+    PrintAsPdf,
+
+    // ---- W13-I: the Move options bar's Quick Export ------------------------
+    /// File ▸ Export ▸ Quick Export Layer as PNG…, also the Move tool options
+    /// bar's Quick Export button: the active layer composited alone (every
+    /// unrelated layer hidden) over transparent, at canvas size, written as
+    /// one PNG where the user picks.
+    QuickExportLayer,
 }
 
 /// W11-G: which layer [`MenuAction::SelectLayerStep`] makes active.
@@ -2415,6 +2631,11 @@ pub struct MenuContext {
     /// W11-E: the selected layers are linked to at least one layer outside
     /// the selection, so Select Linked Layers has something to add.
     pub has_unselected_link_partners: bool,
+    /// W13-G: what the last Layer-menu rows are gated on.
+    pub layer_extra: LayerExtraFacts,
+    /// W13-F: the built-in profile the document is tagged with, and whether
+    /// it has slices.
+    pub w13f: W13fFacts,
 }
 
 /// W10-I: the active layer's smart object, if it is one.
@@ -2476,6 +2697,8 @@ impl Default for MenuContext {
             has_last_transform: false,
             active_color_label: layer_model::ColorLabel::NoColor,
             has_unselected_link_partners: false,
+            layer_extra: LayerExtraFacts::default(),
+            w13f: W13fFacts::default(),
         }
     }
 }
@@ -2548,6 +2771,8 @@ impl MenuContext {
                     .iter()
                     .any(|id| !chosen.contains(id))
             },
+            layer_extra: LayerExtraFacts::of(doc),
+            w13f: W13fFacts::of(doc),
             ..Self::default()
         }
     }
@@ -2651,6 +2876,8 @@ impl MenuAction {
         // W11-D.
         out.push(MenuAction::Revert);
         out.extend(ExportFormat::ALL.iter().copied().map(MenuAction::Export));
+        // W13-L: File > Export As > MP4.
+        out.extend(ExportFormat::VIDEO.iter().copied().map(MenuAction::Export));
         out.extend([
             MenuAction::ExportLayers,
             MenuAction::ExportSlices,
@@ -2660,6 +2887,7 @@ impl MenuAction {
             MenuAction::PlaceLinked,
             MenuAction::FileInfo,
             MenuAction::Print,
+            MenuAction::PrintAsPdf,
             MenuAction::Quit,
             // ---- Edit ----
             MenuAction::Undo,
@@ -2956,6 +3184,38 @@ impl MenuAction {
             MenuAction::CycleBlendMode(true),
             MenuAction::CycleBlendMode(false),
         ]);
+        // ---- W13-F ----
+        out.extend(
+            ProfileChoice::ALL
+                .iter()
+                .copied()
+                .map(MenuAction::AssignProfile),
+        );
+        out.extend([
+            MenuAction::ConvertToProfile,
+            MenuAction::ReduceColors,
+            MenuAction::WaveletDecompose,
+            MenuAction::ClearSlices,
+            MenuAction::SlicesFromGuides,
+        ]);
+        // ---- W13-G: the last Layer-menu gaps ----
+        out.extend(LayerExtraOp::all().into_iter().map(MenuAction::LayerExtra));
+        // ---- W13-K ----
+        out.push(MenuAction::Script);
+        // ---- W13-I ----
+        out.push(MenuAction::QuickExportLayer);
+        // ---- W13-N ----
+        out.extend([
+            MenuAction::ApplyStyleAt(0),
+            MenuAction::MagicCut,
+            MenuAction::MergeChannels,
+            MenuAction::PdfPresentation,
+            MenuAction::ResizeImages,
+            MenuAction::CropAndStraightenPhotos,
+            MenuAction::GenerateMockups,
+            MenuAction::ConvertToPointText,
+            MenuAction::ConvertToParagraphText,
+        ]);
         out
     }
 
@@ -2986,10 +3246,21 @@ impl MenuAction {
             MenuAction::DefineVariables => "Define…".into(),
             MenuAction::DataSets => "Data Sets…".into(),
             MenuAction::VectorizeBitmap => "Vectorize Bitmap…".into(),
+            // W13-F.
+            MenuAction::AssignProfile(p) => p.label().into(),
+            MenuAction::ConvertToProfile => tr("ui.w13f.menu.convert_to_profile").into(),
+            MenuAction::ReduceColors => tr("ui.w13f.menu.reduce_colors").into(),
+            MenuAction::WaveletDecompose => tr("ui.w13f.menu.wavelet").into(),
+            MenuAction::ClearSlices => tr("ui.w13f.menu.clear_slices").into(),
+            MenuAction::SlicesFromGuides => tr("ui.w13f.menu.slices_from_guides").into(),
+            MenuAction::ToggleView(ViewFlag::PatternPreview) => {
+                tr("ui.w13f.menu.pattern_preview").into()
+            }
             MenuAction::PlaceEmbedded => "Place Embedded…".into(),
             MenuAction::PlaceLinked => "Place Linked…".into(),
             MenuAction::FileInfo => "File Info…".into(),
             MenuAction::Print => "Print…".into(),
+            MenuAction::PrintAsPdf => "Print as PDF…".into(),
             MenuAction::Quit => "Quit".into(),
 
             MenuAction::Undo => "Undo".into(),
@@ -3173,6 +3444,22 @@ impl MenuAction {
             MenuAction::BlendModeChord(mode) => format!("Blend Mode: {}", mode.label()),
             MenuAction::CycleBlendMode(true) => "Next Blend Mode".into(),
             MenuAction::CycleBlendMode(false) => "Previous Blend Mode".into(),
+            // W13-G
+            MenuAction::LayerExtra(op) => op.label(),
+            // W13-K
+            MenuAction::Script => "Script…".into(),
+            // W13-I
+            MenuAction::QuickExportLayer => "Quick Export Layer as PNG…".into(),
+            // W13-N
+            MenuAction::ApplyStyleAt(i) => format!("Apply Style {}", i + 1),
+            MenuAction::MagicCut => "Magic Cut…".into(),
+            MenuAction::MergeChannels => "Merge Channels…".into(),
+            MenuAction::PdfPresentation => "PDF Presentation…".into(),
+            MenuAction::ResizeImages => "Resize Images…".into(),
+            MenuAction::CropAndStraightenPhotos => "Crop and Straighten Photos".into(),
+            MenuAction::GenerateMockups => "Generate Mockups…".into(),
+            MenuAction::ConvertToPointText => "Convert to Point Text".into(),
+            MenuAction::ConvertToParagraphText => "Convert to Paragraph Text".into(),
         }
     }
 
@@ -3277,7 +3564,8 @@ impl MenuAction {
             },
             MenuAction::ToggleQuickMask => Shortcut::bare(Key::character('q')),
 
-            MenuAction::LastFilter => Shortcut::ctrl('f'),
+            // W13-M: Photopea's chord (Ctrl+F is its Find, the command search).
+            MenuAction::LastFilter => Shortcut::ctrl_alt('f'),
 
             MenuAction::Zoom(z) => return z.shortcut(),
             MenuAction::ToggleView(ViewFlag::Rulers) => Shortcut::ctrl('r'),
@@ -3358,6 +3646,8 @@ impl MenuAction {
             MenuAction::ToggleLayerVisibility => ctx.active.map(|l| l.visible)?,
             MenuAction::LockLayer(lock) => lock.is_set(ctx.active?.locked),
             MenuAction::LockGuides => ctx.guides.locked,
+            // W13-F: the profile the document wears.
+            MenuAction::AssignProfile(p) => ctx.w13f.profile == Some(p),
             _ => return None,
         })
     }
@@ -3395,11 +3685,14 @@ impl MenuAction {
             | MenuAction::PlaceLinked
             | MenuAction::FileInfo
             | MenuAction::Print
+            | MenuAction::PrintAsPdf
             | MenuAction::SaveAsPsd
             | MenuAction::DuplicateDocument => gate(ctx.need_document(), act(self)),
             // W10-E: Batch / Convert Formats work on folders, not on the open
             // document; the exports, Variables and Vectorize need one.
             MenuAction::AutomateBatch | MenuAction::ConvertFormats => act(self),
+            // W13-K: a script can open or create its own document.
+            MenuAction::Script => act(self),
             MenuAction::ExportColorLookup
             | MenuAction::ExportPdf
             | MenuAction::DefineVariables
@@ -3408,6 +3701,55 @@ impl MenuAction {
                 Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
             },
+            // W13-F: a profile belongs to an RGB document; converting needs
+            // numbers this build rewrites (8 or 16 bits). The two pixel rows
+            // work on an 8-bit RGB pixel layer.
+            MenuAction::AssignProfile(p) => gate(
+                ctx.need_document()
+                    .or((ctx.color_mode != ColorMode::Rgb)
+                        .then(|| tr("ui.w13f.why.assign_needs_rgb")))
+                    .or((ctx.w13f.profile == Some(p)).then(profile_already)),
+                act(self),
+            ),
+            MenuAction::ConvertToProfile => gate(
+                ctx.need_document()
+                    .or((ctx.color_mode != ColorMode::Rgb)
+                        .then(|| tr("ui.w13f.why.convert_needs_rgb")))
+                    .or((ctx.bit_depth == ChannelDepth::ThirtyTwo)
+                        .then(|| tr("ui.w13f.why.convert_depth"))),
+                act(self),
+            ),
+            MenuAction::ReduceColors | MenuAction::WaveletDecompose => {
+                match ctx.need_editable_pixels() {
+                    Ok(_) if ctx.color_mode != ColorMode::Rgb => {
+                        Resolution::Disabled(tr("ui.w13f.why.needs_rgb"))
+                    }
+                    Ok(_) if ctx.bit_depth != ChannelDepth::Eight => {
+                        Resolution::Disabled(tr("ui.w13f.why.needs_8bit"))
+                    }
+                    Ok(_)
+                        if self == MenuAction::WaveletDecompose
+                            && ctx.w13f.profile != Some(ProfileChoice::Srgb) =>
+                    {
+                        Resolution::Disabled(wavelet_needs_srgb())
+                    }
+                    Ok(_) => act(self),
+                    Err(r) => Resolution::Disabled(r),
+                }
+            }
+            MenuAction::ClearSlices => gate(
+                ctx.need_document()
+                    .or((!ctx.w13f.has_slices).then(|| tr("ui.w13f.why.no_slices"))),
+                act(self),
+            ),
+            MenuAction::SlicesFromGuides => gate(
+                ctx.need_document().or(ctx
+                    .guides
+                    .list
+                    .is_empty()
+                    .then(|| tr("ui.w13f.why.no_guides"))),
+                act(self),
+            ),
             MenuAction::CloseAll => gate(
                 (ctx.open_documents == 0).then_some("No document is open"),
                 act(self),
@@ -4156,6 +4498,42 @@ impl MenuAction {
                 Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
             },
+            // ---- W13-G ----
+            MenuAction::LayerExtra(op) => resolve_layer_extra(op, ctx),
+            // ---- W13-I ----
+            MenuAction::QuickExportLayer => match ctx.need_layer() {
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            // ---- W13-N ----
+            MenuAction::ApplyStyleAt(_) => match ctx.need_layer() {
+                Ok(l) if l.locked.all => Resolution::Disabled("The layer is locked"),
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::MagicCut => match ctx.need_pixel_layer() {
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::MergeChannels => gate(
+                (ctx.open_documents < 3).then_some(
+                    "Merge Channels needs three open grayscale documents of one size",
+                ),
+                act(self),
+            ),
+            MenuAction::PdfPresentation => gate(ctx.need_document(), act(self)),
+            MenuAction::ResizeImages => act(self),
+            MenuAction::CropAndStraightenPhotos => gate(ctx.need_document(), act(self)),
+            MenuAction::GenerateMockups => match ctx.need_layer() {
+                Ok(l) if l.class != LayerClass::SmartObject => Resolution::Disabled(
+                    "Generate Mockups replaces a smart object: select one first",
+                ),
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            MenuAction::ConvertToPointText | MenuAction::ConvertToParagraphText => {
+                resolve_text_op(self, ctx)
+            }
         }
     }
 }
@@ -4405,6 +4783,8 @@ fn file_menu(recent_files: usize) -> Menu {
                 "Export As",
                 ExportFormat::ALL
                     .iter()
+                    // W13-L: and MP4 video, as Photopea lists it here.
+                    .chain(&ExportFormat::VIDEO)
                     .map(|f| item(MenuAction::Export(*f)))
                     .collect(),
             ),
@@ -4419,6 +4799,8 @@ fn file_menu(recent_files: usize) -> Menu {
                     // W10-E.
                     item(MenuAction::ExportColorLookup),
                     item(MenuAction::ExportPdf),
+                    // W13-I.
+                    item(MenuAction::QuickExportLayer),
                 ],
             ),
             // W10-E: File > Automate.
@@ -4426,15 +4808,24 @@ fn file_menu(recent_files: usize) -> Menu {
                 "Automate",
                 vec![
                     item(MenuAction::AutomateBatch),
+                    // W13-N: Photopea's order.
+                    item(MenuAction::PdfPresentation),
                     item(MenuAction::ConvertFormats),
+                    item(MenuAction::GenerateMockups),
+                    item(MenuAction::ResizeImages),
+                    Entry::Separator,
+                    item(MenuAction::CropAndStraightenPhotos),
                 ],
             ),
+            // W13-K: File > Script.
+            item(MenuAction::Script),
             Entry::Separator,
             item(MenuAction::PlaceEmbedded),
             item(MenuAction::PlaceLinked),
             Entry::Separator,
             item(MenuAction::FileInfo),
             item(MenuAction::Print),
+            item(MenuAction::PrintAsPdf),
             Entry::Separator,
             item(MenuAction::Quit),
         ],
@@ -4505,6 +4896,13 @@ fn edit_menu() -> Menu {
             Entry::Separator,
             Entry::submenu("Purge", items(PurgeTarget::ALL, MenuAction::Purge)),
             Entry::Separator,
+            // W13-F: where Photoshop keeps them, above Keyboard Shortcuts.
+            Entry::submenu(
+                tr("ui.w13f.menu.assign_profile"),
+                items(ProfileChoice::ALL, MenuAction::AssignProfile),
+            ),
+            item(MenuAction::ConvertToProfile),
+            Entry::Separator,
             item(MenuAction::KeyboardShortcuts),
             item(MenuAction::Preferences),
         ],
@@ -4534,6 +4932,8 @@ fn image_menu() -> Menu {
             // W10-H
             item(MenuAction::ApplyImage),
             item(MenuAction::Calculations),
+            // W13-N: the Channels panel menu's Merge Channels.
+            item(MenuAction::MergeChannels),
             Entry::Separator,
             item(MenuAction::ImageSize),
             item(MenuAction::CanvasSize),
@@ -4556,6 +4956,10 @@ fn image_menu() -> Menu {
                 ],
             ),
             item(MenuAction::VectorizeBitmap),
+            // W13-F: Photopea's Reduce Colors and Wavelet Decompose, each a
+            // dialog.
+            item(MenuAction::ReduceColors),
+            item(MenuAction::WaveletDecompose),
         ],
     }
 }
@@ -4572,6 +4976,9 @@ fn layer_menu() -> Menu {
                     Entry::Separator,
                     item(MenuAction::LayerViaCopy),
                     item(MenuAction::LayerViaCut),
+                    // W13-G
+                    Entry::Separator,
+                    item(MenuAction::LayerExtra(LayerExtraOp::ArtboardFromLayers)),
                 ],
             ),
             Entry::submenu(
@@ -4598,7 +5005,15 @@ fn layer_menu() -> Menu {
             ),
             item(MenuAction::NewLayerBasedSlice),
             Entry::Separator,
-            Entry::submenu("Layer Mask", items(MaskOp::ALL, MenuAction::Mask)),
+            Entry::submenu("Layer Mask", {
+                let mut rows = items(MaskOp::ALL, MenuAction::Mask);
+                // W13-G: Photopea's Raster Mask ▸ From Transparency.
+                rows.push(Entry::Separator);
+                rows.push(item(MenuAction::LayerExtra(
+                    LayerExtraOp::MaskFromTransparency,
+                )));
+                rows
+            }),
             Entry::submenu(
                 "Vector Mask",
                 items(VectorMaskOp::ALL, MenuAction::VectorMask),
@@ -4620,6 +5035,15 @@ fn layer_menu() -> Menu {
                 e.push(item(MenuAction::ApplyStylePreset));
                 e.push(Entry::Separator);
                 e.push(item(MenuAction::ClearLayerStyle));
+                // W13-G
+                e.push(Entry::Separator);
+                e.push(item(MenuAction::LayerExtra(LayerExtraOp::CreateLayers)));
+                e.push(Entry::submenu(
+                    "Scale Effects",
+                    items(SCALE_EFFECTS_PERCENTS, |p| {
+                        MenuAction::LayerExtra(LayerExtraOp::ScaleEffects(p))
+                    }),
+                ));
                 e
             }),
             item(MenuAction::ConvertToSmartObject),
@@ -4639,6 +5063,15 @@ fn layer_menu() -> Menu {
                     Entry::Separator,
                     item(MenuAction::ConvertToLinked),
                     item(MenuAction::EmbedLinked),
+                    // W13-G
+                    Entry::Separator,
+                    item(MenuAction::LayerExtra(LayerExtraOp::ResetTransform)),
+                    Entry::submenu(
+                        "Stack Mode",
+                        items(StackMode::ALL, |m| {
+                            MenuAction::LayerExtra(LayerExtraOp::StackMode(m))
+                        }),
+                    ),
                 ],
             ),
             // W10-I: Layer ▸ Smart Filter — the filters' shared mask.
@@ -4666,6 +5099,19 @@ fn layer_menu() -> Menu {
                         e
                     }),
                     item(MenuAction::ConvertTextToShape),
+                    // W13-N
+                    Entry::Separator,
+                    item(MenuAction::ConvertToPointText),
+                    item(MenuAction::ConvertToParagraphText),
+                ],
+            ),
+            // W13-G: Photopea's frame animation (`_a_` layers).
+            Entry::submenu(
+                "Animation",
+                vec![
+                    item(MenuAction::LayerExtra(LayerExtraOp::MakeFrames)),
+                    item(MenuAction::LayerExtra(LayerExtraOp::UnmakeFrames)),
+                    item(MenuAction::LayerExtra(LayerExtraOp::MergeFrames)),
                 ],
             ),
             Entry::Separator,
@@ -4708,6 +5154,8 @@ fn select_menu() -> Menu {
             item(MenuAction::DeselectLayers),
             Entry::Separator,
             item(MenuAction::ColorRange),
+            // W13-N: strokes into GrabCut, Photopea's guided cutout.
+            item(MenuAction::MagicCut),
             // W10-K: back as a classical pipeline (saliency + GrabCut, no
             // model); see `selection::subject` for what it can and cannot see.
             item(MenuAction::SelectSubject),
@@ -4808,6 +5256,11 @@ fn view_menu() -> Menu {
     entries.push(item(MenuAction::NewGuidesFromShape));
     entries.push(item(MenuAction::ClearGuides));
     entries.push(item(MenuAction::LockGuides));
+    // W13-F: Photoshop's View ▸ Clear Slices, and the Slice tool's Slices
+    // From Guides as a row beside it.
+    entries.push(Entry::Separator);
+    entries.push(item(MenuAction::SlicesFromGuides));
+    entries.push(item(MenuAction::ClearSlices));
     Menu {
         title: "View",
         entries,
@@ -4849,6 +5302,436 @@ fn help_menu() -> Menu {
             item(MenuAction::About),
         ],
     }
+}
+
+// ---------------------------------------------------------------------------
+// W13-G: the last Layer-menu gaps
+// ---------------------------------------------------------------------------
+
+/// W13-G: Layer ▸ Smart Object ▸ Stack Mode ▸ … — Photoshop's image-stack
+/// statistics, computed per channel across the smart object's layers.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub enum StackMode {
+    Entropy,
+    Kurtosis,
+    Maximum,
+    Mean,
+    Median,
+    Minimum,
+    Range,
+    Skewness,
+    StandardDeviation,
+    Summation,
+    Variance,
+}
+
+impl StackMode {
+    /// Photoshop's order (alphabetical).
+    pub const ALL: &'static [StackMode] = &[
+        StackMode::Entropy,
+        StackMode::Kurtosis,
+        StackMode::Maximum,
+        StackMode::Mean,
+        StackMode::Median,
+        StackMode::Minimum,
+        StackMode::Range,
+        StackMode::Skewness,
+        StackMode::StandardDeviation,
+        StackMode::Summation,
+        StackMode::Variance,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            StackMode::Entropy => "Entropy",
+            StackMode::Kurtosis => "Kurtosis",
+            StackMode::Maximum => "Maximum",
+            StackMode::Mean => "Mean",
+            StackMode::Median => "Median",
+            StackMode::Minimum => "Minimum",
+            StackMode::Range => "Range",
+            StackMode::Skewness => "Skewness",
+            StackMode::StandardDeviation => "Standard Deviation",
+            StackMode::Summation => "Summation",
+            StackMode::Variance => "Variance",
+        }
+    }
+}
+
+/// W13-G: the percentages Layer ▸ Layer Style ▸ Scale Effects offers as rows.
+pub const SCALE_EFFECTS_PERCENTS: &[u16] = &[25, 50, 75, 150, 200];
+
+/// W13-G: one of the last Layer-menu rows from the parity audit.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+pub enum LayerExtraOp {
+    /// Layer Style ▸ Scale Effects ▸ `n`%: every size and distance of the
+    /// active layer's style times `n / 100`.
+    ScaleEffects(u16),
+    /// Layer Style ▸ Create Layers: the style's effects become raster
+    /// layers (clipped for the interior ones) that composite the same.
+    CreateLayers,
+    /// New ▸ Artboard from Layers: the selected top-level layers wrapped in
+    /// a new artboard sized to their bounds.
+    ArtboardFromLayers,
+    /// Layer Mask ▸ From Transparency: the layer's alpha becomes its mask and
+    /// its pixels become opaque where they had any coverage.
+    MaskFromTransparency,
+    /// Smart Object ▸ Reset Transform: the object back at its source's own
+    /// size, unrotated, about its current centre.
+    ResetTransform,
+    /// Smart Object ▸ Stack Mode ▸ …
+    StackMode(StackMode),
+    /// Animation ▸ Make Frames: the selected top-level layers become `_a_`
+    /// frame layers.
+    MakeFrames,
+    /// Animation ▸ Unmake Frames: the selected frames become plain layers.
+    UnmakeFrames,
+    /// Animation ▸ Merge: every frame flattened with the non-frame layers
+    /// into one raster frame, which replace every top-level layer.
+    MergeFrames,
+}
+
+impl LayerExtraOp {
+    /// Every row, in menu order within each submenu.
+    pub fn all() -> Vec<LayerExtraOp> {
+        let mut out = vec![
+            LayerExtraOp::ArtboardFromLayers,
+            LayerExtraOp::MaskFromTransparency,
+            LayerExtraOp::CreateLayers,
+        ];
+        out.extend(
+            SCALE_EFFECTS_PERCENTS
+                .iter()
+                .map(|p| LayerExtraOp::ScaleEffects(*p)),
+        );
+        out.push(LayerExtraOp::ResetTransform);
+        out.extend(StackMode::ALL.iter().map(|m| LayerExtraOp::StackMode(*m)));
+        out.extend([
+            LayerExtraOp::MakeFrames,
+            LayerExtraOp::UnmakeFrames,
+            LayerExtraOp::MergeFrames,
+        ]);
+        out
+    }
+
+    pub fn label(self) -> String {
+        match self {
+            LayerExtraOp::ScaleEffects(p) => format!("{p}%"),
+            LayerExtraOp::CreateLayers => "Create Layers".into(),
+            LayerExtraOp::ArtboardFromLayers => "Artboard from Layers".into(),
+            LayerExtraOp::MaskFromTransparency => "From Transparency".into(),
+            LayerExtraOp::ResetTransform => "Reset Transform".into(),
+            LayerExtraOp::StackMode(m) => m.label().into(),
+            LayerExtraOp::MakeFrames => "Make Frames".into(),
+            LayerExtraOp::UnmakeFrames => "Unmake Frames".into(),
+            LayerExtraOp::MergeFrames => "Merge".into(),
+        }
+    }
+}
+
+/// W13-G: the document facts the [`LayerExtraOp`] rows are gated on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct LayerExtraFacts {
+    /// Every selected layer (the active one included) sits at the root.
+    pub selected_at_root: bool,
+    /// A selected layer is an artboard, or an artboard's background plate.
+    pub selected_artboard: bool,
+    /// Top-level `_a_` frame layers in the document.
+    pub frames: usize,
+    /// Selected top-level layers that are frames.
+    pub selected_frames: usize,
+    /// Selected top-level layers that are not frames.
+    pub selected_plain_root: usize,
+    /// The active layer is a smart object scaled, rotated or skewed away
+    /// from its source's own size.
+    pub smart_transformed: bool,
+    /// The active smart object's source is a layered document (a PSD).
+    pub smart_layered: bool,
+    /// The active smart object records its source's pixel size (Reset
+    /// Transform restores that size).
+    pub smart_sized: bool,
+    /// Layers the active smart object's embedded PSD source declares in its
+    /// header (`None`: not an embedded PSD, or a header that cannot be read).
+    pub smart_layer_count: Option<usize>,
+    /// Some layer anywhere in the document carries Lock All (Merge would
+    /// have to remove it).
+    pub any_locked_all: bool,
+    /// The active layer's style is switched off as a whole
+    /// (`LayerEffects::enabled == false`).
+    pub style_switched_off: bool,
+    /// The active layer holds at least one pixel tile.
+    pub active_has_pixels: bool,
+}
+
+impl LayerExtraFacts {
+    pub fn of(doc: &Document) -> Self {
+        let tree = &doc.layers;
+        let mut chosen = doc.layer_selection();
+        if let Some(active) = doc.active_layer() {
+            if !chosen.contains(&active) {
+                chosen.push(active);
+            }
+        }
+        let root = tree.root();
+        let is_frame = |id: &LayerId| {
+            tree.get(*id)
+                .is_some_and(|l| raster::animation::parse_frame_layer_name(&l.name).is_some())
+        };
+        let at_root = |id: &LayerId| root.contains(id);
+        let active = doc.active_layer().and_then(|id| tree.get(id));
+        let (smart_sized, smart_layer_count) = match active.map(|l| &l.kind) {
+            Some(LayerKind::SmartObject(so)) => (
+                doc.assets()
+                    .iter()
+                    .find(|r| r.id == so.asset)
+                    .is_some_and(|r| r.source_size.is_some()),
+                match doc.asset_origin(so.asset) {
+                    Some(layer_model::AssetOrigin::Embedded { bytes, .. }) => {
+                        psd_header_layer_count(bytes)
+                    }
+                    _ => None,
+                },
+            ),
+            _ => (false, None),
+        };
+        let (smart_transformed, smart_layered) =
+            match doc.active_layer().and_then(|id| tree.get(id)) {
+                Some(Layer {
+                    kind: LayerKind::SmartObject(so),
+                    transform,
+                    ..
+                }) => (
+                    (transform.matrix2 - glam::Mat2::IDENTITY)
+                        .to_cols_array()
+                        .iter()
+                        .any(|v| v.abs() > 1e-4),
+                    match doc.asset_origin(so.asset) {
+                        Some(layer_model::AssetOrigin::Embedded { bytes, .. }) => {
+                            bytes.starts_with(b"8BPS")
+                        }
+                        Some(layer_model::AssetOrigin::Linked { path }) => path
+                            .extension()
+                            .is_some_and(|e| e.eq_ignore_ascii_case("psd")),
+                        None => false,
+                    },
+                ),
+                _ => (false, false),
+            };
+        Self {
+            selected_at_root: !chosen.is_empty() && chosen.iter().all(at_root),
+            selected_artboard: chosen.iter().any(|id| {
+                layer_model::artboard::artboard_of(tree, *id).is_some()
+                    || matches!(
+                        tree.get(*id).map(|l| &l.kind),
+                        Some(LayerKind::Raster(r)) if r.artboard.is_some()
+                    )
+            }),
+            frames: root.iter().filter(|id| is_frame(id)).count(),
+            selected_frames: chosen
+                .iter()
+                .filter(|id| at_root(id) && is_frame(id))
+                .count(),
+            selected_plain_root: chosen
+                .iter()
+                .filter(|id| at_root(id) && !is_frame(id))
+                .count(),
+            smart_transformed,
+            smart_layered,
+            smart_sized,
+            smart_layer_count,
+            any_locked_all: tree
+                .iter_depth_first()
+                .iter()
+                .any(|id| tree.get(*id).is_some_and(|l| l.locked.all)),
+            style_switched_off: active.is_some_and(|l| !l.effects.enabled),
+            active_has_pixels: doc
+                .active_layer()
+                .and_then(|id| doc.layer_tiles(id))
+                .is_some_and(|m| m.iter().next().is_some()),
+        }
+    }
+}
+
+/// W13-G: the layer count a PSD declares (the signed count at the head of
+/// the layer-info block, negative when the first alpha is the merged result),
+/// read without decoding a pixel. A 16- or 32-bit file leaves the classic
+/// layer-info block empty and keeps its layers in an `Lr16` / `Lr32` (or
+/// `Layr`) tagged block after the global mask, so the walk follows it there,
+/// the way `psd::read` does. `None` for anything that is not a well-formed
+/// PSD / PSB, so a file this cannot read never greys a row.
+pub fn psd_header_layer_count(bytes: &[u8]) -> Option<usize> {
+    fn be(bytes: &[u8], at: usize, n: usize) -> Option<u64> {
+        let b = bytes.get(at..at.checked_add(n)?)?;
+        Some(b.iter().fold(0u64, |acc, v| (acc << 8) | u64::from(*v)))
+    }
+    if !bytes.starts_with(b"8BPS") {
+        return None;
+    }
+    let version = be(bytes, 4, 2)?;
+    let wide = match version {
+        1 => 4,
+        2 => 8,
+        _ => return None,
+    };
+    // Header (26), then the colour-mode data and the image resources, each
+    // behind a 4-byte length.
+    let mut at = 26usize;
+    for _ in 0..2 {
+        let len = usize::try_from(be(bytes, at, 4)?).ok()?;
+        at = at.checked_add(4)?.checked_add(len)?;
+    }
+    // Layer-and-mask length, then layer-info length, then the count.
+    let section = usize::try_from(be(bytes, at, wide)?).ok()?;
+    if section == 0 {
+        return Some(0);
+    }
+    at = at.checked_add(wide)?;
+    let end = at.checked_add(section)?;
+    if end > bytes.len() {
+        return None;
+    }
+    let count_at = |at: usize| -> Option<usize> {
+        let raw = be(bytes, at, 2)? as u16 as i16;
+        Some(usize::from(raw.unsigned_abs()))
+    };
+    let info = usize::try_from(be(bytes, at, wide)?).ok()?;
+    if info >= 2 {
+        let n = count_at(at.checked_add(wide)?)?;
+        if n > 0 {
+            return Some(n);
+        }
+    }
+    // Deep bit depths: past the (empty) layer info and the global mask,
+    // the tagged blocks, one of which holds the whole layer section.
+    at = at.checked_add(wide)?.checked_add(info)?;
+    let mask = usize::try_from(be(bytes, at, 4)?).ok()?;
+    at = at.checked_add(4)?.checked_add(mask)?;
+    const NESTED: [&[u8; 4]; 3] = [b"Lr16", b"Lr32", b"Layr"];
+    const LONG_IN_PSB: [&[u8; 4]; 13] = [
+        b"LMsk", b"Lr16", b"Lr32", b"Layr", b"Mt16", b"Mt32", b"Mtrn", b"Alph", b"FMsk", b"lnk2",
+        b"FEid", b"FXid", b"PxSD",
+    ];
+    let is_sig = |at: usize| -> Option<()> {
+        matches!(
+            bytes.get(at..at.checked_add(4)?),
+            Some(b"8BIM") | Some(b"8B64")
+        )
+        .then_some(())
+    };
+    while at.checked_add(12)? <= end {
+        if is_sig(at).is_none() {
+            // Writers pad blocks to two or four bytes: resynchronise over at
+            // most three, as the reader does, and give up otherwise.
+            let skip = (1..=3usize).find(|k| at.checked_add(*k).and_then(is_sig).is_some())?;
+            at += skip;
+            continue;
+        }
+        let key = bytes.get(at + 4..at + 8)?;
+        let long = wide == 8 && LONG_IN_PSB.iter().any(|k| &k[..] == key);
+        let len_width = if long { 8 } else { 4 };
+        let len = usize::try_from(be(bytes, at + 8, len_width)?).ok()?;
+        let data = at.checked_add(8 + len_width)?;
+        if NESTED.iter().any(|k| &k[..] == key) {
+            return if len >= 2 { count_at(data) } else { Some(0) };
+        }
+        at = data.checked_add(len)?.checked_add(len % 2)?;
+    }
+    // No nested block: the file really has no layers.
+    Some(0)
+}
+
+/// W13-G: why the 8-bit-only rows are greyed in a deeper document.
+pub const LAYER_EXTRA_EIGHT_BIT: &str =
+    "This works on 8-bit documents in this build: convert with Image > Mode > 8 Bits/Channel";
+
+/// W13-G: why the style rows are greyed on an unstyled layer.
+pub const LAYER_EXTRA_NO_STYLE: &str = "The layer has no layer style";
+
+fn resolve_layer_extra(op: LayerExtraOp, ctx: &MenuContext) -> Resolution {
+    let layer = match ctx.need_layer() {
+        Ok(l) => l,
+        Err(r) => return Resolution::Disabled(r),
+    };
+    let facts = &ctx.layer_extra;
+    let eight = ctx.bit_depth == ChannelDepth::Eight;
+    let smart = layer.class == LayerClass::SmartObject;
+    let reason = match op {
+        LayerExtraOp::ScaleEffects(_) if !layer.has_effects => Some(LAYER_EXTRA_NO_STYLE),
+        LayerExtraOp::ScaleEffects(_) if layer.locked.all => Some("The layer is locked"),
+        LayerExtraOp::ScaleEffects(_) => None,
+        LayerExtraOp::CreateLayers if !layer.has_effects => Some(LAYER_EXTRA_NO_STYLE),
+        LayerExtraOp::CreateLayers if facts.style_switched_off => {
+            Some("The layer's style is switched off")
+        }
+        LayerExtraOp::CreateLayers if layer.class == LayerClass::Group => {
+            Some("A group's style cannot be split into layers in this build")
+        }
+        LayerExtraOp::CreateLayers if layer.is_clipping => {
+            Some("The layer is clipped to the one below: release the clipping mask first")
+        }
+        LayerExtraOp::CreateLayers if layer.locked.all => Some("The layer is locked"),
+        LayerExtraOp::CreateLayers if !eight => Some(LAYER_EXTRA_EIGHT_BIT),
+        LayerExtraOp::CreateLayers => None,
+        LayerExtraOp::ArtboardFromLayers if !facts.selected_at_root => {
+            Some("Artboards sit at the top of the stack: select top-level layers")
+        }
+        LayerExtraOp::ArtboardFromLayers if facts.selected_artboard => {
+            Some("The selection already holds an artboard")
+        }
+        LayerExtraOp::ArtboardFromLayers => None,
+        LayerExtraOp::MaskFromTransparency if layer.class != LayerClass::Raster => {
+            Some("From Transparency works on a pixel layer")
+        }
+        LayerExtraOp::MaskFromTransparency if layer.locked.blocks_pixel_edit() => {
+            Some("The layer's pixels are locked")
+        }
+        LayerExtraOp::MaskFromTransparency if layer.has_mask => {
+            Some("The layer already has a mask - delete it first")
+        }
+        LayerExtraOp::MaskFromTransparency if !eight => Some(LAYER_EXTRA_EIGHT_BIT),
+        LayerExtraOp::MaskFromTransparency if !facts.active_has_pixels => {
+            Some("The layer is empty: it has no transparency to read")
+        }
+        LayerExtraOp::MaskFromTransparency => None,
+        LayerExtraOp::ResetTransform | LayerExtraOp::StackMode(_) if !smart => {
+            Some("The active layer is not a smart object")
+        }
+        LayerExtraOp::ResetTransform if layer.locked.blocks_transform() => {
+            Some("The layer's position is locked")
+        }
+        LayerExtraOp::ResetTransform if !facts.smart_sized => {
+            Some("The smart object does not record its source's size")
+        }
+        LayerExtraOp::ResetTransform if !facts.smart_transformed => {
+            Some("The smart object is already at its source's size and angle")
+        }
+        LayerExtraOp::ResetTransform => None,
+        LayerExtraOp::StackMode(_) if !facts.smart_layered => {
+            Some("The smart object's source is a single image, not a stack of layers")
+        }
+        LayerExtraOp::StackMode(_) if facts.smart_layer_count.is_some_and(|n| n < 2) => {
+            Some("Stack Mode needs two or more visible layers in the smart object")
+        }
+        LayerExtraOp::StackMode(_) if !eight => Some(LAYER_EXTRA_EIGHT_BIT),
+        LayerExtraOp::StackMode(_) => None,
+        LayerExtraOp::MakeFrames if facts.selected_plain_root == 0 => {
+            Some("Select top-level layers that are not frames yet")
+        }
+        LayerExtraOp::MakeFrames => None,
+        LayerExtraOp::UnmakeFrames if facts.selected_frames == 0 => {
+            Some("No selected layer is a frame")
+        }
+        LayerExtraOp::UnmakeFrames => None,
+        LayerExtraOp::MergeFrames if facts.frames == 0 => {
+            Some("The document has no frames: use Make Frames first")
+        }
+        LayerExtraOp::MergeFrames if facts.any_locked_all => {
+            Some("A locked layer cannot be merged away: unlock it first")
+        }
+        LayerExtraOp::MergeFrames if !eight => Some(LAYER_EXTRA_EIGHT_BIT),
+        LayerExtraOp::MergeFrames => None,
+    };
+    gate(reason, act(MenuAction::LayerExtra(op)))
 }
 
 /// Find the action a chord performs, searching the whole menu bar.
@@ -5481,6 +6364,90 @@ mod tests {
                 "{id:?} is not in the menu"
             );
         }
+    }
+
+    /// W13-J: the rest of Photopea's Filter menu sits where Photopea files
+    /// it — Kaleidoscope and Dents under Distort, Shape Mosaic under Pixelate,
+    /// Flame under Render, Repeat / Color to Alpha / Dither / Particles under
+    /// Other, and the 3D and Fourier submenus of their own — each once.
+    #[test]
+    fn w13j_filter_rows_sit_where_photopea_puts_them() {
+        let menu = filter_menu();
+        let submenu = |label: &str| -> Vec<MenuAction> {
+            menu.entries
+                .iter()
+                .find_map(|e| match e {
+                    Entry::Submenu { label: l, entries } if *l == label => Some(
+                        entries
+                            .iter()
+                            .filter_map(|e| match e {
+                                Entry::Item(a) => Some(*a),
+                                _ => None,
+                            })
+                            .collect(),
+                    ),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no {label} submenu"))
+        };
+        let expect: &[(&str, &[(FilterId, &str)])] = &[
+            (
+                "Distort",
+                &[
+                    (FilterId::Kaleidoscope, "Kaleidoscope…"),
+                    (FilterId::Dents, "Dents…"),
+                ],
+            ),
+            ("Pixelate", &[(FilterId::ShapeMosaic, "Shape Mosaic…")]),
+            ("Render", &[(FilterId::Flame, "Flame…")]),
+            (
+                "Other",
+                &[
+                    (FilterId::Repeat, "Repeat…"),
+                    (FilterId::ColorToAlpha, "Color to Alpha…"),
+                    (FilterId::Dither, "Dither…"),
+                    (FilterId::Particles, "Particles…"),
+                ],
+            ),
+            (
+                "3D",
+                &[
+                    (FilterId::NormalMap, "Normal Map…"),
+                    (FilterId::TextureDilation, "Texture Dilation…"),
+                ],
+            ),
+            (
+                "Fourier",
+                &[
+                    (FilterId::FourierTransform, "Fourier Transform"),
+                    (
+                        FilterId::InverseFourierTransform,
+                        "Inverse Fourier Transform",
+                    ),
+                ],
+            ),
+        ];
+        let listed = menu.actions();
+        for (group, rows) in expect {
+            let items = submenu(group);
+            for (id, label) in *rows {
+                assert!(
+                    items.contains(&MenuAction::Filter(*id)),
+                    "{id:?} is not under {group}"
+                );
+                assert_eq!(id.label(), *label);
+                assert_eq!(
+                    listed
+                        .iter()
+                        .filter(|a| **a == MenuAction::Filter(*id))
+                        .count(),
+                    1,
+                    "{id:?} is listed more than once"
+                );
+            }
+        }
+        assert_eq!(submenu("3D").len(), 2);
+        assert_eq!(submenu("Fourier").len(), 2);
     }
 
     #[test]

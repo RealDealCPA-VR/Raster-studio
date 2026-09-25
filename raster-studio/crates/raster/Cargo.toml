@@ -41,6 +41,12 @@ jxl-oxide = { version = "0.12", default-features = false }
 # its options/colour-space vocabulary, already in the tree through `image`.
 zune-jpegxl = { version = "0.5", default-features = false, features = ["std"] }
 zune-core = "0.5"
+# W13-L: MP4 video export (`ExportFormat::Mp4`, `src/formats/mp4.rs`): the AV1
+# encoder `rav1e` (BSD-2-Clause, pure Rust), the same 0.8.1 already in the
+# tree behind `image`'s AVIF writer, named directly with default features off:
+# no `asm` (nasm), no `threading` (rayon pool). No new crate enters the lock
+# file. The MP4 container is written by hand in `mp4.rs` (no muxer crate).
+rav1e = { version = "0.8.1", default-features = false }
 # W11-H: lossy WebP export (`ExportFormat::WebPLossy`): one VP8 key frame,
 # exact alpha in an uncompressed `ALPH` chunk. Pure Rust, `#![forbid(unsafe_code)]`,
 # `no_std` + `alloc`, no dependencies with default features off (the `cli`
@@ -60,3 +66,17 @@ flate2.workspace = true
 # for svgz: usvg's `Tree::from_data` always inflates gzip, unbounded, so
 # `svg_import` inflates through a capped reader and calls `from_str` only.
 resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "raster-images"] }
+# W13-D: File > Open renders PDF (and PDF-compatible .ai) pages through
+# hayro (pure Rust, `#![forbid(unsafe_code)]` in the crate itself,
+# Apache-2.0; its rasteriser `vello_cpu` and helpers are Apache-2.0 OR MIT;
+# the embedded standard-14 fonts are PDFium's Foxit fonts, BSD-3-Clause).
+# Pinned to 0.4: 0.5's `hayro-syntax` turns on flate2's `zlib-rs` backend,
+# which Cargo's feature unification would swap in for every flate2 user in
+# the workspace (it changed this crate's own compressed output: the XCF
+# fixture tests went red), and 0.6+ needs rustc 1.92 (MSRV is 1.89). 0.4
+# keeps flate2's `rust_backend`; its optional OpenJPEG (C) `jpeg2000`
+# feature stays off, so JPEG 2000 images inside a PDF are not drawn.
+# Recorded in LICENSES/THIRD_PARTY_NOTICES.md.
+hayro = "=0.4.0"
+# The same crate hayro reads with, named for its `LoadPdfError`.
+hayro-syntax = "=0.4.0"

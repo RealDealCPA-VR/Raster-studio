@@ -67,8 +67,9 @@ pub enum Curve {
     Gamma(f32),
     /// `curv` with a sampled 16-bit table.
     Sampled(Vec<u16>),
-    /// `para` parametric curve. The five floats are `g, a, b, c, d`.
-    Parametric { kind: u16, params: [f32; 5] },
+    /// `para` parametric curve. The seven floats are `g, a, b, c, d, e, f`
+    /// (ICC.1:2010 table 68); a kind with fewer parameters leaves the rest 0.
+    Parametric { kind: u16, params: [f32; 7] },
 }
 
 /// A parsed matrix-shaper RGB profile.
@@ -80,6 +81,9 @@ pub struct MatrixShaper {
     xyz_d50_to_rgb: Mat3,
     /// The per-channel tone curves, applied before / after the matrix.
     trc: [Curve; 3],
+    /// W13-F: the `wtpt` tag, the media white in PCS XYZ (D50 when the
+    /// profile carries none), which Absolute Colorimetric scales by.
+    media_white: [f32; 3],
 }
 
 // ---------------------------------------------------------------------------
@@ -96,9 +100,6 @@ fn u32_at(b: &[u8], at: usize) -> Option<u32> {
         *b.get(at + 2)?,
         *b.get(at + 3)?,
     ]))
-}
-fn f32_at(b: &[u8], at: usize) -> Option<f32> {
-    Some(f32::from_bits(u32_at(b, at)?))
 }
 fn sig_at(b: &[u8], at: usize) -> Option<[u8; 4]> {
     Some([
@@ -206,36 +207,43 @@ fn decode_sampled(tab: &[u16], enc: f32) -> f32 {
 }
 
 /// Decode a `para` tone curve per ICC.1:2010 §10.17.
-fn decode_param(kind: u16, p: &[f32; 5], enc: f32) -> f32 {
+fn decode_param(kind: u16, p: &[f32; 7], enc: f32) -> f32 {
     let x = enc.clamp(0.0, 1.0);
-    let [g, a, b, c, d] = *p;
+    let [g, a, b, c, d, e, f] = *p;
     let y = match kind {
         0 => x.powf(g),
-        1 => c * x.powf(g),
-        2 => {
-            let brk = if g.abs() > 0.0 {
+        // W13-F: kinds 1 and 2 as ICC.1:2010 table 68 has them (they used
+        // to read `c` as a gain and drop kind 2's offset): (aX + b)^g from
+        // the break -b/a up, plus c for kind 2; below the break 0, or c.
+        1 | 2 => {
+            let brk = if a.abs() > 0.0 {
                 (-b / a).max(0.0)
             } else {
                 0.0
             };
+            let offset = if kind == 2 { c } else { 0.0 };
             if x >= brk {
-                (a * x + b).max(0.0).powf(g)
+                (a * x + b).max(0.0).powf(g) + offset
             } else {
-                0.0
+                offset
             }
         }
+        // ICC.1:2010 table 68: Y = (aX + b)^g at and above d, cX below it.
         3 => {
             if x >= d {
-                (a * x + b).max(0.0).powf(g) + c
+                (a * x + b).max(0.0).powf(g)
             } else {
                 c * x
             }
         }
+        // ICC.1:2010 table 68: Y = (aX + b)^g + e at and above d, cX + f
+        // below it. W13-F: this used to add c above the break and use d as
+        // the slope below it, dropping e and f.
         _ => {
             if x >= d {
-                (a * x + b).max(0.0).powf(g) + c
+                (a * x + b).max(0.0).powf(g) + e
             } else {
-                d * x
+                c * x + f
             }
         }
     };
@@ -292,7 +300,12 @@ impl MatrixShaper {
         if bytes.len() < 128 + 12 {
             return Err(IccError::Truncated);
         }
-        if !is_sig(sig_at(bytes, 4).ok_or(IccError::Truncated)?, b"acsp") {
+        // ICC.1:2010 7.2.9: the profile file signature sits at byte 36.
+        // W13-F: this used to read byte 4 (the CMM type field), which refused
+        // every real profile; byte 4 is still accepted for the hand-built
+        // profiles written against that reading.
+        let signed = |at: usize| sig_at(bytes, at).is_some_and(|s| is_sig(s, b"acsp"));
+        if !signed(36) && !signed(4) {
             return Err(IccError::BadSignature("acsp"));
         }
         let class = sig_at(bytes, 12).ok_or(IccError::Truncated)?;
@@ -324,6 +337,7 @@ impl MatrixShaper {
         let mut gxyz = None;
         let mut bxyz = None;
         let mut trc: [Option<Curve>; 3] = [None, None, None];
+        let mut media_white = D50_WHITE;
 
         for i in 0..count {
             let base = 132 + i * 12;
@@ -343,6 +357,13 @@ impl MatrixShaper {
                 b"rTRC" => trc[0] = Some(read_trc(tag)?),
                 b"gTRC" => trc[1] = Some(read_trc(tag)?),
                 b"bTRC" => trc[2] = Some(read_trc(tag)?),
+                // W13-F: a white with no luminance is no white; keep D50.
+                b"wtpt" => {
+                    let w = read_xyz(tag)?;
+                    if w.iter().all(|v| v.is_finite() && *v > 0.0) {
+                        media_white = w;
+                    }
+                }
                 _ => {}
             }
         }
@@ -366,12 +387,18 @@ impl MatrixShaper {
         Ok(MatrixShaper {
             rgb_to_xyz_d50: m,
             xyz_d50_to_rgb: inv,
+            media_white,
             trc: [
                 trc[0].take().unwrap_or(Curve::Identity),
                 trc[1].take().unwrap_or(Curve::Identity),
                 trc[2].take().unwrap_or(Curve::Identity),
             ],
         })
+    }
+
+    /// W13-F: the profile's media white (`wtpt`) in PCS XYZ.
+    pub fn media_white(&self) -> [f32; 3] {
+        self.media_white
     }
 
     /// Decode an encoded RGB triple in this profile into linear sRGB (D65).
@@ -472,36 +499,215 @@ fn read_trc(tag: &[u8]) -> Result<Curve, IccError> {
         }
         b"para" => {
             let kind = u16_at(tag, 8).ok_or(IccError::Truncated)?;
-            // 6 floats for kinds 0..=2, 7 for 3, 9 for 4 (after the 12-byte head).
+            // ICC.1:2010 10.18 (table 67): 1, 3, 4, 5 and 7 parameters for
+            // kinds 0..=4, each an s15Fixed16Number after the 12-byte head.
+            // W13-F: these were read as IEEE floats with the wrong counts,
+            // so every real `para` curve decoded to nonsense.
             let n = match kind {
-                0 | 1 => 6,
-                2 | 3 => 7,
-                4 => 9,
+                0 => 1,
+                1 => 3,
+                2 => 4,
+                3 => 5,
+                4 => 7,
                 _ => return Err(IccError::Unsupported("parametric curve kind")),
             };
             if tag.len() < 12 + n * 4 {
                 return Err(IccError::Truncated);
             }
-            let g = f32_at(tag, 12).ok_or(IccError::Truncated)?;
-            let a = f32_at(tag, 16).ok_or(IccError::Truncated)?;
-            let b = f32_at(tag, 20).ok_or(IccError::Truncated)?;
-            let c = f32_at(tag, 24).ok_or(IccError::Truncated)?;
-            let d = f32_at(tag, 28).ok_or(IccError::Truncated)?;
-            if kind <= 2 {
-                // kinds 0..=2 have no 'd' segment; c holds the 4th param.
-                Ok(Curve::Parametric {
-                    kind,
-                    params: [g, a, b, c, 0.0],
-                })
-            } else {
-                Ok(Curve::Parametric {
-                    kind,
-                    params: [g, a, b, c, d],
-                })
-            }
+            let param = |i: usize| {
+                if i < n {
+                    s15fixed16_at(tag, 12 + i * 4).unwrap_or(0.0)
+                } else {
+                    0.0
+                }
+            };
+            // Absent parameters read 0: kinds 0..=2 have no 'd' segment
+            // (kind 2's 4th parameter is its `c`), only kind 4 has e and f.
+            Ok(Curve::Parametric {
+                kind,
+                params: std::array::from_fn(param),
+            })
         }
         _ => Err(IccError::Unsupported("TRC type (not curv/para)")),
     }
+}
+
+// ---------------------------------------------------------------------------
+// W13-F: writing matrix-shaper profiles (Edit > Assign / Convert to Profile)
+// ---------------------------------------------------------------------------
+
+/// Adobe RGB (1998)'s colorants, adapted to the D50 PCS white, as its
+/// published ICC profile carries them (columns sum to D50).
+pub const ADOBE_RGB_1998_COLORANTS: [[f32; 3]; 3] = [
+    [0.609_741_2, 0.311_111_4, 0.019_470_2],
+    [0.205_276_5, 0.625_671_4, 0.060_867_3],
+    [0.149_185_2, 0.063_217_2, 0.744_567_9],
+];
+
+/// ProPhoto RGB (ROMM RGB)'s colorants. ROMM is defined on D50, so they need
+/// no adaptation.
+pub const PROPHOTO_RGB_COLORANTS: [[f32; 3]; 3] = [
+    [0.797_668_5, 0.288_040_2, 0.0],
+    [0.135_192_9, 0.711_883_5, 0.0],
+    [0.031_341_6, 0.000_091_6, 0.824_905_4],
+];
+
+/// Entries in the `curv` table [`matrix_shaper_profile`] writes.
+const WRITTEN_CURVE_SAMPLES: usize = 1024;
+
+/// A version 2.1 display-class RGB matrix-shaper ICC profile: `colorants`
+/// (`rXYZ gXYZ bXYZ`, D50-adapted) and one tone curve shared by the three
+/// channels, `decode` mapping an encoded value in `0..=1` to linear light,
+/// sampled into a 1024-entry `curv` table. The bytes are a spec-conformant
+/// profile (signature at byte 36, `desc`, `cprt`, `wtpt`), so other
+/// applications read a file exported with it, and [`MatrixShaper::parse`]
+/// reads it back.
+///
+/// `media_white` is the `wtpt` tag: the white the colorants were adapted
+/// from, as a version 2 profile records it (D65 for Adobe RGB, D50 for
+/// ProPhoto), which Absolute Colorimetric reads.
+pub fn matrix_shaper_profile(
+    description: &str,
+    colorants: [[f32; 3]; 3],
+    media_white: [f32; 3],
+    decode: impl Fn(f32) -> f32,
+) -> Vec<u8> {
+    fn s15(out: &mut Vec<u8>, v: f32) {
+        out.extend_from_slice(&((v * 65536.0).round() as i32).to_be_bytes());
+    }
+    fn xyz(v: [f32; 3]) -> Vec<u8> {
+        let mut t = b"XYZ \0\0\0\0".to_vec();
+        for c in v {
+            s15(&mut t, c);
+        }
+        t
+    }
+    let ascii: Vec<u8> = description
+        .bytes()
+        .filter(|b| b.is_ascii() && !b.is_ascii_control())
+        .collect();
+    // textDescriptionType (v2): the ASCII name, an empty Unicode record and an
+    // empty 67-byte ScriptCode record.
+    let mut desc = b"desc\0\0\0\0".to_vec();
+    desc.extend_from_slice(&(ascii.len() as u32 + 1).to_be_bytes());
+    desc.extend_from_slice(&ascii);
+    desc.push(0);
+    desc.extend_from_slice(&[0; 8]);
+    desc.extend_from_slice(&[0; 3 + 67]);
+    let mut cprt = b"text\0\0\0\0".to_vec();
+    cprt.extend_from_slice(b"No copyright, use freely");
+    cprt.push(0);
+    let mut trc = b"curv\0\0\0\0".to_vec();
+    trc.extend_from_slice(&(WRITTEN_CURVE_SAMPLES as u32).to_be_bytes());
+    for i in 0..WRITTEN_CURVE_SAMPLES {
+        let lin = decode(i as f32 / (WRITTEN_CURVE_SAMPLES - 1) as f32).clamp(0.0, 1.0);
+        trc.extend_from_slice(&((lin * 65535.0).round() as u16).to_be_bytes());
+    }
+    let bodies: [(&[u8; 4], Vec<u8>); 6] = [
+        (b"desc", desc),
+        (b"cprt", cprt),
+        (b"wtpt", xyz(media_white)),
+        (b"rXYZ", xyz(colorants[0])),
+        (b"gXYZ", xyz(colorants[1])),
+        (b"bXYZ", xyz(colorants[2])),
+    ];
+    // The three TRC tags share one body, which ICC allows.
+    let count = bodies.len() + 3;
+    let mut offset = 128 + 4 + count * 12;
+    let mut table = Vec::new();
+    let mut data = Vec::new();
+    let mut place = |sig: &[u8; 4], body: &[u8], table: &mut Vec<u8>, data: &mut Vec<u8>| {
+        let at = offset;
+        table.extend_from_slice(sig);
+        table.extend_from_slice(&(at as u32).to_be_bytes());
+        table.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        data.extend_from_slice(body);
+        while !data.len().is_multiple_of(4) {
+            data.push(0);
+        }
+        offset = 128 + 4 + count * 12 + data.len();
+        at
+    };
+    for (sig, body) in &bodies {
+        place(sig, body, &mut table, &mut data);
+    }
+    let trc_at = place(b"rTRC", &trc, &mut table, &mut data);
+    for sig in [b"gTRC", b"bTRC"] {
+        table.extend_from_slice(sig);
+        table.extend_from_slice(&(trc_at as u32).to_be_bytes());
+        table.extend_from_slice(&(trc.len() as u32).to_be_bytes());
+    }
+    let mut out = vec![0u8; 128];
+    out[8..12].copy_from_slice(&0x0210_0000u32.to_be_bytes());
+    out[12..16].copy_from_slice(b"mntr");
+    out[16..20].copy_from_slice(b"RGB ");
+    out[20..24].copy_from_slice(b"XYZ ");
+    out[36..40].copy_from_slice(b"acsp");
+    let mut illuminant = Vec::new();
+    for c in D50_WHITE {
+        s15(&mut illuminant, c);
+    }
+    out[68..80].copy_from_slice(&illuminant);
+    out.extend_from_slice(&(count as u32).to_be_bytes());
+    out.extend_from_slice(&table);
+    out.extend_from_slice(&data);
+    let size = out.len() as u32;
+    out[0..4].copy_from_slice(&size.to_be_bytes());
+    out
+}
+
+/// Adobe RGB (1998): its colorants and a pure 563/256 (about 2.2) gamma.
+pub fn adobe_rgb_1998_profile() -> Vec<u8> {
+    matrix_shaper_profile(
+        "Adobe RGB (1998) compatible",
+        ADOBE_RGB_1998_COLORANTS,
+        MEDIA_WHITE_D65,
+        |e| e.powf(563.0 / 256.0),
+    )
+}
+
+/// ProPhoto RGB: ROMM's colorants and its 1.8 gamma with the linear toe
+/// below 1/512 of linear light (16 x slope, ISO 22028-2).
+pub fn prophoto_rgb_profile() -> Vec<u8> {
+    matrix_shaper_profile(
+        "ProPhoto RGB compatible",
+        PROPHOTO_RGB_COLORANTS,
+        D50_WHITE,
+        |e| {
+            if e < 16.0 / 512.0 {
+                e / 16.0
+            } else {
+                e.powf(1.8)
+            }
+        },
+    )
+}
+
+/// W13-F: the D65 media white a version 2 profile of a D65 space (sRGB,
+/// Display P3, Adobe RGB) records in its `wtpt` tag.
+pub const MEDIA_WHITE_D65: [f32; 3] = D65_WHITE;
+
+/// W13-F: ICC Absolute Colorimetric between two media whites, on a linear
+/// sRGB (D65) value: into the D50 PCS, each XYZ component scaled by
+/// `from_white / to_white` (ICC.1:2010 annex D, the media-relative to
+/// ICC-absolute step and back), and out again. Equal whites change nothing;
+/// a D65 source into a D50 destination keeps its bluer white.
+pub fn absolute_colorimetric(
+    lin_srgb: [f32; 3],
+    from_white: [f32; 3],
+    to_white: [f32; 3],
+) -> [f32; 3] {
+    let xyz_d65 = mat3_mul_vec3(&LINEAR_SRGB_TO_XYZ_D65, lin_srgb);
+    let pcs = mat3_mul_vec3(&bradford(D65_WHITE, D50_WHITE), xyz_d65);
+    let scaled = [0, 1, 2].map(|i| {
+        if to_white[i].abs() > 1e-9 {
+            pcs[i] * from_white[i] / to_white[i]
+        } else {
+            pcs[i]
+        }
+    });
+    let back = mat3_mul_vec3(&bradford(D50_WHITE, D65_WHITE), scaled);
+    crate::space::xyz_to_linear_srgb(back)
 }
 
 #[cfg(test)]
@@ -724,11 +930,11 @@ mod tests {
     fn parametric_kinds_0_to_4_round_trip_and_decode_gamma() {
         // A short, well-formed profile exercising each para kind in the TRC.
         for (kind, params) in [
-            (0u16, [2.2f32, 0.0, 0.0, 0.0, 0.0]),
-            (1, [2.2, 0.0, 0.0, 1.0, 0.0]),
-            (2, [2.2, 1.0, 0.0, 0.0, 0.0]),
-            (3, [2.2, 1.0 / 1.055, 0.055 / 1.055, 0.0, 0.04045]),
-            (4, [2.2, 1.0 / 1.055, 0.055 / 1.055, 0.0, 0.2]),
+            (0u16, [2.2f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            (1, [2.2, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            (2, [2.2, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            (3, [2.2, 1.0 / 1.055, 0.055 / 1.055, 0.0, 0.04045, 0.0, 0.0]),
+            (4, [2.2, 1.0 / 1.055, 0.055 / 1.055, 0.0, 0.2, 0.0, 0.0]),
         ] {
             let curve = Curve::Parametric { kind, params };
             // decode(1.0) == 1.0, decode is monotone, and encode inverts it.
@@ -746,8 +952,128 @@ mod tests {
         // Kind 0 with gamma 2.2 decodes exactly x^2.2.
         let g = Curve::Parametric {
             kind: 0,
-            params: [2.2, 0.0, 0.0, 0.0, 0.0],
+            params: [2.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         };
         assert!((g.decode(0.5) - 0.5f32.powf(2.2)).abs() < 1e-5);
+    }
+
+    /// A `para` tag as ICC writes it: s15Fixed16 parameters, as many as the
+    /// kind has.
+    fn para_tag(kind: u16, params: &[f32]) -> Vec<u8> {
+        let mut t = b"para\0\0\0\0".to_vec();
+        t.u16be(kind);
+        t.u16be(0);
+        for p in params {
+            t.s15(*p);
+        }
+        t
+    }
+
+    #[test]
+    fn w13f_para_curves_read_s15fixed16_parameters_and_the_spec_counts() {
+        // Kind 0 is one parameter: a 16-byte tag.
+        let g = read_trc(&para_tag(0, &[2.2])).unwrap();
+        assert!((g.decode(0.5) - 0.5f32.powf(2.2)).abs() < 1e-3, "{g:?}");
+        // Kind 3 with the sRGB constants decodes the sRGB curve.
+        let srgb = read_trc(&para_tag(
+            3,
+            &[2.4, 1.0 / 1.055, 0.055 / 1.055, 1.0 / 12.92, 0.04045],
+        ))
+        .unwrap();
+        for e in [0.02f32, 0.2, 0.5, 0.9] {
+            let want = crate::transfer::srgb_to_linear3([e; 3])[0];
+            assert!(
+                (srgb.decode(e) - want).abs() < 1e-3,
+                "e={e}: {} vs {want}",
+                srgb.decode(e)
+            );
+        }
+    }
+
+    #[test]
+    fn w13f_para_kind_4_offsets_e_above_and_cx_plus_f_below_the_break() {
+        // ICC.1:2010 table 68, kind 4: Y = (aX + b)^g + e for X >= d,
+        // Y = cX + f below it. g 1, a 0.5, b 0, c 0.25, d 0.4, e 0.3, f 0.05.
+        let curve = read_trc(&para_tag(4, &[1.0, 0.5, 0.0, 0.25, 0.4, 0.3, 0.05])).unwrap();
+        for (x, want) in [(0.2f32, 0.25 * 0.2 + 0.05), (0.8, 0.5 * 0.8 + 0.3)] {
+            assert!(
+                (curve.decode(x) - want).abs() < 1e-3,
+                "x={x}: {} vs {want}",
+                curve.decode(x)
+            );
+        }
+    }
+
+    #[test]
+    fn w13f_a_profile_signed_at_byte_36_parses() {
+        let mut bytes = srgb_profile(256);
+        bytes[4..8].copy_from_slice(b"lcms");
+        bytes[36..40].copy_from_slice(b"acsp");
+        assert!(MatrixShaper::parse(&bytes).unwrap().is_srgb_equivalent());
+    }
+
+    #[test]
+    fn w13f_written_profiles_parse_and_carry_their_gamuts() {
+        for (bytes, name) in [
+            (adobe_rgb_1998_profile(), "Adobe RGB"),
+            (prophoto_rgb_profile(), "ProPhoto"),
+        ] {
+            assert_eq!(&bytes[36..40], b"acsp", "{name}: signed where ICC says");
+            assert_eq!(
+                u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize,
+                bytes.len(),
+                "{name}: the header declares the whole profile"
+            );
+            let p = MatrixShaper::parse(&bytes).unwrap();
+            assert!(!p.is_srgb_equivalent(), "{name} is not sRGB");
+            // White stays white and grey stays grey.
+            let white = p.to_linear_srgb([1.0; 3]);
+            for c in white {
+                assert!((c - 1.0).abs() < 0.01, "{name} white {white:?}");
+            }
+            let grey = p.to_linear_srgb([0.5; 3]);
+            assert!((grey[0] - grey[1]).abs() < 0.01 && (grey[1] - grey[2]).abs() < 0.01);
+            // Both spaces hold a green sRGB cannot: full device green lands
+            // outside the sRGB cube.
+            let green = p.to_linear_srgb([0.0, 1.0, 0.0]);
+            assert!(
+                green.iter().any(|c| *c < -0.01 || *c > 1.01),
+                "{name} green {green:?}"
+            );
+            // The encode inverts the decode.
+            let back = p.from_linear_srgb(p.to_linear_srgb([0.2, 0.6, 0.9]));
+            for (b, want) in back.iter().zip([0.2, 0.6, 0.9]) {
+                assert!((b - want).abs() < 2e-3, "{name} {back:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn w13f_the_media_white_is_read_from_wtpt_and_absolute_scales_by_it() {
+        let adobe = MatrixShaper::parse(&adobe_rgb_1998_profile()).unwrap();
+        let prophoto = MatrixShaper::parse(&prophoto_rgb_profile()).unwrap();
+        let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-3);
+        assert!(
+            close(adobe.media_white(), MEDIA_WHITE_D65),
+            "{:?}",
+            adobe.media_white()
+        );
+        assert!(
+            close(prophoto.media_white(), D50_WHITE),
+            "{:?}",
+            prophoto.media_white()
+        );
+        // Equal whites: nothing moves.
+        let grey = [0.4, 0.4, 0.4];
+        assert!(close(
+            absolute_colorimetric(grey, D65_WHITE, D65_WHITE),
+            grey
+        ));
+        // A D65 white into a D50 medium stays bluer than the medium's white.
+        let out = absolute_colorimetric(grey, D65_WHITE, D50_WHITE);
+        assert!(out[2] > out[0] + 0.02, "{out:?}");
+        // And back again is the identity.
+        let back = absolute_colorimetric(out, D50_WHITE, D65_WHITE);
+        assert!(close(back, grey), "{back:?}");
     }
 }

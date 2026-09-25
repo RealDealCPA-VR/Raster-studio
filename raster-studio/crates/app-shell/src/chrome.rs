@@ -300,6 +300,10 @@ pub struct ChromeOutput {
     /// appends it to the layer's text when no session is open
     /// ([`crate::menu_bridge::glyph_insert::insert_glyph`]).
     pub insert_glyphs: Vec<(LayerId, String)>,
+    /// W13-L: the Animation timeline's playhead, moved this frame (a ruler
+    /// scrub, a playback frame, Stop): the shell seeks the active document
+    /// with no history step ([`Editor::seek_timeline`]). The last one wins.
+    pub seek_timeline: Option<u32>,
 }
 
 /// The option keys that make up a [`tools::BrushSettings`].
@@ -1303,6 +1307,13 @@ impl Chrome {
         self.workspace.mask_view
     }
 
+    /// W13-M: set the mask view from the keyboard (Photopea's `\` and `` ` ``,
+    /// [`crate::shell`]'s `mask_view_key`); the same field the mask well's
+    /// popup and its Alt+click write.
+    pub fn set_mask_view(&mut self, mode: ui::MaskViewMode) {
+        self.workspace.mask_view = mode;
+    }
+
     /// Card 059: the overlay tint, from the theme's accent token — the same
     /// palette the chrome paints with, resolved for the theme the user is
     /// in, not a hard-coded colour in the painter.
@@ -1403,6 +1414,12 @@ impl Chrome {
         // layer, so an open dialog and its scrim sit over them; with one up
         // they take no pointer (`CanvasExtras::paint`, *Layering*).
         if !editor.documents().is_empty() {
+            // W13-F: View > Pattern Preview, on the same layer, under them.
+            crate::menu_bridge::menu_w13f::paint_pattern_preview(
+                ctx,
+                self.workspace.view_flags,
+                editor,
+            );
             let modal_open = self.dialogs.is_open();
             self.extras
                 .paint(ctx, &mut self.workspace, editor, modal_open);
@@ -3711,6 +3728,7 @@ fn is_document_directed(intent: &ui::Intent) -> bool {
             | ui::Intent::SetGroupExpanded { .. }
             | ui::Intent::EnterTextLayer { .. }
             | ui::Intent::InsertGlyph { .. }
+            | ui::Intent::SeekTimeline { .. }
             | ui::Intent::SetEditTarget { .. }
             | ui::Intent::HistoryJump(_)
             | ui::Intent::SetZoom(_)

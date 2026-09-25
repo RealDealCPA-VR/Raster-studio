@@ -548,6 +548,8 @@ pub(crate) fn dismissed_by_a_click_outside(
 
 /// The horizontal strip under the menu bar: the active tool's settings.
 pub fn tool_options(w: &mut Workspace, ctx: &egui::Context) {
+    // W13-I: the Eyedropper's sampling ring rides the bar's frame.
+    super::eyedropper_ring::paint(w, ctx);
     let tool = w.palette.active();
     let Some(info) = crate::palette::info(tool) else {
         return;
@@ -580,6 +582,22 @@ pub fn tool_options(w: &mut Workspace, ctx: &egui::Context) {
                         // action.
                         if tool == ToolId::Ruler {
                             straighten_button(w, ui);
+                            return;
+                        }
+                        // W13-F: the Slice tool has no settings either, only
+                        // Slices From Guides: the View menu's own row, so the
+                        // bar and the menu cut the same grid.
+                        if tool == ToolId::Slice {
+                            let action = MenuAction::SlicesFromGuides;
+                            let response = super::labelled_button(
+                                ui,
+                                &action.label(),
+                                true,
+                                super::ids::tool_option(ToolId::Slice, SLICES_FROM_GUIDES_KEY),
+                            );
+                            if response.clicked() {
+                                w.emit(Intent::Action(action));
+                            }
                             return;
                         }
                         if specs.is_empty() && !wants_gradient_stops(info) {
@@ -695,7 +713,26 @@ fn move_align_row(w: &mut Workspace, ui: &mut Ui) {
             w.emit(Intent::Action(action));
         }
     }
+    // W13-I: Quick Export — the File menu's own action, so the bar and the
+    // menu write the same PNG of the active layer.
+    separator(ui);
+    let action = MenuAction::QuickExportLayer;
+    let response = super::labelled_button(
+        ui,
+        &action.label(),
+        true,
+        super::ids::tool_option(ToolId::Move, MOVE_QUICK_EXPORT_KEY),
+    );
+    if response.clicked() {
+        w.emit(Intent::Action(action));
+    }
 }
+
+/// W13-F: the Slice options bar's Slices From Guides button's pseudo-key.
+pub const SLICES_FROM_GUIDES_KEY: &str = "slices_from_guides";
+
+/// W13-I: the Move options bar's Quick Export button's pseudo-key.
+pub const MOVE_QUICK_EXPORT_KEY: &str = "quick_export";
 
 /// W9-L: write a whole set of numeric fields for Free Transform and bump its
 /// edit counter, so the tool applies them together
@@ -1756,6 +1793,18 @@ mod w9l_tests {
         assert_eq!(
             MOVE_DISTRIBUTE_KEYS.map(|(a, _)| a),
             [DistributeAxis::Horizontal, DistributeAxis::Vertical]
+        );
+        // W13-I: Quick Export, right of the Distribute pair, raises the File
+        // menu's Quick Export Layer as PNG.
+        let quick = super::super::ids::tool_option(ToolId::Move, MOVE_QUICK_EXPORT_KEY);
+        let last = super::super::ids::tool_option(ToolId::Move, MOVE_DISTRIBUTE_KEYS[1].1);
+        assert!(
+            bar.rect(quick).expect("Quick Export is drawn").left()
+                > bar.rect(last).expect("drawn").left()
+        );
+        assert_eq!(
+            bar.click(quick),
+            vec![Intent::Action(MenuAction::QuickExportLayer)]
         );
         // The buttons are the Move tool's alone.
         let mut brush = Bar::new(ToolId::Brush);
