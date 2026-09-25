@@ -962,6 +962,37 @@ fn psd_type_anchor(layer: &TextLayer, box_origin: [f64; 2]) -> glam::Vec2 {
     }
 }
 
+/// W15-C: a text layer's warp as the `TySh` warp descriptor. The envelope's
+/// bounds are the block's line-box bounds (what the renderer fits the warp
+/// to) in the `TySh` space, i.e. relative to [`psd_type_anchor`].
+fn psd_text_warp_spec(layer: &TextLayer) -> psd::text::WarpSpec {
+    if !layer.warp.is_active() {
+        return psd::text::WarpSpec::NONE;
+    }
+    let anchor = psd_type_anchor(layer, [0.0, 0.0]);
+    let run = text_engine::TextRun::from(layer);
+    let shaped = text_engine::with_shared_library(|library| text_engine::shape(library, &run));
+    let r = shaped.bounds;
+    let bounds = [
+        f64::from(r.y - anchor.y),
+        f64::from(r.x - anchor.x),
+        f64::from(r.y + r.height - anchor.y),
+        f64::from(r.x + r.width - anchor.x),
+    ];
+    psd::text::WarpSpec::from_text_warp(&layer.warp, bounds)
+}
+
+/// W15-C: read a `TySh` block's warp descriptor onto an imported text layer;
+/// what the layer model cannot hold (the Shell styles, the Vertical
+/// orientation) is named with the rest of its unmapped styling.
+fn psd_apply_text_warp(import: &mut PsdTextImport, raw: &[u8]) {
+    if let Some(spec) = psd::text::warp_spec(raw, &psd::ReadOptions::default()) {
+        let (warp, unmapped) = spec.to_text_warp();
+        import.layer.warp = warp;
+        import.unmapped.extend(unmapped);
+    }
+}
+
 /// A family name as the file spells it (often a PostScript family such as
 /// `ArialMT` or `OpenSans`) mapped to an installed family's own spelling
 /// when one matches ignoring case, spaces and punctuation; otherwise kept as
@@ -1860,7 +1891,12 @@ pub fn document_from_psd(
                     let mapped = source.text.as_ref().and_then(|data| {
                         let engine =
                             psd::text::engine_text(&data.raw, &psd::ReadOptions::default());
-                        psd_text_layer(data.text.as_deref(), engine).map(|m| (data.transform, m))
+                        psd_text_layer(data.text.as_deref(), engine).map(|mut m| {
+                            // W15-C: the warp descriptor (every style and a
+                            // Custom mesh) onto the layer's live warp.
+                            psd_apply_text_warp(&mut m, &data.raw);
+                            (data.transform, m)
+                        })
                     });
                     if let Some((transform, mapped)) = mapped {
                         let [xx, xy, yx, yy, tx, ty] = transform;
@@ -2471,11 +2507,13 @@ fn psd_layers_for(
                         transform: tf,
                         text: Some(text.text.clone()),
                         // W9-C: every style run (family, size, fill, …), the
-                        // paragraph and the frame travel in the engine data.
-                        raw: psd::text::build_styled(
+                        // paragraph and the frame travel in the engine data;
+                        // W15-C: the warp in the warp descriptor.
+                        raw: psd::text::build_styled_warped(
                             &psd::engine_data::from_text_layer(text),
                             tf,
                             (b.left, b.top, b.right, b.bottom),
+                            &psd_text_warp_spec(text),
                         ),
                     });
                 }
@@ -5406,3 +5444,8 @@ mod w9c_text_tests {
 #[cfg(test)]
 #[path = "import_adjustment_tests.rs"]
 mod w11a_adjustment_tests;
+
+/// W15-C: warped text layers export and reimport with their warp.
+#[cfg(test)]
+#[path = "import_text_warp_tests.rs"]
+mod w15c_text_warp_tests;

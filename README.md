@@ -99,9 +99,14 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   and masks, which open as Normal and unclipped, symbols / components,
   which are not expanded, other pages); their embedded preview
   opens only when the layers cannot be read, and the status line says
-  why. EPS opens only the preview the file carries (its TIFF, WMF or EPSI
-  preview, since no PostScript interpreter exists here) and the status
-  line says it is the preview. W13X-7: a Paint.NET `.pdn` opens as its
+  why. W15-E: EPS opens as its PostScript artwork, run by a bounded
+  PostScript interpreter of this build's own (paths, fills, strokes, clips,
+  dashes, images through the ASCIIHex / ASCII85 / RunLength / Flate / DCT
+  filters, and text set in a fallback system font); the status line names
+  what it did not draw (smooth shading, patterns, embedded Type 1 font
+  outlines, unknown operators), and when the PostScript cannot be drawn
+  the preview the file carries (TIFF, WMF or EPSI) opens instead, the
+  status line saying why. W13X-7: a Paint.NET `.pdn` opens as its
   layers (name, opacity, visibility, blend mode; Reflect, Glow, Negation
   and Xor open as Normal, saying so), read from the .NET BinaryFormatter
   object graph and its gzip-chunked pixel blocks by this build's own
@@ -122,12 +127,22 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   lens-correction opcodes or camera profiles). Canon CR2/CR3, Nikon NEF,
   Sony ARW, Fujifilm RAF, Olympus ORF and Panasonic RW2 are refused by
   name: every Rust reader for them is LGPL or AGPL.
-  AVIF and HEIC do not open and say why: `rav1d`, the pure-Rust AV1
-  decoder this build evaluated, aborts the process on a damaged file (the
-  other pure-Rust ones are 0.0.x releases; the BSD `rusty_av1d` fork has
-  the same `unwrap()`), and the pure-Rust HEVC decoders are AGPL-licensed
-  (`heic`) or, measured for `heic-rs` 0.1.1, panic on damaged files, which
-  the release build turns into a crash. Layered `.psd`
+  W15-A: AVIF and HEIC / HEIF open, decoded in a separate worker process:
+  the editor runs its own executable again as `--decode-worker avif|heic`,
+  hands it the file, and reads back a size-checked header and the pixels,
+  because both decoders (`rusty_av1d` 1.2.0, a BSD rav1d fork, for AV1;
+  `heic-rs` 0.1.1, MIT OR Apache-2.0, for HEVC) panic on some damaged files
+  and the release build turns a panic into an abort. A damaged file ends
+  only the worker ("the AVIF decoder crashed on this file; it may be
+  damaged", or "the HEIC decoder ..." for a HEIC); a worker still running after 120 s is killed. AVIF: single
+  and grid images, alpha, 4:0:0 to 4:4:4, 8-bit (8-bit document) and
+  10/12-bit (16 Bits/Channel); HEIC: what `heic-rs` decodes (HEVC intra
+  stills, grids, alpha, 8 or 16 bits). Both apply `irot` / `imir` / `clap`
+  (a HEIF file's orientation; its Exif Orientation tag is informative and
+  is not applied on top), keep an embedded ICC profile, and open `nclx`
+  Display P3 as Display P3. Of 1000 bit-flipped copies of the test files,
+  42 made the decoder panic in the worker and every one came back to the
+  calling process as an error. Layered `.psd`
   and (W10-F) `.psb`, Photoshop's large-document format (64-bit lengths,
   canvases past 30 000 px), in RGB or greyscale (opened as RGB; other colour
   modes are refused by name) at 8 or 16 bits (a 32-bit file is converted
@@ -202,25 +217,25 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   one undo step). The
   document is fitted and drawn inside the canvas area, between the tool column,
   the docks and the bars. Workspaces: Essentials, Painting, Photography,
-  Minimal. F cycles the screen modes. Seven themes (W13X-4,
+  Minimal. F cycles the screen modes. Nine themes (W13X-4 and W15-D,
   `design::Theme::ALL`), picked in Edit ▸ Preferences… ▸ Theme or Window ▸
   Appearance, saved in the preferences file and installed on the next
-  frame: the app's own Light and Dark, and five of Photopea's — Light Grey,
-  Blue, Dark Blue, Purple and Black. Light and Dark are modelled on
-  Photopea's White and Dark Grey but are not those palettes (panel,
-  pasteboard, buttons, text and accent differ; Dark keeps only the #474747
-  panel), so Photopea's exact White and Dark Grey are not offered. The five
+  frame: the app's own Light and Dark, and all seven of Photopea's — Light
+  Grey, Dark Grey, Blue, Dark Blue, Purple, Black and White. Light and Dark
+  (the older two, modelled on White and Dark Grey but not those palettes)
+  stay, so a saved `light` / `dark` preference draws what it drew. The seven
   take Photopea's `pp.js` panel, pasteboard, button, button-hover, text and
   accent numbers, except where one fails the design crate's contrast or
-  layering gates — five numbers in all: Light Grey's text (#222221, not
+  layering gates — six numbers in all: Light Grey's text (#222221, not
   #393837, which leaves no room for dimmer secondary text at 4.5:1 on its
   darkest well) and accent (#0B5CC4, not #3482F6, 2.81:1 on the panel);
-  Blue's and Purple's accent (#5B9BF0, not #3482F6, 2.59:1 and 2.69:1 on
-  the panel); Dark Blue's panel (#303445, not #222531, whose 1.15:1 step
-  over the pasteboard fails the 1.4:1 gate). A test in
-  `design::tokens::photopea_themes` pins that list. A `--shot` capture takes
-  `RASTER_SHOT_THEME=<key>` (`light`, `dark`, `light-grey`, `blue`,
-  `dark-blue`, `purple`, `black`) without touching the saved preference.
+  Dark Grey's, Blue's and Purple's accent (#5B9BF0, not #3482F6, 2.51:1,
+  2.59:1 and 2.69:1 on the panel); Dark Blue's panel (#303445, not #222531,
+  whose 1.15:1 step over the pasteboard fails the 1.4:1 gate). White takes
+  all six of its numbers. A test in `design::tokens::photopea_themes` pins
+  that list. A `--shot` capture takes `RASTER_SHOT_THEME=<key>` (`light`,
+  `dark`, `light-grey`, `dark-grey`, `blue`, `dark-blue`, `purple`,
+  `black`, `white`) without touching the saved preference.
 - **Navigate:** pan, zoom (to the cursor, 100%, 200%), fit, rotate view (with
   Reset View Rotation) and flip view. Held-key gestures (W11-F): Space is the
   Hand; Ctrl+Space / Alt+Space turn a click into Zoom In / Zoom Out at the
@@ -718,9 +733,11 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   build's own composite) already shows the ink. The Custom warp style came in
   W13X-5: Warp Text… ▸ Custom, then the Move tool drags the 16 handles of a
   4x4 Bezier mesh drawn over the text on the canvas (one undo step a drag;
-  the mesh is saved with the layer). A PSD export writes no text warp at
-  all (every text layer is written `warpNone`), so a Custom warp is not in
-  a saved PSD.
+  the mesh is saved with the layer). Since W15-C a PSD export writes the
+  text layer's warp into its `TySh` warp descriptor (the style, bend and
+  both distortions; Custom as `warpCustom` with its 4x4 mesh in
+  `customEnvelopeWarp` / `meshPoints`), and opening a `.psd` reads it back
+  onto the layer's live warp.
 - **Run scripts** (W13-K): File ▸ Script… opens a code box, a Run button and
   an output log. Scripts are Photoshop-DOM JavaScript, run by an embedded
   pure-Rust engine (`boa_engine`): `app.documents` / `activeDocument` /
@@ -803,16 +820,24 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   leaves the playhead where it is. Every other edit is one undo step, and
   the timeline is saved in the `.rstudio` package. File ▸ Export As ▸ MP4
   (or the Export As dialog's Format list) offers **MP4**
-  (AV1 through the pure-Rust `rav1e` encoder, in an MP4 container this
-  build writes itself; 8-bit 4:2:0, a quality field, the row's size or
-  scale, at least 16x16, transparency flattened onto white): with
+  (W15-B: **H.264** by default, which plays everywhere, through Cisco's
+  OpenH264 compiled from source (BSD-2-Clause; High profile, a key frame on the
+  first frame and on every frame that starts 2 s or more after the last
+  one, so only a single frame shown longer than 2 s leaves a longer gap
+  between seek points, an odd edge padded to even, up to 3840x2160
+  including 1080p60 and 4K at 25-60 fps); the MP4
+  row's **Codec** field switches to AV1 through the pure-Rust `rav1e`
+  encoder; either in an MP4 container this build writes itself; 8-bit
+  4:2:0, a quality field, the row's size or scale, at least 16x16,
+  transparency flattened onto white): with
   Animated on, a Timeline-mode document writes one frame per 1/fps second
   rendered through the compositor, a Frames-mode document one frame per
   `_a_` layer with its own delay (the dialog's caption names which: the
   timeline's frame count, fps and length, or the `_a_` layers); a still
   writes one frame. Not done: the
   timeline rows are top-level layers only (a group moves as one), there is
-  no audio, and no H.264 (only AV1: `openh264` needs Cisco's C library);
+  no audio, and H.264 stops at 3840x2160 (OpenH264's limit; AV1 takes
+  larger frames);
   keying scale or rotation replaces a sheared layer's linear part with
   plain scale and rotation (shear is not keyed). Because a seek
   writes the tracked values straight onto the layers, undoing an older
@@ -838,8 +863,10 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   `<text>`, the rest as embedded PNGs; see Known gaps) and (W10-F) PPM / PGM /
   PBM, DDS (uncompressed
   BGRA or BC3 / DXT5) and AVIF (8-bit 4:4:4 with alpha and a quality
-  slider, `ravif`; Export As estimates its size but cannot preview it, as
-  nothing here reads AVIF back); W11-H: EXR (32-bit float, linear light,
+  slider, `ravif`; Export As estimates its size but does not preview it:
+  `ExportFormat::reads_back` is still `false` for AVIF, so the preview is
+  never decoded, although reading an AVIF now works through the W15-A
+  decode worker); W11-H: EXR (32-bit float, linear light,
   premultiplied; from the 8/16-bit composite, or a 32-bit document's float
   composite), lossless 8-bit JPEG XL (`zune-jpegxl`, pure Rust; 2x2 px or
   larger) and lossy WebP with a Quality setting (`tiny-webp`, pure Rust: one
@@ -954,8 +981,8 @@ matrix, each with its reason there:
 | Missing | Why |
 | --- | --- |
 | ICC-accurate CMYK, spot colours, Lab files | Since W7-D: Image ▸ Mode ▸ Lab / CMYK / Indexed convert (one undo step each; CMYK on a documented naive ink model, not an ICC press profile; Indexed through its own dialog); File ▸ Export… and Export As write a CMYK document as CMYK JPEG/TIFF and an Indexed one as a palette PNG (GIF keeps its colours) — since W8-B the palette PNG always writes: an image past 256 RGBA colours (a soft stroke painted after the conversion) is re-quantised with 1-bit alpha, as Photoshop's Indexed stores it; Export As says when a format writes the document as RGB instead (always, for Lab), and since W8-B File ▸ Export… says so in the status line; Info adds a Lab or CMYK row for a document in that mode, and since W8-B the Color panel switches to Lab / CMYK / Gray (K%) notation when the document is in that mode (the user can still pick another); since W8-B Image ▸ Adjustments ▸ Levels and Curves on a Lab document list Lightness / a / b (no composite row; they open on Lightness, so a first move keeps greys neutral) and preview and apply on those channels, and since W10-H so does a Levels/Curves *adjustment layer* in a Lab document; since W10-H Indexed Color flattens a layered document (one undo step, and the status line says so), Image ▸ Mode ▸ Bitmap… (threshold, pattern / diffusion dither, halftone screen) and Duotone… (1-4 inks with curves, baked into the pixels) convert from Grayscale, and Image ▸ Apply Image… / Calculations… exist; View ▸ Proof Colors and Gamut Warning are enabled and change the canvas. Still missing: a press profile (since W13X-4 a document can carry spot channels, composited as ink and written to `.psd` as spot channels), any Lab file (Lab goes out as RGB, and both export routes say so), and re-editable duotone inks. |
-| Proprietary camera RAW files; the vector artwork of EPS files and Paint.NET layers; Sketch / XD / Figma symbols, gradients and effects | W13-C: DNG opens, but CR2 / CR3 / NEF / ARW / RAF / ORF / RW2 are refused by name (no permissively licensed reader exists; convert to DNG); W13-D: PDF / AI pages open (see Open above), but EPS needs a PostScript interpreter, so only its embedded preview opens; W13X-7: Paint.NET files open as layers when this build's reader can follow their object graph (else their thumbnail, saying why). W13X-8: Sketch / XD / Figma open as layers (see Open above), but symbol / component instances are not expanded, gradient and image fills (other than a bitmap), effects, non-union boolean operations, per-run text styles, blend modes and masks are reported and not kept, only the first page opens, and a Figma `VECTOR` that stores no outline is drawn as its bounding box. |
-| Video layers, audio, H.264 | W13-L added the video timeline (per-layer in/out bars, opacity, position, scale and rotation keyframes with per-key Linear / Ease In / Ease Out / Hold interpolation (W13X-9), a playhead whose scrub and playback move the canvas live with no history step, saved in `.rstudio`) and MP4 export (AV1, File ▸ Export As ▸ MP4), see Video timeline and MP4 export above. Still missing: opening a video file as a video layer (no permissively licensed pure-Rust decoder, so MP4 / MOV / WebM / AVI are refused by name), audio, H.264 output (`openh264` needs a C library). |
+| Proprietary camera RAW files; EPS text in its own fonts, smooth shading and patterns; Paint.NET layers; Sketch / XD / Figma symbols, gradients and effects | W13-C: DNG opens, but CR2 / CR3 / NEF / ARW / RAF / ORF / RW2 are refused by name (no permissively licensed reader exists; convert to DNG); W13-D: PDF / AI pages open (see Open above), W15-E: EPS artwork opens through a bounded PostScript interpreter, but its text is set in a fallback system font with estimated spacing (embedded Type 1 / Type 42 / CFF outlines are not rasterised) and smooth shading (`shfill`), patterns, `charpath` and masked images (ImageType 3 / 4) are named in the status line, not drawn; W13X-7: Paint.NET files open as layers when this build's reader can follow their object graph (else their thumbnail, saying why). W13X-8: Sketch / XD / Figma open as layers (see Open above), but symbol / component instances are not expanded, gradient and image fills (other than a bitmap), effects, non-union boolean operations, per-run text styles, blend modes and masks are reported and not kept, only the first page opens, and a Figma `VECTOR` that stores no outline is drawn as its bounding box. |
+| Video layers, audio, H.264 | W13-L added the video timeline (per-layer in/out bars, opacity, position, scale and rotation keyframes with per-key Linear / Ease In / Ease Out / Hold interpolation (W13X-9), a playhead whose scrub and playback move the canvas live with no history step, saved in `.rstudio`) and MP4 export (W15-B: H.264 by default through OpenH264 built from source, AV1 as the Codec option; File ▸ Export As ▸ MP4), see Video timeline and MP4 export above. Still missing: opening a video file as a video layer (no permissively licensed pure-Rust decoder, so MP4 / MOV / WebM / AVI are refused by name), audio. |
 | Collaboration, cloud storage, sharing online, mobile | Non-goals: this is a local-first desktop application whose own code makes no network calls, so nothing that needs a server is offered. |
 | Licensing and auto-update | Dropped from the workspace: neither crate exists. Entitlement checks and update feeds belong to a shipped product's release engineering, not this build. |
 | Perfect PSD round-tripping | The target is a correct reopen in Photoshop and Photopea, not byte fidelity. |
@@ -976,12 +1003,16 @@ matrix, each with its reason there:
   (saliency and GrabCut), colour-driven rather than semantic.
 - Lossy JPEG XL export: File ▸ Export… and Export As write lossless JPEG XL
   only, because no pure-Rust lossy JPEG XL encoder exists.
-- Opening AVIF or HEIC: both are refused by name, with the reason (see Open
-  above): no pure-Rust decoder this build accepts. AVIF *export* works.
-- Photopea's exact White and Dark Grey themes: the app's own Light and Dark
-  stand in for them (see the layout item above).
-- A text warp in a PSD: the PSD writer writes every text layer unwarped
-  (`warpNone`), so a preset or Custom warp does not reach a saved `.psd`.
+- AVIF / HEIC colour beyond sRGB, Display P3 and ICC (W15-A): HDR transfer
+  functions (PQ, HLG) and BT.2020 primaries are not converted (the samples
+  open as sRGB), premultiplied alpha is not divided out, and `iovl`
+  overlays are refused by name. A HEIC with real picture content is not
+  among the test files: the only HEVC encoder in reach (`heic-rs`'s own
+  synthetic builder) writes flat grey, so HEIC colour is verified on grey.
+- Photoshop's Shell Lower / Shell Upper warp styles and its Vertical warp
+  orientation: a `.psd` text layer using them opens as Arc Lower / Arc
+  Upper, horizontal, and the import report names what changed, because the
+  layer model has no such styles and no warp orientation (W15-C).
 
 **Known gaps in what exists:**
 

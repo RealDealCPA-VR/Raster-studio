@@ -787,6 +787,10 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.export_as.embed.exif.and.xmp", &[(Locale::En, "Embed EXIF and XMP")]),
     ("ui.export_as.webp.lossless", &[(Locale::En, "WebP (lossless)")]),
     ("ui.export_as.webp.lossy", &[(Locale::En, "WebP (lossy)")]),
+    // W15-B: the MP4 row's Codec field.
+    ("ui.export_as.codec", &[(Locale::En, "Codec")]),
+    ("ui.export_as.codec.h264", &[(Locale::En, "H.264 (plays everywhere)")]),
+    ("ui.export_as.codec.av1", &[(Locale::En, "AV1 (smaller, newer players)")]),
     ("ui.export_as.export.as", &[(Locale::En, "Export As")]),
     ("ui.brush_editor.custom.brush", &[(Locale::En, "Custom Brush")]),
     ("ui.brush_editor.the.preview.runs.the.real.brush", &[(Locale::En, "The preview runs the real brush engine.")]),

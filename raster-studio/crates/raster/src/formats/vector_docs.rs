@@ -3,7 +3,7 @@
 //!
 //! | Format | What opens | What does not |
 //! | --- | --- | --- |
-//! | EPS | the embedded TIFF preview of a DOS EPS; else its WMF preview (drawn by [`super::metafile`]); else an EPSI hex preview in the PostScript | the PostScript itself: no PostScript interpreter exists here, so an EPS with no preview is refused, saying so |
+//! | EPS | W15-E: the **PostScript artwork**, run by the bounded interpreter in [`super::postscript`] (paths, fills, strokes, clips, images, text in a fallback font); when that fails or draws nothing, the embedded TIFF preview of a DOS EPS, else its WMF preview (drawn by [`super::metafile`]), else an EPSI hex preview, with the reason in the note | what the interpreter reports as not drawn (smooth shading, patterns, embedded Type 1 outlines, unknown operators; see [`super::postscript`]); an EPS it cannot draw and with no preview is refused with the interpreter's reason |
 //! | Paint.NET PDN | here, the flattened thumbnail PNG in the XML header (Paint.NET writes it at most 256 px a side); File > Open reads the **layers** first through [`pdn::read_layers`] (W13X-7) and comes here only when they cannot be read | a layer layout [`pdn`] cannot follow (see its docs): the thumbnail opens and the caller says why |
 //! | Sketch | here, `previews/preview.png`, the page preview Sketch saves; File > Open reads the **layers** first through [`design_files`] (W13X-8) and comes here only when they cannot be read | nothing more on this flat route |
 //! | Adobe XD | here, the archive's `preview.png` (or `thumbnail.png`); File > Open reads the layers first ([`design_files`]) | nothing more on this flat route |
@@ -254,8 +254,8 @@ fn zip_preview(
 
 // ---------------------------------------------------------------------- EPS
 
-fn eps_note(what: &str) -> String {
-    format!("EPS: this is the file's embedded {what} preview, not the PostScript artwork (this build has no PostScript interpreter)")
+fn eps_note(what: &str, why: &str) -> String {
+    format!("EPS: this is the file's embedded {what} preview, not the PostScript artwork (the PostScript interpreter could not draw it: {why})")
 }
 
 fn decode_eps(bytes: &[u8], limits: ImportLimits) -> Result<(DecodedSurface, String), CodecError> {
@@ -271,30 +271,37 @@ fn decode_eps(bytes: &[u8], limits: ImportLimits) -> Result<(DecodedSurface, Str
             .map(Some)
             .ok_or_else(|| malformed(NAME, "a section runs past the end of the file"))
     };
-    let postscript: &[u8] = if bytes.starts_with(&DOS_EPS) {
-        if let Some(tiff) = section(20, 24)? {
-            let mut s = decode_surface_bytes_as(tiff, limits, ImportFormat::Tiff)?;
-            s.source_format = ImportFormat::Eps;
-            return Ok((s, eps_note("TIFF")));
-        }
-        if let Some(wmf) = section(12, 16)? {
-            let mut s = metafile::decode_wmf(wmf, limits)?;
-            s.source_format = ImportFormat::Eps;
-            return Ok((s, eps_note("WMF")));
-        }
+    let dos = bytes.starts_with(&DOS_EPS);
+    let postscript: &[u8] = if dos {
         section(4, 8)?.unwrap_or(&[])
     } else {
         bytes
     };
-    if let Some(s) = epsi_preview(postscript, limits)? {
-        return Ok((s, eps_note("EPSI")));
+    // W15-E: the artwork first; a preview only when the PostScript cannot
+    // be drawn, and then the note says why.
+    let why = match super::postscript::render(postscript, limits) {
+        Ok(drawn) => return Ok(drawn),
+        Err(e) => e.to_string(),
+    };
+    if dos {
+        if let Some(tiff) = section(20, 24)? {
+            let mut s = decode_surface_bytes_as(tiff, limits, ImportFormat::Tiff)?;
+            s.source_format = ImportFormat::Eps;
+            return Ok((s, eps_note("TIFF", &why)));
+        }
+        if let Some(wmf) = section(12, 16)? {
+            let mut s = metafile::decode_wmf(wmf, limits)?;
+            s.source_format = ImportFormat::Eps;
+            return Ok((s, eps_note("WMF", &why)));
+        }
     }
-    Err(CodecError::Unsupported(
-        "this EPS / PostScript file has no embedded preview (TIFF, WMF or EPSI), and this \
-         build has no PostScript interpreter to draw the artwork; save it as PDF, or with a \
-         TIFF preview"
-            .into(),
-    ))
+    if let Some(s) = epsi_preview(postscript, limits)? {
+        return Ok((s, eps_note("EPSI", &why)));
+    }
+    Err(CodecError::Unsupported(format!(
+        "this EPS / PostScript file could not be drawn by the PostScript interpreter ({why}) \
+         and has no embedded preview (TIFF, WMF or EPSI) to show instead; save it as PDF"
+    )))
 }
 
 /// The EPSI preview (`%%BeginPreview: w h depth lines`, hex rows in comment
@@ -644,7 +651,7 @@ pub(crate) mod tests {
         let bare = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 4 2\nnewpath 0 0 moveto\n";
         let err = decode_surface_bytes(bare, ImportLimits::default()).unwrap_err();
         assert!(err.to_string().contains("no embedded preview"), "{err}");
-        assert!(err.to_string().contains("PostScript interpreter"), "{err}");
+        assert!(err.to_string().contains("drew nothing"), "{err}");
     }
 
     pub(crate) fn pdn_file(thumb_png: &[u8]) -> Vec<u8> {

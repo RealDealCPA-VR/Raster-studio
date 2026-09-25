@@ -1,7 +1,7 @@
 //! Semantic color roles and the light/dark palettes that fill them.
 //!
 //! Raw hex appears only in the role tables — [`LIGHT_ROLES`] and
-//! [`DARK_ROLES`] here, and five of Photopea's themes in
+//! [`DARK_ROLES`] here, and Photopea's seven themes in
 //! [`super::photopea_themes`]. Everything else addresses color by
 //! [`ColorRole`], so a palette can be swapped wholesale and the UI keeps its
 //! meaning.

@@ -575,8 +575,9 @@ impl ExportAsDialog {
                 ExportFormat::Avif(_) => ExportFormat::Avif(quality.unwrap_or(80)),
                 // W11-H: and lossy WebP.
                 ExportFormat::WebPLossy(_) => ExportFormat::WebPLossy(quality.unwrap_or(80)),
-                // W13-L: and MP4 (AV1) video.
+                // W13-L: and MP4 video (W15-B: H.264, or the AV1 option).
                 ExportFormat::Mp4(_) => ExportFormat::Mp4(quality.unwrap_or(80)),
+                ExportFormat::Mp4Av1(_) => ExportFormat::Mp4Av1(quality.unwrap_or(80)),
                 other => other,
             };
             if !entry.preset.format.supports_16_bit() {
@@ -591,8 +592,8 @@ impl ExportAsDialog {
     pub fn quality(&self) -> Option<u8> {
         match self.format() {
             ExportFormat::Jpeg(q) | ExportFormat::Avif(q) | ExportFormat::WebPLossy(q) => Some(q),
-            // W13-L: MP4 (AV1) video.
-            ExportFormat::Mp4(q) => Some(q),
+            // W13-L: MP4 video (W15-B: either codec).
+            ExportFormat::Mp4(q) | ExportFormat::Mp4Av1(q) => Some(q),
             _ => None,
         }
     }
@@ -619,12 +620,48 @@ impl ExportAsDialog {
                 entry.preset.format = ExportFormat::WebPLossy(quality);
                 true
             }
-            // W13-L: MP4 (AV1) video.
+            // W13-L: MP4 video.
             Some(entry) if matches!(entry.preset.format, ExportFormat::Mp4(_)) => {
                 entry.preset.format = ExportFormat::Mp4(quality);
                 true
             }
+            // W15-B: MP4 with the AV1 codec.
+            Some(entry) if matches!(entry.preset.format, ExportFormat::Mp4Av1(_)) => {
+                entry.preset.format = ExportFormat::Mp4Av1(quality);
+                true
+            }
             _ => false,
+        }
+    }
+
+    /// W15-B: the selected MP4 row's video codec, or `None` when the row is
+    /// not an MP4.
+    pub fn mp4_codec(&self) -> Option<raster::codec::formats::mp4::Mp4Codec> {
+        use raster::codec::formats::mp4::Mp4Codec;
+        match self.format() {
+            ExportFormat::Mp4(_) => Some(Mp4Codec::H264),
+            ExportFormat::Mp4Av1(_) => Some(Mp4Codec::Av1),
+            _ => None,
+        }
+    }
+
+    /// W15-B: choose the selected MP4 row's codec, keeping its quality.
+    /// Ignored (returns `false`) unless the row is an MP4.
+    pub fn set_mp4_codec(&mut self, codec: raster::codec::formats::mp4::Mp4Codec) -> bool {
+        use raster::codec::formats::mp4::Mp4Codec;
+        let Some(quality) = self.mp4_codec().and(self.quality()) else {
+            return false;
+        };
+        let index = self.selected;
+        match self.entry_mut(index) {
+            Some(entry) => {
+                entry.preset.format = match codec {
+                    Mp4Codec::H264 => ExportFormat::Mp4(quality),
+                    Mp4Codec::Av1 => ExportFormat::Mp4Av1(quality),
+                };
+                true
+            }
+            None => false,
         }
     }
 
@@ -961,6 +998,30 @@ impl ExportAsDialog {
                 self.set_format(format);
             }
         });
+        // W15-B: an MP4 row chooses its codec: H.264 (the default) or AV1.
+        if let Some(codec) = self.mp4_codec() {
+            use raster::codec::formats::mp4::Mp4Codec;
+            let codec_name = |c: Mp4Codec| {
+                crate::strings::tr(match c {
+                    Mp4Codec::H264 => "ui.export_as.codec.h264",
+                    Mp4Codec::Av1 => "ui.export_as.codec.av1",
+                })
+                .to_string()
+            };
+            design::inspector_field(ui, crate::strings::tr("ui.export_as.codec"), |ui| {
+                let mut chosen = codec;
+                if combo(
+                    ui,
+                    "ex-mp4-codec",
+                    &mut chosen,
+                    &[Mp4Codec::H264, Mp4Codec::Av1],
+                    codec_name,
+                    |_| None,
+                ) {
+                    self.set_mp4_codec(chosen);
+                }
+            });
+        }
         design::inspector_field(ui, "Suffix", |ui| {
             let mut suffix = entry.suffix.clone();
             if ui
@@ -1773,6 +1834,123 @@ mod tests {
         assert!(dialog.job().entries[0].animated, "on by default");
         dialog.entry_mut(0).unwrap().animated = false;
         assert!(!dialog.job().entries[0].animated);
+    }
+
+    /// W15-B: one headless frame of the dialog on a context that persists
+    /// across calls (so an open combo stays open), feeding `events`; the
+    /// drawn texts with their screen rects.
+    fn frame_texts(
+        ctx: &Context,
+        dialog: &mut ExportAsDialog,
+        events: Vec<egui::Event>,
+    ) -> Vec<(String, egui::Rect)> {
+        let out = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1600.0, 1400.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                let _ = dialog.show(ctx);
+            },
+        );
+        out.shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) => Some((
+                    t.galley.text().to_string(),
+                    egui::Rect::from_min_size(t.pos, t.galley.size()),
+                )),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// W15-B: press and release the pointer on the last drawn `text`.
+    fn click_text(ctx: &Context, dialog: &mut ExportAsDialog, text: &str) {
+        let texts = frame_texts(ctx, dialog, Vec::new());
+        let rect = texts
+            .iter()
+            .rev()
+            .find(|(t, _)| t == text)
+            .map(|(_, r)| *r)
+            .unwrap_or_else(|| panic!("{text:?} is not drawn: {texts:?}"));
+        let pos = rect.center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        frame_texts(
+            ctx,
+            dialog,
+            vec![egui::Event::PointerMoved(pos), button(true)],
+        );
+        frame_texts(ctx, dialog, vec![button(false)]);
+    }
+
+    /// W15-B: an MP4 row draws a Codec field showing H.264, the default;
+    /// choosing AV1 in it by pointer puts `Mp4Av1` (same quality) in the job
+    /// the shell exports, and that format encodes an `av01` file while the
+    /// default encodes `avc1`. A row of another format has no Codec field.
+    #[test]
+    fn an_mp4_row_chooses_its_codec_by_pointer_and_h264_is_the_default() {
+        use raster::codec::formats::mp4::{self, Mp4Codec};
+        let mut dialog = dialog();
+        dialog.set_format(ExportFormat::Png);
+        let texts = drawn_texts(&mut dialog);
+        assert!(!texts.iter().any(|t| t == "Codec"), "{texts:?}");
+        assert_eq!(dialog.mp4_codec(), None);
+        assert!(!dialog.set_mp4_codec(Mp4Codec::Av1), "PNG has no codec");
+
+        // File > Export As > MP4 and the format list both land on H.264.
+        assert_eq!(ExportFormat::VIDEO, [ExportFormat::Mp4(80)]);
+        dialog.set_format(ExportFormat::Mp4(80));
+        assert!(dialog.set_quality(55));
+        assert_eq!(dialog.mp4_codec(), Some(Mp4Codec::H264));
+        let texts = drawn_texts(&mut dialog);
+        assert!(texts.iter().any(|t| t == "Codec"), "{texts:?}");
+        assert!(
+            texts.iter().any(|t| t == "H.264 (plays everywhere)"),
+            "{texts:?}"
+        );
+
+        let ctx = Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        for _ in 0..2 {
+            frame_texts(&ctx, &mut dialog, Vec::new());
+        }
+        click_text(&ctx, &mut dialog, "H.264 (plays everywhere)");
+        click_text(&ctx, &mut dialog, "AV1 (smaller, newer players)");
+        assert_eq!(dialog.mp4_codec(), Some(Mp4Codec::Av1));
+        let job = dialog.job();
+        assert_eq!(job.entries[0].preset.format, ExportFormat::Mp4Av1(55));
+        assert_eq!(dialog.quality(), Some(55), "the quality carried over");
+        let texts: Vec<String> = frame_texts(&ctx, &mut dialog, Vec::new())
+            .into_iter()
+            .map(|t| t.0)
+            .collect();
+        assert!(
+            texts.iter().any(|t| t == "AV1 (smaller, newer players)"),
+            "{texts:?}"
+        );
+
+        // The job's format is what the export encodes.
+        let rgba = PreviewSource::placeholder(32, 32).rgba().to_vec();
+        let av1 = encode(job.entries[0].preset.format, 32, 32, &rgba).unwrap();
+        assert_eq!(&mp4::probe(&av1).unwrap().codec, b"av01");
+        let h264 = encode(ExportFormat::Mp4(55), 32, 32, &rgba).unwrap();
+        let info = mp4::probe(&h264).unwrap();
+        assert_eq!(&info.codec, b"avc1");
+        assert!(info.has_avcc);
+
+        // And back to H.264, keeping the quality.
+        assert!(dialog.set_mp4_codec(Mp4Codec::H264));
+        assert_eq!(dialog.format(), ExportFormat::Mp4(55));
     }
 
     /// W13-L: in Timeline mode the Animated caption names the timeline's

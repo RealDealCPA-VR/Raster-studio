@@ -31,6 +31,135 @@ the docs commit `6e0287d` (run 36052957676), and `22e31a7` (run
 36054206009) is green. Wave 13 (`06abd74`, run 36084801672) is
 green. Wave 13X (`25b66e0`, run 36102799475) is green (the release job is skipped on every run: no tag).
 
+### Wave 15 — the last engineering gaps named in the parity matrix (uncommitted)
+
+#### Added
+
+- **EPS opens as its PostScript artwork** (W15-E). A bounded PostScript
+  interpreter of this build's own (`raster::codec::formats::postscript`)
+  runs the EPS and draws what it paints through `resvg`, one pixel per
+  point on the `%%HiResBoundingBox` / `%%BoundingBox` page: stacks,
+  dictionaries, procedures and control flow, the graphics state, paths,
+  fills, strokes, dashes and clips, `image` / `colorimage` / `imagemask`
+  through the ASCIIHex, ASCII85, RunLength, Flate, DCT and SubFile filters,
+  Gray / RGB / CMYK / ICCBased / Indexed / Separation colour, and text in a
+  fallback system font (embedded Type 1 outlines are skipped). Bounded by
+  30 M operations, 15 s, a memory budget and stack, nesting and output
+  caps; unknown operators, shading, patterns and `charpath` are named in
+  the status line, and when the PostScript cannot be drawn the TIFF / WMF /
+  EPSI preview opens with the reason. Verified by `raster`
+  `codec::formats::postscript::tests::*` (24 tests: a filled rectangle, a
+  stroked Bezier, gsave / scale / grestore, `image` / `colorimage` /
+  `imagemask` and an ASCII85 + Flate image dictionary, a `def` procedure,
+  a cairo-shaped file, an infinite loop ending on the operation and time
+  budgets, truncated and byte-flipped files, array / dictionary chains
+  300 000 deep, a loop stacking 100 000 filters and a 300 000-deep chain
+  of filters over procedures, on a 1 MiB stack, a self-referencing
+  procedure under `bind`, a colour space naming itself, `search` over a
+  4 MiB string, and every array and dictionary, cycles included, freed
+  when the run ends; arrays, dictionaries and files are freed by an
+  iterative `Drop`, filters stack at most 32 deep, colour spaces nest at
+  most 4, `bind` visits each procedure once and counts every element
+  against the budget, `search` is linear, and a finished run empties
+  everything it made), red with the iterative drop off
+  (`STATUS_STACK_OVERFLOW`), the filter bound off (the same), the file
+  drop off (the same), the colour-space cap off (the same), `bind`'s
+  visited set off or its budget tick off, the quadratic `search` back
+  (116 s) and the teardown off (4 arrays and 9 dictionaries leaked); the
+  time budget is read every 1 024 operations, so one operation's own work
+  is not interrupted; and red with the interpreter
+  disconnected from the EPS route (17 of the 24 tests), with `grestore` not restoring
+  (3) and with the operation budget off (1); a real matplotlib EPS was
+  compared by eye with matplotlib's own Agg render, and a real cairo 1.18
+  EPS with what it was told to draw.
+- **AVIF and HEIC / HEIF open, decoded in a worker process** (W15-A). The
+  AV1 decoder (`rusty_av1d` 1.2.0, BSD-2-Clause, no nasm) and the HEVC one
+  (`heic-rs` 0.1.1, MIT OR Apache-2.0) both panic on some damaged files and
+  the release profile aborts, so neither runs in the editor: `main` first
+  runs the hidden `--decode-worker avif|heic` entry
+  (`app_shell::dialogs::decode_worker::run_if_worker`), then `install`s a
+  decoder that re-executes the editor's own binary for each AVIF / HEIC the
+  codec facade meets, checks the answer's header against `ImportLimits`
+  before reading a pixel, kills a worker still running after 120 s, and
+  reports any unclean exit as "the AVIF decoder crashed on this file; it may
+  be damaged" ("the HEIC decoder ..." for a HEIC) (`raster::codec::formats::heif`). AVIF: single and grid images,
+  alpha, 8-bit and 10/12-bit (16 Bits/Channel); HEIC: what `heic-rs`
+  decodes; both with `irot` / `imir` / `clap`, ICC and `nclx` Display P3.
+  `.avif`, `.heic` and `.heif` are in File > Open's filters. Verified by
+  `raster` `formats::heif::tests::*`, `app-shell`
+  `dialogs::decode_worker::tests::*` and `studio-desktop`
+  `tests/decode_worker.rs`, which drives the real binary as the worker: of
+  1000 bit-flipped copies 42 panicked in the worker and all came back as
+  results; a panicking worker is a crash, a hung one is killed at its
+  deadline, and `Editor::open_any` / File > Open open both formats and
+  survive a file that crashes the decoder; each seen red under a mutation
+  (the installed decoder decoding in the editor's own process; the header
+  check removed; no kill at the deadline; 10-bit AV1 samples read as
+  bytes). Still missing: PQ / HLG and
+  BT.2020 colour (opened as sRGB), premultiplied alpha, `iovl` overlays,
+  an AVIF preview in Export As, and a HEIC with real picture content among
+  the test files (the only HEVC encoder in reach writes flat grey).
+- **MP4 export writes H.264 by default** (W15-B). `ExportFormat::Mp4`
+  now encodes H.264 through `openh264` 0.9.8 (BSD-2-Clause), which compiles
+  Cisco's OpenH264 C++ source with the `cc` crate (no Cisco binary, no
+  download): High profile, a key frame placed by time (every frame starting
+  2 s or more after the last key frame is one, whatever the frame
+  durations), the quality field as a QP band, a rate budget clamped to the
+  H.264 level's maximum bit rate (so 1080p60 and 4K at 25-60 fps open the
+  encoder), an `avc1` / `avcC` track in the existing hand-written muxer, an
+  odd edge padded to even, at most 3840x2160
+  (`raster::codec::formats::mp4::h264`). AV1 stays as the option
+  (`ExportFormat::Mp4Av1`, appended), chosen in the MP4 row's new Codec
+  field in Export As, for stills and animations alike
+  (`raster::animation::encode_animation` routes both). Verified by `raster`
+  `formats::mp4::tests::an_h264_*`, `h264_key_frames_*` (uniform and mixed
+  durations), `h264_encodes_1080p60_and_4k_at_video_frame_rates`,
+  `the_h264_quality_slider_*` (OpenH264's decoder turns the first and last
+  frames back into the source above 30 dB PSNR),
+  `animation::tests::both_mp4_codecs_write_every_frame_with_its_delay`,
+  `app_shell` `timeline::tests::export_as_mp4_writes_the_timelines_frames_at_its_frame_rate`
+  (`avc1` by default, `av01` for the AV1 option) and `ui`
+  `dialogs::export_as::tests::an_mp4_row_chooses_its_codec_by_pointer_and_h264_is_the_default`.
+  Still missing: CABAC and B-frames (the bindings have no switch), H.264
+  past 3840x2160 (OpenH264's limit; AV1 takes it). Built and tested on
+  Windows / MSVC only so far; the Linux and macOS CI builds of the C++
+  source have not been observed yet.
+- **Photopea's exact Dark Grey and White themes** (W15-D). `design::Theme`
+  gains `DarkGrey` and `White`, appended (`design::tokens::photopea_themes::
+  DARK_GREY_ROLES` / `WHITE_ROLES`), so all seven of Photopea's themes
+  (`iV.ml` in `pp.js`) are in Edit ▸ Preferences… ▸ Theme and Window ▸
+  Appearance, in Photopea's order after the app's own Light and Dark, which
+  stay so a saved `light` / `dark` preference draws what it drew. White
+  takes all six of Photopea's mapped numbers (#F7F7F7 panel, #E0E0E0
+  pasteboard, #E0E0E0 / #D6D6D6 buttons, #333333 text, #3482F6 accent, with
+  dark #0B1526 text on the accent); Dark Grey takes #474747 / #252525 /
+  #5D5D5D / #6A6A6A / #D5D5D5 but not the #3482F6 accent, which stands
+  2.51:1 off its panel under the 3:1 gate (#5B9BF0 instead). Saved as
+  `"darkgrey"` / `"white"`; `RASTER_SHOT_THEME=dark-grey` / `white` shots
+  read those panel, pasteboard and button numbers back off the pixels.
+  Verified by `design::tokens::photopea_themes::tests::the_photopea_numbers_are_carried_over_except_the_listed_departures`,
+  `design::theme::tests::every_photopea_theme_is_offered_under_its_photopea_name`,
+  `ui` `dialogs::preferences::tests::the_theme_control_lists_every_photopea_theme_and_a_click_picks_it`
+  and `app-shell` `prefs::tests::dark_grey_and_white_are_saved_by_name_and_light_dark_still_load`,
+  each seen red under a mutation (White's panel set to #F0F0F0; Dark Grey
+  and White taken out of `Theme::ALL`, then out of the dialog's
+  `ThemeChoice::ALL`; the settings mapping sending them to Dark / Light).
+- **Warped text survives a `.psd`** (W15-C). The PSD writer wrote every
+  text layer's warp as `warpNone`; it now writes the layer's warp in the
+  `TySh` warp descriptor (`psd::text::build_styled_warped` /
+  `write_warp`: `warpStyle`, `warpValue`, `warpPerspective`,
+  `warpPerspectiveOther`, `warpRotate`, and for Custom `bounds`,
+  `uOrder` / `vOrder` and `customEnvelopeWarp` / `meshPoints`), and import
+  reads it back onto the layer (`psd::text::warp_spec`, a bounded reader of
+  its own, since the mesh is an `ObAr` the generic descriptor reader does
+  not model). Photoshop's Shell Lower / Upper styles and Vertical
+  orientation import as Arc Lower / Upper, horizontal, and are named in the
+  import report (the layer model has neither). Verified by `psd`
+  `text::warp_tests::*` (all 17 styles and a Custom mesh round-trip equal)
+  and `app-shell` `import::w15c_text_warp_tests::*` (every style and a
+  dragged Custom mesh exported and re-imported with the same outline within
+  1 px), red with the export or the import half taken out.
+
 ### Wave 14 — docs honesty after waves 13 and 13X (uncommitted)
 
 #### Added

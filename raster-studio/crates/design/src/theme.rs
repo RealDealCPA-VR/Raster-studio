@@ -18,16 +18,17 @@ pub struct Tokens {
     pub borders: BorderWidths,
 }
 
-/// The appearance: the app's own Light and Dark plus five of Photopea's
-/// themes (More > Theme).
+/// The appearance: the app's own Light and Dark plus all seven of
+/// Photopea's themes (More > Theme).
 ///
 /// [`Theme::Light`] and [`Theme::Dark`] are the two the app first shipped.
 /// They are modelled on Photopea's White and Dark Grey but are NOT those
 /// palettes: their panel, pasteboard, button, text and accent numbers differ
 /// from Photopea's (listed on [`crate::tokens::palette::LIGHT_ROLES`] and
 /// [`crate::tokens::palette::DARK_ROLES`]). W13X-4 appended Photopea's Light
-/// Grey, Blue, Dark Blue, Purple and Black after them — new variants go at the END, because a theme is persisted by
-/// its [`Theme::key`].
+/// Grey, Blue, Dark Blue, Purple and Black after them, and W15-D Photopea's
+/// exact Dark Grey and White — new variants go at the END, because a theme
+/// is persisted by its [`Theme::key`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
 pub enum Theme {
     Light,
@@ -44,25 +45,33 @@ pub enum Theme {
     Purple,
     /// W13X-4: Photopea's Black.
     Black,
+    /// W15-D: Photopea's Dark Grey (exact; [`Theme::Dark`] is only modelled
+    /// on it).
+    DarkGrey,
+    /// W15-D: Photopea's White (exact; [`Theme::Light`] is only modelled on
+    /// it).
+    White,
 }
 
 impl Theme {
-    /// Every appearance, in menu order: the first two, then the five
-    /// Photopea themes in Photopea's own order.
+    /// Every appearance, in menu order: the first two, then the seven
+    /// Photopea themes in Photopea's own order (`iV.ml` in `pp.js`).
     pub const ALL: &'static [Theme] = &[
         Self::Light,
         Self::Dark,
         Self::LightGrey,
+        Self::DarkGrey,
         Self::Blue,
         Self::DarkBlue,
         Self::Purple,
         Self::Black,
+        Self::White,
     ];
 
-    /// `true` for every theme whose chrome is dark (all but [`Theme::Light`]
-    /// and [`Theme::LightGrey`]).
+    /// `true` for every theme whose chrome is dark (all but [`Theme::Light`],
+    /// [`Theme::LightGrey`] and [`Theme::White`]).
     pub const fn is_dark(self) -> bool {
-        !matches!(self, Self::Light | Self::LightGrey)
+        !matches!(self, Self::Light | Self::LightGrey | Self::White)
     }
 
     /// The other appearance: a dark theme toggles to [`Theme::Light`], a
@@ -85,6 +94,8 @@ impl Theme {
             Self::DarkBlue => "Dark Blue",
             Self::Purple => "Purple",
             Self::Black => "Black",
+            Self::DarkGrey => "Dark Grey",
+            Self::White => "White",
         }
     }
 
@@ -98,6 +109,8 @@ impl Theme {
             Self::DarkBlue => "dark-blue",
             Self::Purple => "purple",
             Self::Black => "black",
+            Self::DarkGrey => "dark-grey",
+            Self::White => "white",
         }
     }
 
@@ -117,12 +130,14 @@ impl Theme {
             Self::DarkBlue => pp::DARK_BLUE_ROLES,
             Self::Purple => pp::PURPLE_ROLES,
             Self::Black => pp::BLACK_ROLES,
+            Self::DarkGrey => pp::DARK_GREY_ROLES,
+            Self::White => pp::WHITE_ROLES,
         }
     }
 
     /// The resolved token bundle, built once per process.
     pub fn tokens(self) -> &'static Tokens {
-        static CELLS: [OnceLock<Tokens>; 7] = [const { OnceLock::new() }; 7];
+        static CELLS: [OnceLock<Tokens>; 9] = [const { OnceLock::new() }; 9];
         let cell = &CELLS[self as usize];
         cell.get_or_init(|| Tokens {
             palette: Palette::from_pairs(self.is_dark(), self.roles()),
@@ -195,8 +210,32 @@ mod tests {
             seen.push(p);
             assert_eq!(Theme::from_key(t.key()), Some(*t));
         }
-        assert_eq!(Theme::ALL.len(), 7, "Photopea ships seven themes");
+        assert_eq!(Theme::ALL.len(), 9, "Light, Dark + Photopea's seven");
         assert_eq!(Theme::from_key("sepia"), None);
+    }
+
+    /// W15-D: every theme Photopea's More > Theme menu offers (`iV.ml` in
+    /// `pp.js`, in that order) is an appearance here under the same name,
+    /// and the app's own Light and Dark still resolve from their saved keys.
+    #[test]
+    fn every_photopea_theme_is_offered_under_its_photopea_name() {
+        const PHOTOPEA_MENU: [&str; 7] = [
+            "Light Grey",
+            "Dark Grey",
+            "Blue",
+            "Dark Blue",
+            "Purple",
+            "Black",
+            "White",
+        ];
+        let offered: Vec<&str> = Theme::ALL.iter().map(|t| t.name()).collect();
+        assert_eq!(&offered[2..], &PHOTOPEA_MENU, "Photopea's menu, in order");
+        assert_eq!(Theme::from_key("dark-grey"), Some(Theme::DarkGrey));
+        assert_eq!(Theme::from_key("white"), Some(Theme::White));
+        assert_eq!(Theme::from_key("light"), Some(Theme::Light));
+        assert_eq!(Theme::from_key("dark"), Some(Theme::Dark));
+        assert!(Theme::DarkGrey.is_dark());
+        assert!(!Theme::White.is_dark());
     }
 
     #[test]

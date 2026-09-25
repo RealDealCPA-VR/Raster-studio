@@ -42,9 +42,10 @@ pub mod keymap_editor;
 pub use keymap_editor::{KeyChange, KeyCommand, Keymap, KeymapError, Shortcut};
 
 /// Which appearance the app uses: the OS's, or one of the app's themes (its
-/// own Light and Dark, and five of Photopea's).
+/// own Light and Dark, and all seven of Photopea's).
 ///
-/// W13X-4: one variant per [`Theme`] after `System`, appended at the end.
+/// W13X-4 / W15-D: one variant per [`Theme`] after `System`, appended at the
+/// end.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum ThemeChoice {
     /// Follow the operating system.
@@ -57,6 +58,10 @@ pub enum ThemeChoice {
     DarkBlue,
     Purple,
     Black,
+    /// W15-D: Photopea's exact Dark Grey.
+    DarkGrey,
+    /// W15-D: Photopea's exact White.
+    White,
 }
 
 impl ThemeChoice {
@@ -66,10 +71,12 @@ impl ThemeChoice {
         Self::Light,
         Self::Dark,
         Self::LightGrey,
+        Self::DarkGrey,
         Self::Blue,
         Self::DarkBlue,
         Self::Purple,
         Self::Black,
+        Self::White,
     ];
 
     /// Menu label: the theme's own name.
@@ -91,6 +98,8 @@ impl ThemeChoice {
             Self::DarkBlue => Some(Theme::DarkBlue),
             Self::Purple => Some(Theme::Purple),
             Self::Black => Some(Theme::Black),
+            Self::DarkGrey => Some(Theme::DarkGrey),
+            Self::White => Some(Theme::White),
         }
     }
 
@@ -104,6 +113,8 @@ impl ThemeChoice {
             Theme::DarkBlue => Self::DarkBlue,
             Theme::Purple => Self::Purple,
             Theme::Black => Self::Black,
+            Theme::DarkGrey => Self::DarkGrey,
+            Theme::White => Self::White,
         }
     }
 
@@ -1159,6 +1170,84 @@ mod tests {
             let _ = dialog.show(ctx);
         });
         assert_eq!(dialog.prefs().interface.units, Unit::Picas);
+    }
+
+    /// W15-D: the Theme control on the Interface page, opened by a click on
+    /// the drawn combo, draws a row for every theme Photopea's More > Theme
+    /// menu offers (`iV.ml` in `pp.js`), and a click on the drawn White row
+    /// and on the drawn Dark Grey row pins each. Read off what egui painted.
+    #[test]
+    fn the_theme_control_lists_every_photopea_theme_and_a_click_picks_it() {
+        use crate::dialogs::chrome::test_support::Harness;
+        const PHOTOPEA_MENU: [&str; 7] = [
+            "Light Grey",
+            "Dark Grey",
+            "Blue",
+            "Dark Blue",
+            "Purple",
+            "Black",
+            "White",
+        ];
+        let draw = |h: &Harness, dialog: &mut PreferencesDialog| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Harness::SCREEN)),
+                ..Default::default()
+            };
+            let output = h.ctx.run(input, |ctx| {
+                let _ = dialog.show(ctx);
+            });
+            output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(t)
+                        if clipped.clip_rect.intersects(t.visual_bounding_rect()) =>
+                    {
+                        Some((
+                            t.galley.text().to_string(),
+                            egui::Rect::from_min_size(t.pos, t.galley.size()),
+                        ))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        for (current, target, expected) in [
+            (ThemeChoice::Light, "White", ThemeChoice::White),
+            (ThemeChoice::Dark, "Dark Grey", ThemeChoice::DarkGrey),
+        ] {
+            let h = Harness::new();
+            let mut prefs = UiPreferences::default();
+            prefs.interface.theme = current;
+            let mut dialog = PreferencesDialog::new(prefs);
+            dialog.set_section(PrefsSection::Interface);
+            let find = |texts: &[(String, egui::Rect)], text: &str| {
+                texts.iter().find(|(t, _)| t == text).map(|(_, r)| *r)
+            };
+            let mut texts = Vec::new();
+            for _ in 0..Harness::STABLE_FRAMES {
+                texts = draw(&h, &mut dialog);
+            }
+            let combo = find(&texts, current.label()).expect("the Theme combo shows the theme");
+            h.frame(Harness::click_events(combo.center()), |ctx| {
+                let _ = dialog.show(ctx);
+            });
+            for _ in 0..Harness::STABLE_FRAMES {
+                texts = draw(&h, &mut dialog);
+            }
+            for name in PHOTOPEA_MENU {
+                assert!(
+                    find(&texts, name).is_some(),
+                    "the open Theme list draws no {name:?} row"
+                );
+            }
+            let row = find(&texts, target).expect("target row drawn");
+            h.frame(Harness::click_events(row.center()), |ctx| {
+                let _ = dialog.show(ctx);
+            });
+            assert_eq!(dialog.prefs().interface.theme, expected);
+            assert_eq!(expected.theme().map(Theme::name), Some(target));
+        }
     }
 
     #[test]

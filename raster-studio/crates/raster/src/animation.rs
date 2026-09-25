@@ -114,7 +114,11 @@ pub fn parse_frame_layer_name(name: &str) -> Option<(&str, u32)> {
 pub fn can_animate(format: ExportFormat) -> bool {
     matches!(
         format,
-        ExportFormat::Gif | ExportFormat::Png | ExportFormat::WebP | ExportFormat::Mp4(_)
+        ExportFormat::Gif
+            | ExportFormat::Png
+            | ExportFormat::WebP
+            | ExportFormat::Mp4(_)
+            | ExportFormat::Mp4Av1(_)
     )
 }
 
@@ -344,16 +348,23 @@ pub fn encode_animation(
     match format {
         ExportFormat::Gif => encode_gif(width, height, frames),
         ExportFormat::Png => encode_apng(width, height, frames),
-        // W13-L: MP4 (AV1), every frame with its own duration.
-        ExportFormat::Mp4(quality) => {
-            let frames: Vec<crate::codec::formats::mp4::Mp4Frame<'_>> = frames
+        // W13-L: MP4, every frame with its own duration; W15-B: H.264 by
+        // default, AV1 when that codec was chosen.
+        ExportFormat::Mp4(quality) | ExportFormat::Mp4Av1(quality) => {
+            use crate::codec::formats::mp4::{encode_with, Mp4Codec, Mp4Frame};
+            let frames: Vec<Mp4Frame<'_>> = frames
                 .iter()
-                .map(|f| crate::codec::formats::mp4::Mp4Frame {
+                .map(|f| Mp4Frame {
                     rgba8: &f.rgba8,
                     duration_ms: f.delay_ms,
                 })
                 .collect();
-            crate::codec::formats::mp4::encode(width, height, &frames, quality)
+            let codec = if matches!(format, ExportFormat::Mp4Av1(_)) {
+                Mp4Codec::Av1
+            } else {
+                Mp4Codec::H264
+            };
+            encode_with(width, height, &frames, quality, codec)
         }
         _ => encode_webp(width, height, frames),
     }
@@ -555,6 +566,32 @@ fn encode_webp(width: u32, height: u32, frames: &[AnimationFrame]) -> Result<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W15-B round 2: both MP4 codecs animate: `Mp4` writes an H.264
+    /// (`avc1`) track and `Mp4Av1` an AV1 (`av01`) track, each with every
+    /// frame and its own delay.
+    #[test]
+    fn both_mp4_codecs_write_every_frame_with_its_delay() {
+        use crate::codec::formats::mp4;
+        let frames: Vec<AnimationFrame> = [(0u8, 100u32), (120, 250), (240, 40)]
+            .iter()
+            .map(|&(v, delay_ms)| AnimationFrame {
+                rgba8: [v, 255 - v, 90, 255].repeat(32 * 32),
+                delay_ms,
+            })
+            .collect();
+        for (format, codec) in [
+            (ExportFormat::Mp4(70), b"avc1"),
+            (ExportFormat::Mp4Av1(70), b"av01"),
+        ] {
+            assert!(can_animate(format), "{format:?}");
+            let bytes = encode_animation(format, 32, 32, &frames).unwrap();
+            let info = mp4::probe(&bytes).unwrap();
+            assert_eq!(&info.codec, codec, "{format:?}");
+            assert_eq!(info.frame_count, 3, "{format:?}");
+            assert_eq!(info.durations, vec![100, 250, 40], "{format:?}");
+        }
+    }
 
     const RED: [u8; 4] = [255, 0, 0, 255];
     const GREEN: [u8; 4] = [0, 255, 0, 255];

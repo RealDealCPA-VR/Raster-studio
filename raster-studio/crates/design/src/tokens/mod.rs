@@ -9,8 +9,8 @@ pub mod color;
 pub mod elevation;
 pub mod motion;
 pub mod palette;
-// W13X-4: five of Photopea's seven themes (Light Grey, Blue, Dark Blue,
-// Purple, Black).
+// W13X-4 / W15-D: Photopea's seven themes (Light Grey, Dark Grey, Blue,
+// Dark Blue, Purple, Black, White).
 pub mod photopea_themes;
 pub mod shape;
 pub mod spacing;

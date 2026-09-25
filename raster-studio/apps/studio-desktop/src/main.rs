@@ -39,6 +39,16 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 fn main() -> Result<()> {
+    // W15-A: `studio-desktop --decode-worker avif|heic` (hidden) is the
+    // decode worker the editor starts for each AVIF / HEIC it opens: it
+    // decodes the file on stdin to stdout and exits, before any console,
+    // logging, crash hook or window exists, so a decoder panic ends only it.
+    if let Some(code) = app_shell::dialogs::decode_worker::run_if_worker() {
+        std::process::exit(code);
+    }
+    // W15-A: every AVIF / HEIC decode in the editor goes to such a worker.
+    app_shell::dialogs::decode_worker::install();
+
     #[cfg(windows)]
     console::attach_to_parent();
 

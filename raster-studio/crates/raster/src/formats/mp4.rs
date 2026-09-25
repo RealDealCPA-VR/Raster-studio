@@ -1,24 +1,30 @@
-//! W13-L: MP4 video export — AV1 in an ISO Base Media File (`.mp4`).
+//! W13-L: MP4 video export — H.264 (W15-B, the default) or AV1 in an ISO
+//! Base Media File (`.mp4`).
 //!
-//! # The encoder
+//! # The encoders
 //!
-//! AV1 through `rav1e` 0.8.1 (BSD-2-Clause, pure Rust), the encoder that was
-//! already in the tree behind `image`'s AVIF writer; it is named here
-//! directly with default features off, so no `asm` (nasm) and no `threading`
-//! (rayon) pool, and no C toolchain is needed. H.264 was not taken:
-//! `openh264` binds Cisco's C library (a C compiler at build time) and the
-//! pure-Rust H.264 encoders on crates.io are early releases this wave did not
-//! evaluate.
+//! W15-B: **H.264** ([`Mp4Codec::H264`], the default, what plays
+//! everywhere) through Cisco's OpenH264 compiled from source ([`h264`]):
+//! High profile, 8-bit 4:2:0, an `avc1` sample entry with an `avcC` box.
+//! H.264 4:2:0 needs an even frame size, so an odd edge is padded by
+//! repeating its last pixel column / row, and the file's size is that even
+//! size. OpenH264 encodes at most 3840 x 2160; past that, AV1.
+//!
+//! **AV1** ([`Mp4Codec::Av1`], the option) through `rav1e` 0.8.1
+//! (BSD-2-Clause, pure Rust), the encoder that was already in the tree behind
+//! `image`'s AVIF writer; it is named here directly with default features
+//! off, so no `asm` (nasm) and no `threading` (rayon) pool.
 //!
 //! Frames are 8-bit 4:2:0, BT.709 limited range (tagged in the bitstream and
 //! in a `colr` box), with transparency flattened onto white: a video has no
-//! alpha. rav1e needs at least 16 x 16 pixels; a smaller frame is refused.
+//! alpha. Both need at least 16 x 16 pixels; a smaller frame is refused.
 //!
 //! # The container
 //!
 //! Written here box by box (no muxer crate): `ftyp`, then `moov` (one video
 //! track: `tkhd`, `mdhd`, `hdlr`, `vmhd`, `dref`, and a sample table whose
-//! `stsd` holds an `av01` entry with the encoder's own `av1C`), then one
+//! `stsd` holds an `avc1` entry with its `avcC`, or an `av01` entry with the
+//! encoder's own `av1C`), then one
 //! `mdat` chunk. `moov` comes first, so a player can start before the whole
 //! file arrives. Each frame is one sample with its own duration (`stts`, in
 //! milliseconds), so an animation's per-frame delays survive exactly; the key
@@ -33,8 +39,23 @@ use rav1e::prelude::*;
 
 use crate::codec::CodecError;
 
+// W15-B: the H.264 encoder, a sibling file (`formats/h264.rs`) declared here
+// so the MP4 module owns it.
+#[path = "h264.rs"]
+pub mod h264;
+
 /// The smallest frame edge rav1e encodes (it refuses anything below 16).
 pub const MIN_EDGE: u32 = 16;
+
+/// W15-B: the video codec inside an exported MP4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Mp4Codec {
+    /// H.264 (OpenH264, High profile): the default, plays everywhere.
+    #[default]
+    H264,
+    /// AV1 (rav1e): smaller files, newer players only.
+    Av1,
+}
 
 /// The movie timescale: durations are written in milliseconds.
 pub const TIMESCALE: u32 = 1000;
@@ -65,7 +86,8 @@ pub struct Mp4Info {
     /// The sample entry's coded size (`stsd`).
     pub coded_width: u32,
     pub coded_height: u32,
-    /// The sample entry's codec (`av01` for what this module writes).
+    /// The sample entry's codec (`avc1` or `av01` for what this module
+    /// writes).
     pub codec: [u8; 4],
     /// Samples (frames) in the track, from `stsz`.
     pub frame_count: u32,
@@ -77,6 +99,8 @@ pub struct Mp4Info {
     pub sync_samples: Vec<u32>,
     /// Whether the sample entry carries an `av1C` configuration box.
     pub has_av1c: bool,
+    /// W15-B: whether the sample entry carries an `avcC` configuration box.
+    pub has_avcc: bool,
 }
 
 /// `quality` (1..=100, like JPEG / AVIF) as rav1e's quantizer (255..=0).
@@ -85,12 +109,25 @@ fn quantizer(quality: u8) -> usize {
     ((100 - q) * 255 / 99) as usize
 }
 
-/// Encode `frames` (each `width * height * 4` bytes) as an MP4 of AV1.
+/// Encode `frames` (each `width * height * 4` bytes) as an MP4 in the
+/// default codec (W15-B: H.264).
 pub fn encode(
     width: u32,
     height: u32,
     frames: &[Mp4Frame<'_>],
     quality: u8,
+) -> Result<Vec<u8>, CodecError> {
+    encode_with(width, height, frames, quality, Mp4Codec::default())
+}
+
+/// W15-B: encode `frames` (each `width * height * 4` bytes) as an MP4 in
+/// `codec`.
+pub fn encode_with(
+    width: u32,
+    height: u32,
+    frames: &[Mp4Frame<'_>],
+    quality: u8,
+    codec: Mp4Codec,
 ) -> Result<Vec<u8>, CodecError> {
     if !(1..=100).contains(&quality) {
         return Err(CodecError::InvalidParameter(format!(
@@ -119,6 +156,91 @@ pub fn encode(
         }
     }
 
+    let durations: Vec<u32> = frames.iter().map(|f| f.duration_ms.max(1)).collect();
+    match codec {
+        Mp4Codec::H264 => encode_h264(width, height, frames, &durations, quality),
+        Mp4Codec::Av1 => encode_av1(width, height, frames, &durations, quality),
+    }
+}
+
+/// W15-B: H.264 through OpenH264, an odd edge padded to even.
+fn encode_h264(
+    width: u32,
+    height: u32,
+    frames: &[Mp4Frame<'_>],
+    durations: &[u32],
+    quality: u8,
+) -> Result<Vec<u8>, CodecError> {
+    let (pw, ph) = (width.next_multiple_of(2), height.next_multiple_of(2));
+    if !h264::fits(pw, ph) {
+        return Err(CodecError::InvalidParameter(format!(
+            "H.264 MP4 export encodes at most {}x{} (or {}x{}) pixels, not {width}x{height}; \
+             choose the AV1 codec for a larger video",
+            h264::MAX_LONG_EDGE,
+            h264::MAX_SHORT_EDGE,
+            h264::MAX_SHORT_EDGE,
+            h264::MAX_LONG_EDGE
+        )));
+    }
+    let planes: Vec<[Vec<u8>; 3]> = frames
+        .iter()
+        .map(|f| {
+            let padded = pad_even(f.rgba8, width as usize, height as usize);
+            rgba_to_yuv420(&padded, pw as usize, ph as usize)
+        })
+        .collect();
+    let refs: Vec<h264::Planes<'_>> = planes
+        .iter()
+        .map(|[y, u, v]| h264::Planes { y, u, v })
+        .collect();
+    let stream = h264::encode(pw, ph, &refs, durations, quality)?;
+    let entry = visual_sample_entry(
+        pw,
+        ph,
+        b"AVC Coding",
+        &bx(b"avcC", &h264::avcc(&stream.sps, &stream.pps)?)?,
+    )?;
+    let samples: Vec<(Vec<u8>, bool)> = stream
+        .samples
+        .into_iter()
+        .map(|s| (s.data, s.key))
+        .collect();
+    mux(
+        pw,
+        ph,
+        &bx(b"avc1", &entry)?,
+        b"isomiso2avc1mp41",
+        &samples,
+        durations,
+    )
+}
+
+/// W15-B: `rgba` (`width x height`) with its last column / row repeated
+/// until both edges are even.
+fn pad_even(rgba: &[u8], width: usize, height: usize) -> std::borrow::Cow<'_, [u8]> {
+    let (pw, ph) = (width.next_multiple_of(2), height.next_multiple_of(2));
+    if (pw, ph) == (width, height) {
+        return std::borrow::Cow::Borrowed(rgba);
+    }
+    let mut out = Vec::with_capacity(pw * ph * 4);
+    for row in 0..ph {
+        let src = &rgba[row.min(height - 1) * width * 4..][..width * 4];
+        out.extend_from_slice(src);
+        if pw > width {
+            out.extend_from_slice(&src[(width - 1) * 4..]);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// AV1 through rav1e.
+fn encode_av1(
+    width: u32,
+    height: u32,
+    frames: &[Mp4Frame<'_>],
+    durations: &[u32],
+    quality: u8,
+) -> Result<Vec<u8>, CodecError> {
     let q = quantizer(quality);
     let enc = EncoderConfig {
         width: width as usize,
@@ -169,8 +291,15 @@ pub fn encode(
         )));
     }
     let av1c = ctx.container_sequence_header();
-    let durations: Vec<u32> = frames.iter().map(|f| f.duration_ms.max(1)).collect();
-    mux(width, height, &av1c, &samples, &durations)
+    let entry = visual_sample_entry(width, height, b"AV1 Coding", &bx(b"av1C", &av1c)?)?;
+    mux(
+        width,
+        height,
+        &bx(b"av01", &entry)?,
+        b"isomiso2av01mp41",
+        &samples,
+        durations,
+    )
 }
 
 fn encoder_error(e: EncoderStatus) -> CodecError {
@@ -203,6 +332,16 @@ fn strip_temporal_delimiter(mut data: Vec<u8>) -> Vec<u8> {
 
 /// RGBA over white, to BT.709 limited-range Y'CbCr, chroma averaged 2x2.
 fn fill_yuv420(frame: &mut Frame<u8>, width: usize, height: usize, rgba: &[u8]) {
+    let cw = width.div_ceil(2);
+    let [y, cb, cr] = rgba_to_yuv420(rgba, width, height);
+    frame.planes[0].copy_from_raw_u8(&y, width, 1);
+    frame.planes[1].copy_from_raw_u8(&cb, cw, 1);
+    frame.planes[2].copy_from_raw_u8(&cr, cw, 1);
+}
+
+/// W15-B: RGBA over white as BT.709 limited-range 4:2:0 planes `[Y, Cb, Cr]`
+/// (chroma averaged 2x2, `ceil(w/2) x ceil(h/2)`), shared by both encoders.
+fn rgba_to_yuv420(rgba: &[u8], width: usize, height: usize) -> [Vec<u8>; 3] {
     let (cw, ch) = (width.div_ceil(2), height.div_ceil(2));
     let mut y = vec![0u8; width * height];
     let mut cb = vec![0f32; cw * ch];
@@ -228,9 +367,8 @@ fn fill_yuv420(frame: &mut Frame<u8>, width: usize, height: usize, rgba: &[u8]) 
             .map(|(s, k)| (128.0 + 224.0 * s / k.max(1.0)).round().clamp(0.0, 255.0) as u8)
             .collect()
     };
-    frame.planes[0].copy_from_raw_u8(&y, width, 1);
-    frame.planes[1].copy_from_raw_u8(&chroma(&cb), cw, 1);
-    frame.planes[2].copy_from_raw_u8(&chroma(&cr), cw, 1);
+    let (cb, cr) = (chroma(&cb), chroma(&cr));
+    [y, cb, cr]
 }
 
 // ---------------------------------------------------------------- the muxer
@@ -263,10 +401,45 @@ fn be32(v: &[u32]) -> Vec<u8> {
     v.iter().flat_map(|x| x.to_be_bytes()).collect()
 }
 
+/// The body of a visual sample entry (`av01` / `avc1`): the fixed fields,
+/// the codec's configuration box `config`, then a BT.709 limited-range
+/// `colr`.
+fn visual_sample_entry(
+    width: u32,
+    height: u32,
+    label: &[u8],
+    config: &[u8],
+) -> Result<Vec<u8>, CodecError> {
+    let mut entry = Vec::new();
+    entry.extend_from_slice(&[0; 6]);
+    entry.extend_from_slice(&1u16.to_be_bytes()); // data_reference_index
+    entry.extend_from_slice(&[0; 16]); // pre_defined, reserved
+    entry.extend_from_slice(&(width as u16).to_be_bytes());
+    entry.extend_from_slice(&(height as u16).to_be_bytes());
+    entry.extend_from_slice(&be32(&[0x0048_0000, 0x0048_0000, 0]));
+    entry.extend_from_slice(&1u16.to_be_bytes()); // frame_count
+    let mut name = [0u8; 32];
+    name[0] = label.len() as u8;
+    name[1..=label.len()].copy_from_slice(label);
+    entry.extend_from_slice(&name);
+    entry.extend_from_slice(&0x0018u16.to_be_bytes());
+    entry.extend_from_slice(&(-1i16).to_be_bytes());
+    entry.extend_from_slice(config);
+    // colr nclx: BT.709 primaries / transfer / matrix, limited range.
+    entry.extend_from_slice(&bx(
+        b"colr",
+        &cat(&[b"nclx".to_vec(), vec![0, 1, 0, 1, 0, 1, 0]]),
+    )?);
+    Ok(entry)
+}
+
+/// `sample_entry` is the whole `stsd` entry box; `brands` the `ftyp`
+/// compatible brands.
 fn mux(
     width: u32,
     height: u32,
-    av1c: &[u8],
+    sample_entry: &[u8],
+    brands: &[u8],
     samples: &[(Vec<u8>, bool)],
     durations: &[u32],
 ) -> Result<Vec<u8>, CodecError> {
@@ -275,11 +448,7 @@ fn mux(
         .map_err(|_| CodecError::LimitExceeded("the video is too long".into()))?;
     let ftyp = bx(
         b"ftyp",
-        &cat(&[
-            b"isom".to_vec(),
-            be32(&[0x200]),
-            b"isomiso2av01mp41".to_vec(),
-        ]),
+        &cat(&[b"isom".to_vec(), be32(&[0x200]), brands.to_vec()]),
     )?;
     let data_len: usize = samples.iter().map(|s| s.0.len()).sum();
 
@@ -327,28 +496,7 @@ fn mux(
         let dref = full(b"dref", 0, &cat(&[be32(&[1]), full(b"url ", 1, &[])?]))?;
         let dinf = bx(b"dinf", &dref)?;
 
-        let mut entry = Vec::new();
-        entry.extend_from_slice(&[0; 6]);
-        entry.extend_from_slice(&1u16.to_be_bytes()); // data_reference_index
-        entry.extend_from_slice(&[0; 16]); // pre_defined, reserved
-        entry.extend_from_slice(&(width as u16).to_be_bytes());
-        entry.extend_from_slice(&(height as u16).to_be_bytes());
-        entry.extend_from_slice(&be32(&[0x0048_0000, 0x0048_0000, 0]));
-        entry.extend_from_slice(&1u16.to_be_bytes()); // frame_count
-        let mut name = [0u8; 32];
-        let label = b"AV1 Coding";
-        name[0] = label.len() as u8;
-        name[1..=label.len()].copy_from_slice(label);
-        entry.extend_from_slice(&name);
-        entry.extend_from_slice(&0x0018u16.to_be_bytes());
-        entry.extend_from_slice(&(-1i16).to_be_bytes());
-        entry.extend_from_slice(&bx(b"av1C", av1c)?);
-        // colr nclx: BT.709 primaries / transfer / matrix, limited range.
-        entry.extend_from_slice(&bx(
-            b"colr",
-            &cat(&[b"nclx".to_vec(), vec![0, 1, 0, 1, 0, 1, 0]]),
-        )?);
-        let stsd = full(b"stsd", 0, &cat(&[be32(&[1]), bx(b"av01", &entry)?]))?;
+        let stsd = full(b"stsd", 0, &cat(&[be32(&[1]), sample_entry.to_vec()]))?;
 
         let mut runs: Vec<(u32, u32)> = Vec::new();
         for d in durations {
@@ -499,10 +647,14 @@ pub fn probe(bytes: &[u8]) -> Result<Mp4Info, CodecError> {
     let (codec, entry) = *entries.first().ok_or_else(|| malformed("stsd is empty"))?;
     let coded_width = u32::from(u16_at(entry, 24)?);
     let coded_height = u32::from(u16_at(entry, 26)?);
-    let has_av1c = entry
-        .get(78..)
-        .map(|rest| boxes(rest).is_ok_and(|b| b.iter().any(|(k, _)| k == b"av1C")))
-        .unwrap_or(false);
+    let has_config = |kind: &[u8; 4]| {
+        entry
+            .get(78..)
+            .map(|rest| boxes(rest).is_ok_and(|b| b.iter().any(|(k, _)| k == kind)))
+            .unwrap_or(false)
+    };
+    let has_av1c = has_config(b"av1C");
+    let has_avcc = has_config(b"avcC");
 
     let stsz = child(stbl, b"stsz")?;
     let uniform = u32_at(stsz, 4)?;
@@ -599,6 +751,7 @@ pub fn probe(bytes: &[u8]) -> Result<Mp4Info, CodecError> {
         timescale,
         sync_samples,
         has_av1c,
+        has_avcc,
     })
 }
 
@@ -688,7 +841,8 @@ mod tests {
                 duration_ms: d,
             })
             .collect();
-        let bytes = encode(w, h, &input, 70).unwrap();
+        // W15-B: AV1 is the option now; `encode` writes H.264.
+        let bytes = encode_with(w, h, &input, 70, Mp4Codec::Av1).unwrap();
         assert_eq!(&bytes[4..8], b"ftyp");
         assert!(!looks_like_video(&[]));
         assert!(
@@ -818,6 +972,404 @@ mod tests {
         padded.extend_from_slice(b"free");
         padded.resize(padded.len() + pad, 0);
         assert_eq!(probe(&padded).unwrap().frame_count, 2);
+    }
+
+    // ------------------------------------------------------ W15-B: H.264
+
+    /// `n` frames of `w` x `h` with texture (a diagonal gradient, a moving
+    /// square, a half-transparent band), so a PSNR means something.
+    fn textured(w: u32, h: u32, n: usize) -> Vec<Vec<u8>> {
+        (0..n)
+            .map(|i| {
+                let mut px = Vec::with_capacity((w * h * 4) as usize);
+                for y in 0..h {
+                    for x in 0..w {
+                        let inside = (x as usize + 40 - (i * 3) % 40) % 40 < 14 && y > h / 3;
+                        let r = ((x * 255) / w.max(1)) as u8;
+                        let g = ((y * 255) / h.max(1)) as u8;
+                        let b = if inside { 30 } else { 200 - (i * 10) as u8 };
+                        let a = if y < h / 8 { 128 } else { 255 };
+                        px.extend_from_slice(&[r, g, b, a]);
+                    }
+                }
+                px
+            })
+            .collect()
+    }
+
+    fn mp4_frames<'a>(px: &'a [Vec<u8>], durations: &[u32]) -> Vec<Mp4Frame<'a>> {
+        px.iter()
+            .zip(durations)
+            .map(|(p, d)| Mp4Frame {
+                rgba8: p,
+                duration_ms: *d,
+            })
+            .collect()
+    }
+
+    /// What the box walk finds in an `avc1` track: the `avcC` payload and
+    /// every sample's bytes, located through `stsz` / `stsc` / `stco`.
+    struct Avc {
+        ftyp_brands: Vec<[u8; 4]>,
+        avcc: Vec<u8>,
+        entry_size: (u16, u16),
+        samples: Vec<Vec<u8>>,
+    }
+
+    fn walk_avc1(bytes: &[u8]) -> Avc {
+        let top = boxes(bytes).unwrap();
+        let kinds: Vec<[u8; 4]> = top.iter().map(|b| b.0).collect();
+        assert_eq!(kinds, vec![*b"ftyp", *b"moov", *b"mdat"]);
+        let ftyp = top[0].1;
+        let ftyp_brands = ftyp[8..]
+            .chunks(4)
+            .map(|c| [c[0], c[1], c[2], c[3]])
+            .collect();
+        let trak = child(top[1].1, b"trak").unwrap();
+        let stbl = child(
+            child(child(trak, b"mdia").unwrap(), b"minf").unwrap(),
+            b"stbl",
+        )
+        .unwrap();
+        let stsd = child(stbl, b"stsd").unwrap();
+        let entries = boxes(&stsd[8..]).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(&entries[0].0, b"avc1", "the sample entry is avc1");
+        let entry = entries[0].1;
+        let entry_size = (u16_at(entry, 24).unwrap(), u16_at(entry, 26).unwrap());
+        let avcc = child(&entry[78..], b"avcC").unwrap().to_vec();
+        let stsz = child(stbl, b"stsz").unwrap();
+        let count = u32_at(stsz, 8).unwrap() as usize;
+        let sizes: Vec<usize> = (0..count)
+            .map(|i| u32_at(stsz, 12 + i * 4).unwrap() as usize)
+            .collect();
+        let stco = child(stbl, b"stco").unwrap();
+        assert_eq!(u32_at(stco, 4).unwrap(), 1, "one chunk");
+        let mut at = u32_at(stco, 8).unwrap() as usize;
+        let samples = sizes
+            .iter()
+            .map(|n| {
+                let s = bytes[at..at + n].to_vec();
+                at += n;
+                s
+            })
+            .collect();
+        Avc {
+            ftyp_brands,
+            avcc,
+            entry_size,
+            samples,
+        }
+    }
+
+    /// The SPS and PPS inside an `avcC`, checking its fixed fields.
+    fn avcc_parameter_sets(avcc: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        assert_eq!(avcc[0], 1, "configurationVersion");
+        assert_eq!(avcc[4] & 0x03, 3, "4-byte NAL lengths");
+        assert_eq!(avcc[5] & 0x1F, 1, "one SPS");
+        let sps_len = u16::from_be_bytes([avcc[6], avcc[7]]) as usize;
+        let sps = avcc[8..8 + sps_len].to_vec();
+        assert_eq!(sps[0] & 0x1F, 7, "an SPS NAL");
+        assert_eq!(
+            (avcc[1], avcc[2], avcc[3]),
+            (sps[1], sps[2], sps[3]),
+            "profile / compatibility / level copied from the SPS"
+        );
+        let at = 8 + sps_len;
+        assert_eq!(avcc[at], 1, "one PPS");
+        let pps_len = u16::from_be_bytes([avcc[at + 1], avcc[at + 2]]) as usize;
+        let pps = avcc[at + 3..at + 3 + pps_len].to_vec();
+        assert_eq!(pps[0] & 0x1F, 8, "a PPS NAL");
+        (sps, pps)
+    }
+
+    /// A length-prefixed sample's NAL units.
+    fn sample_nals(sample: &[u8]) -> Vec<&[u8]> {
+        let mut out = Vec::new();
+        let mut at = 0;
+        while at < sample.len() {
+            let n = u32::from_be_bytes(sample[at..at + 4].try_into().unwrap()) as usize;
+            out.push(&sample[at + 4..at + 4 + n]);
+            at += 4 + n;
+        }
+        assert_eq!(at, sample.len(), "the lengths tile the sample exactly");
+        out
+    }
+
+    /// Decode samples `0..=upto` with OpenH264's own decoder, from the
+    /// `avcC` parameter sets; the last picture as `(w, h, [Y, U, V])`.
+    fn decode_upto(avc: &Avc, upto: usize) -> (usize, usize, [Vec<u8>; 3]) {
+        use openh264::formats::YUVSource;
+        let (sps, pps) = avcc_parameter_sets(&avc.avcc);
+        let mut annex_b = Vec::new();
+        for nal in [&sps[..], &pps[..]] {
+            annex_b.extend_from_slice(&[0, 0, 0, 1]);
+            annex_b.extend_from_slice(nal);
+        }
+        let mut decoder = openh264::decoder::Decoder::new().unwrap();
+        let mut last = None;
+        for sample in &avc.samples[..=upto] {
+            for nal in sample_nals(sample) {
+                annex_b.extend_from_slice(&[0, 0, 0, 1]);
+                annex_b.extend_from_slice(nal);
+            }
+            if let Some(yuv) = decoder.decode(&annex_b).unwrap() {
+                let (w, h) = yuv.dimensions();
+                let (sy, su, sv) = yuv.strides();
+                let plane = |data: &[u8], stride: usize, pw: usize, ph: usize| -> Vec<u8> {
+                    (0..ph)
+                        .flat_map(|r| data[r * stride..r * stride + pw].iter().copied())
+                        .collect()
+                };
+                last = Some((
+                    w,
+                    h,
+                    [
+                        plane(yuv.y(), sy, w, h),
+                        plane(yuv.u(), su, w / 2, h / 2),
+                        plane(yuv.v(), sv, w / 2, h / 2),
+                    ],
+                ));
+            }
+            annex_b.clear();
+        }
+        last.expect("the decoder returned a picture")
+    }
+
+    fn psnr(a: &[u8], b: &[u8]) -> f64 {
+        assert_eq!(a.len(), b.len());
+        let mse: f64 = a
+            .iter()
+            .zip(b)
+            .map(|(x, y)| (f64::from(*x) - f64::from(*y)).powi(2))
+            .sum::<f64>()
+            / a.len() as f64;
+        if mse == 0.0 {
+            return f64::INFINITY;
+        }
+        10.0 * (255.0f64 * 255.0 / mse).log10()
+    }
+
+    /// PSNR of the decoded planes against the source's own 4:2:0 planes,
+    /// all three together.
+    fn yuv_psnr(decoded: &[Vec<u8>; 3], source: &[Vec<u8>; 3]) -> f64 {
+        let a: Vec<u8> = decoded.concat();
+        let b: Vec<u8> = source.concat();
+        psnr(&a, &b)
+    }
+
+    /// W15-B: `encode` now writes H.264: an `avc1` track whose `avcC` holds
+    /// the High-profile SPS / PPS, one length-prefixed sample per frame with
+    /// the per-frame durations, and a first frame that OpenH264's decoder
+    /// turns back into the source within 30 dB PSNR.
+    #[test]
+    fn an_h264_mp4_parses_back_and_its_first_frame_decodes_close_to_the_source() {
+        let (w, h) = (64, 48);
+        let px = textured(w, h, 5);
+        let delays = [100, 250, 100, 40, 500];
+        let bytes = encode(w, h, &mp4_frames(&px, &delays), 80).unwrap();
+        assert_eq!(Mp4Codec::default(), Mp4Codec::H264, "H.264 is the default");
+        assert!(looks_like_video(&bytes[..12]));
+
+        let info = probe(&bytes).unwrap();
+        assert_eq!(&info.codec, b"avc1");
+        assert!(info.has_avcc && !info.has_av1c);
+        assert_eq!((info.width, info.height), (w, h));
+        assert_eq!((info.coded_width, info.coded_height), (w, h));
+        assert_eq!(info.frame_count, 5);
+        assert_eq!(info.durations, delays.to_vec());
+        assert_eq!(info.timescale, TIMESCALE);
+        assert_eq!(info.sync_samples.first(), Some(&1));
+
+        let avc = walk_avc1(&bytes);
+        assert!(avc.ftyp_brands.contains(b"avc1"), "{:?}", avc.ftyp_brands);
+        assert!(!avc.ftyp_brands.contains(b"av01"));
+        assert_eq!(avc.entry_size, (w as u16, h as u16));
+        assert_eq!(avc.samples.len(), 5);
+        let (sps, _) = avcc_parameter_sets(&avc.avcc);
+        assert_eq!(sps[1], 100, "High profile (profile_idc 100)");
+        // The High-profile tail: 4:2:0, 8-bit.
+        assert_eq!(&avc.avcc[avc.avcc.len() - 4..], &[0xFD, 0xF8, 0xF8, 0]);
+        for (i, s) in avc.samples.iter().enumerate() {
+            for nal in sample_nals(s) {
+                let kind = nal[0] & 0x1F;
+                assert!(
+                    !matches!(kind, 7 | 8),
+                    "sample {i} carries a parameter set in-band"
+                );
+            }
+        }
+        assert!(
+            sample_nals(&avc.samples[0])
+                .iter()
+                .any(|n| n[0] & 0x1F == 5),
+            "the first sample is an IDR picture"
+        );
+
+        let (dw, dh, first) = decode_upto(&avc, 0);
+        assert_eq!((dw, dh), (w as usize, h as usize));
+        let source = rgba_to_yuv420(&px[0], w as usize, h as usize);
+        let p = yuv_psnr(&first, &source);
+        assert!(p > 30.0, "first frame PSNR {p:.2} dB");
+        // And the last frame (a P frame chain) decodes as well.
+        let (_, _, last) = decode_upto(&avc, 4);
+        let p = yuv_psnr(&last, &rgba_to_yuv420(&px[4], w as usize, h as usize));
+        assert!(p > 30.0, "last frame PSNR {p:.2} dB");
+    }
+
+    /// W15-B: an odd edge is padded to even by repeating the last column /
+    /// row; the picture inside is the source's.
+    #[test]
+    fn an_odd_sized_h264_mp4_is_padded_to_even() {
+        let (w, h) = (49, 35);
+        let px = textured(w, h, 2);
+        let bytes = encode(w, h, &mp4_frames(&px, &[100, 100]), 85).unwrap();
+        let info = probe(&bytes).unwrap();
+        assert_eq!((info.width, info.height), (50, 36));
+        assert_eq!((info.coded_width, info.coded_height), (50, 36));
+        let avc = walk_avc1(&bytes);
+        let (dw, dh, first) = decode_upto(&avc, 0);
+        assert_eq!((dw, dh), (50, 36));
+        let padded = pad_even(&px[0], w as usize, h as usize);
+        let source = rgba_to_yuv420(&padded, 50, 36);
+        let p = yuv_psnr(&first, &source);
+        assert!(p > 30.0, "PSNR {p:.2} dB");
+        // The padding repeats the edge: the extra column is the last one.
+        let row = |r: usize| &padded[r * 50 * 4..(r + 1) * 50 * 4];
+        assert_eq!(&row(3)[49 * 4..], &row(3)[48 * 4..49 * 4]);
+        assert_eq!(row(35), row(34));
+    }
+
+    /// The 1-based samples of `bytes` that hold an IDR picture, checked
+    /// against `stss` (which must list exactly those), and the IDR rule by
+    /// time: no frame starts [`h264::KEY_INTERVAL_SECONDS`] or more after
+    /// the last IDR without being one itself.
+    fn assert_key_frames_by_time(bytes: &[u8], durations: &[u32]) -> Vec<u32> {
+        let info = probe(bytes).unwrap();
+        let avc = walk_avc1(bytes);
+        let idr: Vec<u32> = avc
+            .samples
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| sample_nals(s).iter().any(|n| n[0] & 0x1F == 5))
+            .map(|(i, _)| i as u32 + 1)
+            .collect();
+        assert_eq!(info.sync_samples, idr, "stss names exactly the IDRs");
+        assert_eq!(idr.first(), Some(&1));
+        let limit = u64::from(h264::KEY_INTERVAL_SECONDS) * 1000;
+        let (mut at, mut last_key) = (0u64, 0u64);
+        for (i, d) in durations.iter().enumerate() {
+            if idr.contains(&(i as u32 + 1)) {
+                last_key = at;
+            } else {
+                assert!(
+                    at - last_key < limit,
+                    "frame {} starts {} ms after the last key frame: {idr:?}",
+                    i + 1,
+                    at - last_key
+                );
+            }
+            at += u64::from(*d);
+        }
+        idr
+    }
+
+    /// W15-B: a key frame at least every KEY_INTERVAL_SECONDS of video: at
+    /// 2 fps that is every 4 frames, and `stss` lists exactly the samples
+    /// holding an IDR.
+    #[test]
+    fn h264_key_frames_recur_and_stss_names_exactly_the_idr_samples() {
+        let (w, h) = (32, 32);
+        let px = textured(w, h, 9);
+        let bytes = encode(w, h, &mp4_frames(&px, &[500; 9]), 60).unwrap();
+        let idr = assert_key_frames_by_time(&bytes, &[500; 9]);
+        assert_eq!(idr, vec![1, 5, 9]);
+    }
+
+    /// W15-B round 2: key frames are placed by time, not by a frame count at
+    /// the shortest frame's rate: one 40 ms frame then ten 500 ms frames
+    /// (5.04 s) still gets a key frame every 2 s (it had only the first).
+    #[test]
+    fn h264_key_frames_follow_time_with_mixed_durations() {
+        let (w, h) = (32, 32);
+        let mut delays = vec![40];
+        delays.extend([500; 10]);
+        let px = textured(w, h, delays.len());
+        let bytes = encode(w, h, &mp4_frames(&px, &delays), 80).unwrap();
+        let idr = assert_key_frames_by_time(&bytes, &delays);
+        // Starts: 0, 40, 540, 1040, 1540, 2040 (key), .., 4040 (key), 4540.
+        assert_eq!(idr, vec![1, 6, 10]);
+    }
+
+    /// W15-B round 2: the rate-control budget is clamped to the level's
+    /// maximum bit rate, so the sizes and rates the timeline reaches open
+    /// the encoder: 1080p at 60 fps (16 ms frames) and 4K at 30 fps and
+    /// 60 fps, at the default quality 80 and at 100 (and 4K at 10 ms, an
+    /// animated GIF's delay, past level 5.2's rate). Without the clamp
+    /// OpenH264 refuses to open for 1080p60 and 4K video ("MaxSpatialBitrate
+    /// .. should be larger than SpatialBitrate").
+    #[test]
+    fn h264_encodes_1080p60_and_4k_at_video_frame_rates() {
+        for (w, h, ms, q) in [
+            (1920, 1080, 16, 80),
+            (1920, 1080, 16, 100),
+            (3840, 2160, 33, 80),
+            (3840, 2160, 40, 50),
+            (3840, 2160, 16, 100),
+            (2160, 3840, 33, 80),
+            (3840, 2160, 10, 80),
+        ] {
+            let px = textured(w, h, 2);
+            let bytes = encode(w, h, &mp4_frames(&px, &[ms, ms]), q)
+                .unwrap_or_else(|e| panic!("{w}x{h} at {ms} ms, quality {q}: {e}"));
+            let info = probe(&bytes).unwrap();
+            assert_eq!(&info.codec, b"avc1");
+            assert_eq!((info.width, info.height), (w, h));
+            assert_eq!(info.frame_count, 2);
+            assert_eq!(info.durations, vec![ms, ms]);
+        }
+        // And the 1080p60 file's first frame decodes close to the source.
+        let (w, h) = (1920, 1080);
+        let px = textured(w, h, 1);
+        let bytes = encode(w, h, &mp4_frames(&px, &[16]), 80).unwrap();
+        let (dw, dh, first) = decode_upto(&walk_avc1(&bytes), 0);
+        assert_eq!((dw, dh), (1920, 1080));
+        let p = yuv_psnr(&first, &rgba_to_yuv420(&px[0], 1920, 1080));
+        assert!(p > 30.0, "1080p PSNR {p:.2} dB");
+    }
+
+    /// W15-B: the Export As quality slider reaches the H.264 quantizer: a
+    /// higher quality is a larger file and a closer picture.
+    #[test]
+    fn the_h264_quality_slider_trades_size_for_fidelity() {
+        let (w, h) = (64, 64);
+        let px = textured(w, h, 1);
+        let source = rgba_to_yuv420(&px[0], 64, 64);
+        let run = |q: u8| {
+            let bytes = encode(w, h, &mp4_frames(&px, &[1000]), q).unwrap();
+            let (_, _, first) = decode_upto(&walk_avc1(&bytes), 0);
+            (bytes.len(), yuv_psnr(&first, &source))
+        };
+        let (low_len, low_psnr) = run(10);
+        let (high_len, high_psnr) = run(95);
+        assert!(high_len > low_len, "{high_len} vs {low_len}");
+        assert!(
+            high_psnr > low_psnr + 3.0,
+            "{high_psnr:.2} vs {low_psnr:.2}"
+        );
+    }
+
+    /// W15-B: past OpenH264's limit the H.264 route refuses by name and
+    /// points at AV1; the size gate is checked before any pixels are read.
+    #[test]
+    fn an_oversized_h264_export_names_the_av1_codec() {
+        let px = vec![0u8; 16 * 4000 * 4];
+        let frame = [Mp4Frame {
+            rgba8: &px,
+            duration_ms: 100,
+        }];
+        let err = encode(16, 4000, &frame, 50).unwrap_err().to_string();
+        assert!(err.contains("AV1"), "{err}");
     }
 
     #[test]

@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# W15-E: PostScript `search` finds a substring in place in constant extra
+# space (MIT OR Unlicense; already in the graph through `regex`/`image`).
+memchr = "2.7"
 thiserror.workspace = true
 serde.workspace = true
 blake3.workspace = true
@@ -47,6 +50,16 @@ zune-core = "0.5"
 # no `asm` (nasm), no `threading` (rayon pool). No new crate enters the lock
 # file. The MP4 container is written by hand in `mp4.rs` (no muxer crate).
 rav1e = { version = "0.8.1", default-features = false }
+# W15-B: H.264 for MP4 export (the default codec; AV1 above stays an
+# option), through `openh264` 0.9.8 (BSD-2-Clause, Rust bindings) over
+# Cisco's OpenH264 *source* (BSD-2-Clause), which `openh264-sys2`'s `source`
+# feature compiles with the `cc` crate (a C++ compiler at build time: MSVC,
+# gcc or clang, as the three CI runners have). Cisco's prebuilt binary and
+# its runtime download (`libloading` feature) are not used. The x86 assembly
+# is assembled only when `nasm` is on PATH; without it the build falls back
+# to the plain C++ kernels. rust-version 1.85 (under the workspace MSRV).
+# Recorded in LICENSES/THIRD_PARTY_NOTICES.md.
+openh264 = { version = "0.9.8", default-features = false, features = ["source"] }
 # W11-H: lossy WebP export (`ExportFormat::WebPLossy`): one VP8 key frame,
 # exact alpha in an uncompressed `ALPH` chunk. Pure Rust, `#![forbid(unsafe_code)]`,
 # `no_std` + `alloc`, no dependencies with default features off (the `cli`
@@ -88,3 +101,27 @@ hayro-syntax = "=0.4.0"
 # reader (`src/formats/design_fig.rs`). Recorded in
 # LICENSES/THIRD_PARTY_NOTICES.md.
 ruzstd = { version = "0.9", default-features = false, features = ["std"] }
+# W15-A: AVIF and HEIC *reading*, which the application runs only inside
+# its decode worker process (`app-shell`'s `decode_worker`: the editor
+# re-executes itself with `--decode-worker`), because both decoders can
+# panic on a damaged file and the release profile is `panic = "abort"`.
+# `src/formats/heif.rs` holds the in-process decode the worker calls.
+# - `rusty_av1d` 1.2.0 (BSD-2-Clause): a rav1d (pure-Rust dav1d port) fork
+#   with a Rust API. Default features off: no `asm` (nasm); 8-bit and
+#   10/12-bit decoding kept. rust-version 1.79.
+# - `heic-rs` 0.1.1 (MIT OR Apache-2.0): a pure-Rust, `forbid(unsafe_code)`
+#   HEIF container reader and HEVC still-picture decoder; its container
+#   parser also reads the AVIF item structure. Default features off: no
+#   rayon pool. rust-version 1.85.
+# Recorded in LICENSES/THIRD_PARTY_NOTICES.md.
+rusty_av1d = { version = "1.2.0", default-features = false, features = ["bitdepth_8", "bitdepth_16"] }
+heic-rs = { version = "0.1.1", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+# W15-A (test only): `heic-rs`'s `bench` feature exposes its synthetic HEVC
+# bitstream builder (`hevc::synth`), the only HEVC encoder in reach, which
+# the HEIC tests wrap in a hand-written HEIF container. `ravif` (the same
+# 0.13 `image` already links) writes the 10-bit AVIF fixtures `image`'s
+# 8-bit-only encoder cannot.
+heic-rs = { version = "0.1.1", default-features = false, features = ["std", "bench"] }
+ravif = { version = "0.13", default-features = false }

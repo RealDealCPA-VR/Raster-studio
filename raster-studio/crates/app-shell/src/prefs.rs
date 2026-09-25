@@ -117,6 +117,10 @@ pub enum ThemeChoice {
     DarkBlue,
     Purple,
     Black,
+    /// W15-D: Photopea's exact Dark Grey and White, appended (stored as
+    /// `"darkgrey"` and `"white"`).
+    DarkGrey,
+    White,
 }
 
 impl ThemeChoice {
@@ -129,6 +133,8 @@ impl ThemeChoice {
         ThemeChoice::DarkBlue,
         ThemeChoice::Purple,
         ThemeChoice::Black,
+        ThemeChoice::DarkGrey,
+        ThemeChoice::White,
     ];
 
     /// The fixed theme this choice pins, or `None` for System.
@@ -142,6 +148,8 @@ impl ThemeChoice {
             ThemeChoice::DarkBlue => Some(design::Theme::DarkBlue),
             ThemeChoice::Purple => Some(design::Theme::Purple),
             ThemeChoice::Black => Some(design::Theme::Black),
+            ThemeChoice::DarkGrey => Some(design::Theme::DarkGrey),
+            ThemeChoice::White => Some(design::Theme::White),
         }
     }
 
@@ -179,8 +187,8 @@ pub(crate) fn theme_to_install(
 
 /// W13X-4: the environment variable a `--shot` reads for the theme to
 /// capture in, as a [`design::Theme::key`] (`light`, `dark`, `light-grey`,
-/// `blue`, `dark-blue`, `purple`, `black`). Ignored without `--shot`, and
-/// never written to the preferences file.
+/// `dark-grey`, `blue`, `dark-blue`, `purple`, `black`, `white`). Ignored
+/// without `--shot`, and never written to the preferences file.
 pub const SHOT_THEME_ENV: &str = "RASTER_SHOT_THEME";
 
 static SHOT_THEME: std::sync::OnceLock<design::Theme> = std::sync::OnceLock::new();
@@ -210,6 +218,8 @@ impl From<design::Theme> for ThemeChoice {
             design::Theme::DarkBlue => Self::DarkBlue,
             design::Theme::Purple => Self::Purple,
             design::Theme::Black => Self::Black,
+            design::Theme::DarkGrey => Self::DarkGrey,
+            design::Theme::White => Self::White,
         }
     }
 }
@@ -927,6 +937,46 @@ mod tests {
             ThemeChoice::from(ui::dialogs::ThemeChoice::System),
             ThemeChoice::System
         );
+    }
+
+    /// W15-D: Photopea's exact Dark Grey and White are saved under their own
+    /// words and read back as themselves, while a file that says "light" or
+    /// "dark" still gets the app's own Light and Dark.
+    #[test]
+    fn dark_grey_and_white_are_saved_by_name_and_light_dark_still_load() {
+        let dir = tmp();
+        let path = dir.path().join("preferences.json");
+        for (choice, word, theme) in [
+            (ThemeChoice::DarkGrey, "darkgrey", design::Theme::DarkGrey),
+            (ThemeChoice::White, "white", design::Theme::White),
+        ] {
+            assert_eq!(ThemeChoice::from(theme), choice);
+            assert_eq!(choice.label(), theme.name());
+            let p = Preferences {
+                theme: choice,
+                ..Preferences::default()
+            };
+            p.save(&path).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                text.contains(&format!("\"theme\": \"{word}\""))
+                    || text.contains(&format!("\"theme\":\"{word}\"")),
+                "{choice:?} saved as: {text}"
+            );
+            assert_eq!(Preferences::load(&path).theme, choice);
+            assert_eq!(
+                Preferences::load(&path).theme.resolve(design::Theme::Light),
+                theme
+            );
+        }
+        for (word, theme) in [
+            ("light", design::Theme::Light),
+            ("dark", design::Theme::Dark),
+        ] {
+            std::fs::write(&path, format!("{{\"theme\":\"{word}\"}}")).unwrap();
+            let loaded = Preferences::load(&path).theme;
+            assert_eq!(loaded.resolve(design::Theme::DarkGrey), theme, "{word}");
+        }
     }
 
     #[test]

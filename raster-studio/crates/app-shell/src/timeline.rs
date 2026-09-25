@@ -293,14 +293,16 @@ mod tests {
     }
 
     fn export_mp4(ed: &mut Editor, out: &Path) -> mp4::Mp4Info {
+        export_mp4_as(ed, out, ExportFormat::Mp4(60))
+    }
+
+    /// W15-B: the same export in a chosen MP4 codec (`Mp4` is H.264,
+    /// `Mp4Av1` AV1).
+    fn export_mp4_as(ed: &mut Editor, out: &Path, format: ExportFormat) -> mp4::Mp4Info {
         std::fs::create_dir_all(out).unwrap();
         let job = ui::dialogs::ExportJob {
             base_name: "clip".to_string(),
-            entries: vec![ui::dialogs::ExportEntry::new(
-                "",
-                ExportFormat::Mp4(60),
-                1.0,
-            )],
+            entries: vec![ui::dialogs::ExportEntry::new("", format, 1.0)],
         };
         ed.request_export(job, out.to_path_buf());
         ed.poll_exports();
@@ -329,7 +331,15 @@ mod tests {
         );
         assert!(frames[0].rgba8[3] < frames[3].rgba8[3], "it fades in");
 
+        // W15-B: H.264 is the default MP4 codec.
         let info = export_mp4(&mut ed, &dir.path().join("out"));
+        assert_eq!((info.width, info.height), (W, H));
+        assert_eq!(&info.codec, b"avc1");
+        assert_eq!(info.frame_count, 4);
+        assert_eq!(info.durations, vec![250, 250, 250, 250]);
+
+        // W15-B: the AV1 option still writes the whole timeline.
+        let info = export_mp4_as(&mut ed, &dir.path().join("av1"), ExportFormat::Mp4Av1(60));
         assert_eq!((info.width, info.height), (W, H));
         assert_eq!(&info.codec, b"av01");
         assert_eq!(info.frame_count, 4);

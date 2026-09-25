@@ -1265,13 +1265,22 @@ pub enum ExportFormat {
     /// (so a transparent image stays large). No ICC. [`ExportFormat::WebP`]
     /// stays the lossless choice.
     WebPLossy(u8),
-    /// W13-L: MP4 video at the given quality (**`1..=100`**): AV1 through
-    /// `rav1e` (pure Rust) in an ISO BMFF container written by
-    /// [`formats::mp4`]; 8-bit 4:2:0, no alpha (flattened onto white), at
-    /// least 16x16. A still export writes one frame shown for a second; an
-    /// animated export (`raster::animation::encode_animation`) writes every
-    /// frame with its own duration. Write-only: there is no video decoder.
+    /// W13-L: MP4 video at the given quality (**`1..=100`**) in an ISO BMFF
+    /// container written by [`formats::mp4`]; W15-B: **H.264** (OpenH264,
+    /// High profile, an odd edge padded to even, at most 3840x2160), the
+    /// codec that plays everywhere; [`ExportFormat::Mp4Av1`] is the AV1
+    /// option. 8-bit 4:2:0, no alpha (flattened onto white), at least 16x16.
+    /// A still export writes one frame shown for a second; an animated export
+    /// (`raster::animation::encode_animation`) writes every frame with its own
+    /// duration. Write-only: there is no video decoder.
     Mp4(u8),
+    /// W15-B: MP4 with **AV1** (`rav1e`, pure Rust) instead of H.264: the
+    /// codec option on an MP4 row in Export As. Same quality range, alpha
+    /// handling and container as [`ExportFormat::Mp4`], up to 16384x16384.
+    /// Not listed in the menus (File > Export As > MP4 writes the default,
+    /// H.264). A still export writes one frame; an animated export
+    /// (`raster::animation::encode_animation`) writes every frame in AV1.
+    Mp4Av1(u8),
 }
 
 /// The square sizes an [`ExportFormat::Ico`] file carries, smallest first.
@@ -1313,7 +1322,8 @@ impl ExportFormat {
     /// kept out of [`ExportFormat::ALL`]: lossy WebP (VP8).
     pub const LOSSY_READ_BACK: [ExportFormat; 1] = [ExportFormat::WebPLossy(80)];
 
-    /// W13-L: video formats, written only: MP4 (AV1).
+    /// W13-L: video formats, written only: MP4 (W15-B: H.264, the default
+    /// codec; [`ExportFormat::Mp4Av1`] is chosen in Export As' Codec field).
     pub const VIDEO: [ExportFormat; 1] = [ExportFormat::Mp4(80)];
 
     /// W10-F: every format the exporter can write: [`ExportFormat::ALL`]
@@ -1332,7 +1342,10 @@ impl ExportFormat {
 
     /// W10-F: whether this crate can decode what the format writes.
     pub fn reads_back(self) -> bool {
-        !matches!(self, ExportFormat::Avif(_) | ExportFormat::Mp4(_))
+        !matches!(
+            self,
+            ExportFormat::Avif(_) | ExportFormat::Mp4(_) | ExportFormat::Mp4Av1(_)
+        )
     }
 
     /// The inclusive range a JPEG quality value must fall in.
@@ -1357,9 +1370,13 @@ impl ExportFormat {
             ExportFormat::Avif(q) if !Self::JPEG_QUALITY_RANGE.contains(&q) => Err(
                 CodecError::InvalidParameter(format!("AVIF quality must be 1..=100, got {q}")),
             ),
-            ExportFormat::Mp4(q) if !Self::JPEG_QUALITY_RANGE.contains(&q) => Err(
-                CodecError::InvalidParameter(format!("MP4 quality must be 1..=100, got {q}")),
-            ),
+            ExportFormat::Mp4(q) | ExportFormat::Mp4Av1(q)
+                if !Self::JPEG_QUALITY_RANGE.contains(&q) =>
+            {
+                Err(CodecError::InvalidParameter(format!(
+                    "MP4 quality must be 1..=100, got {q}"
+                )))
+            }
             ExportFormat::WebPLossy(q) if !Self::JPEG_QUALITY_RANGE.contains(&q) => {
                 Err(CodecError::InvalidParameter(format!(
                     "lossy WebP quality must be 1..=100, got {q}"
@@ -1395,7 +1412,8 @@ impl ExportFormat {
             | ExportFormat::Ppm
             | ExportFormat::Pgm
             | ExportFormat::Pbm
-            | ExportFormat::Mp4(_) => AlphaSupport::None,
+            | ExportFormat::Mp4(_)
+            | ExportFormat::Mp4Av1(_) => AlphaSupport::None,
         }
     }
 
@@ -1443,7 +1461,7 @@ impl ExportFormat {
             ExportFormat::Exr => "exr",
             ExportFormat::Jxl => "jxl",
             ExportFormat::WebPLossy(_) => "webp",
-            ExportFormat::Mp4(_) => "mp4",
+            ExportFormat::Mp4(_) | ExportFormat::Mp4Av1(_) => "mp4",
         }
     }
 
@@ -1467,7 +1485,7 @@ impl ExportFormat {
             ExportFormat::Exr => "image/x-exr",
             ExportFormat::Jxl => "image/jxl",
             ExportFormat::WebPLossy(_) => "image/webp",
-            ExportFormat::Mp4(_) => "video/mp4",
+            ExportFormat::Mp4(_) | ExportFormat::Mp4Av1(_) => "video/mp4",
         }
     }
 }
@@ -1762,14 +1780,20 @@ pub fn encode_into<W: Write + Seek>(
                 .map_err(|e| CodecError::InvalidParameter(format!("lossy WebP: {e}")))?;
             out.write_all(&bytes).map_err(image::ImageError::IoError)?;
         }
-        // W13-L: a still as a one-frame MP4 (AV1), shown for one second.
-        ExportFormat::Mp4(quality) => {
+        // W13-L: a still as a one-frame MP4, shown for one second; W15-B:
+        // H.264 by default, AV1 when that codec was chosen.
+        ExportFormat::Mp4(quality) | ExportFormat::Mp4Av1(quality) => {
             let rgba = pixels.require_rgba8(format)?;
             let frame = formats::mp4::Mp4Frame {
                 rgba8: rgba,
                 duration_ms: 1000,
             };
-            let bytes = formats::mp4::encode(width, height, &[frame], quality)?;
+            let codec = if matches!(format, ExportFormat::Mp4Av1(_)) {
+                formats::mp4::Mp4Codec::Av1
+            } else {
+                formats::mp4::Mp4Codec::H264
+            };
+            let bytes = formats::mp4::encode_with(width, height, &[frame], quality, codec)?;
             out.write_all(&bytes).map_err(image::ImageError::IoError)?;
         }
     }
@@ -2249,7 +2273,9 @@ mod tests {
                 }
                 // W13-L: MP4 is write-only (no video decoder), so not in
                 // `ALL`; `formats::mp4` reads its box structure back.
-                ExportFormat::Mp4(_) => unreachable!("MP4 is not in ExportFormat::ALL"),
+                ExportFormat::Mp4(_) | ExportFormat::Mp4Av1(_) => {
+                    unreachable!("MP4 is not in ExportFormat::ALL")
+                }
                 // Lossy and alpha-free.
                 ExportFormat::Jpeg(_) => {
                     for (got, want) in decoded

@@ -1,11 +1,13 @@
-//! W13X-4: five of Photopea's themes (More > Theme), as palettes.
+//! W13X-4 / W15-D: all seven of Photopea's themes (More > Theme), as palettes.
 //!
 //! Photopea ships seven themes (`iV.ml` in its `pp.js`): Light Grey, Dark
-//! Grey, Blue, Dark Blue, Purple, Black and White. This file is five of them:
-//! Light Grey, Blue, Dark Blue, Purple and Black. The app's own
-//! [`super::palette::LIGHT_ROLES`] and [`super::palette::DARK_ROLES`] are
+//! Grey, Blue, Dark Blue, Purple, Black and White. W13X-4 added five of them
+//! (Light Grey, Blue, Dark Blue, Purple, Black); W15-D added the other two,
+//! [`DARK_GREY_ROLES`] and [`WHITE_ROLES`]. The app's own
+//! [`super::palette::LIGHT_ROLES`] and [`super::palette::DARK_ROLES`] were
 //! modelled on White and Dark Grey but are not copies of them (their docs
-//! list every number that differs); no exact White or Dark Grey is shipped.
+//! list every number that differs); they stay, so a saved "light" or "dark"
+//! preference still draws what it drew.
 //!
 //! Six of Photopea's per-theme numbers are carried over, one per role:
 //! `--base` -> `SurfacePanel`, `--bg-canvas` -> `BackgroundCanvas`,
@@ -20,7 +22,7 @@
 //! `crates/design/tests/token_gates.rs` iterates [`crate::Theme::ALL`] — and
 //! where one of the six numbers fails a gate, the palette's doc names the
 //! number, the value used instead, and the measured ratio. The full list of
-//! departures (five numbers in all) is pinned by
+//! departures (six numbers in all) is pinned by
 //! `tests::the_photopea_numbers_are_carried_over_except_the_listed_departures`,
 //! so this prose and the tables cannot drift apart.
 
@@ -266,6 +268,100 @@ pub const BLACK_ROLES: &[(ColorRole, Srgba)] = &[
     (ColorRole::Luminance, Srgba::hex(0xD1D1D1)),
 ];
 
+/// W15-D: Photopea's **Dark Grey**: `--base` #474747 panel over a #252525
+/// `--bg-canvas` pasteboard, #5D5D5D buttons with a #6A6A6A hover, #D5D5D5
+/// text — all as Photopea has them. One departure: accent #5B9BF0 (the
+/// shipped dark accent, dark text on it), not #3482F6, which stands 2.51:1
+/// off the #474747 panel, under the 3:1 accent-border gate.
+pub const DARK_GREY_ROLES: &[(ColorRole, Srgba)] = &[
+    (ColorRole::SurfaceSunken, Srgba::hex(0x1E1E1E)),
+    (ColorRole::BackgroundCanvas, Srgba::hex(0x252525)),
+    (ColorRole::SurfaceHeader, Srgba::hex(0x363636)),
+    (ColorRole::SurfacePanel, Srgba::hex(0x474747)),
+    (ColorRole::SurfaceElevated, Srgba::hex(0x505050)),
+    (ColorRole::SurfaceOverlay, Srgba::hex(0x4A4A4A)),
+    (ColorRole::SeparatorHairline, Srgba::hexa(0xFFFFFF1F)),
+    (ColorRole::SeparatorStrong, Srgba::hex(0x5C5C5C)),
+    (ColorRole::TextPrimary, Srgba::hex(0xD5D5D5)),
+    (ColorRole::TextSecondary, Srgba::hex(0xCDCDCD)),
+    (ColorRole::TextTertiary, Srgba::hex(0xC4C4C4)),
+    (ColorRole::TextDisabled, Srgba::hex(0x7E7E7E)),
+    (ColorRole::TextOnAccent, Srgba::hex(0x0B1526)),
+    (ColorRole::TextLink, Srgba::hex(0x9CCBFF)),
+    (ColorRole::Accent, Srgba::hex(0x5B9BF0)),
+    (ColorRole::AccentHovered, Srgba::hex(0x4A8CE4)),
+    (ColorRole::AccentPressed, Srgba::hex(0x4385DC)),
+    (ColorRole::AccentSubtle, Srgba::hexa(0x5B9BF033)),
+    (ColorRole::AccentMuted, Srgba::hex(0x4A6A94)),
+    (ColorRole::Success, Srgba::hex(0x4DBE70)),
+    (ColorRole::SuccessSubtle, Srgba::hexa(0x4DBE7033)),
+    (ColorRole::Warning, Srgba::hex(0xE0A020)),
+    (ColorRole::WarningSubtle, Srgba::hexa(0xE0A02033)),
+    (ColorRole::Danger, Srgba::hex(0xF27068)),
+    (ColorRole::DangerSubtle, Srgba::hexa(0xF2706833)),
+    (ColorRole::ControlFill, Srgba::hex(0x5D5D5D)),
+    (ColorRole::ControlFillHovered, Srgba::hex(0x6A6A6A)),
+    (ColorRole::ControlFillActive, Srgba::hex(0x747474)),
+    (ColorRole::ControlFillDisabled, Srgba::hex(0x4C4C4C)),
+    (ColorRole::ControlStroke, Srgba::hexa(0xFFFFFF1F)),
+    (ColorRole::ControlStrokeStrong, Srgba::hexa(0xFFFFFF3D)),
+    (ColorRole::SelectionFill, Srgba::hexa(0x5B9BF066)),
+    (ColorRole::SelectionStroke, Srgba::hex(0x7FB3F5)),
+    (ColorRole::FocusRing, Srgba::hexa(0x7FB3F5B3)),
+    (ColorRole::ShadowColor, Srgba::hexa(0x00000080)),
+    (ColorRole::ChannelRed, Srgba::hex(0xFF6B6B)),
+    (ColorRole::ChannelGreen, Srgba::hex(0x5FD068)),
+    (ColorRole::ChannelBlue, Srgba::hex(0x6FA8FF)),
+    (ColorRole::Luminance, Srgba::hex(0xDADADA)),
+];
+
+/// W15-D: Photopea's **White**: `--base` #F7F7F7 panel over a #E0E0E0
+/// `--bg-canvas` pasteboard, #E0E0E0 buttons with a #D6D6D6 hover, #333333
+/// text and the #3482F6 accent — all as Photopea has them, no departures.
+/// White text stands only 3.70:1 on #3482F6, so text on the accent is the
+/// dark #0B1526 (4.93:1); Photopea has no number for that role.
+pub const WHITE_ROLES: &[(ColorRole, Srgba)] = &[
+    (ColorRole::SurfaceSunken, Srgba::hex(0xD0D0D0)),
+    (ColorRole::BackgroundCanvas, Srgba::hex(0xE0E0E0)),
+    (ColorRole::SurfaceHeader, Srgba::hex(0xEBEBEB)),
+    (ColorRole::SurfacePanel, Srgba::hex(0xF7F7F7)),
+    (ColorRole::SurfaceElevated, Srgba::hex(0xFDFDFD)),
+    (ColorRole::SurfaceOverlay, Srgba::hex(0xFBFBFB)),
+    (ColorRole::SeparatorHairline, Srgba::hexa(0x00000022)),
+    (ColorRole::SeparatorStrong, Srgba::hex(0xB8B8B8)),
+    (ColorRole::TextPrimary, Srgba::hex(0x333333)),
+    (ColorRole::TextSecondary, Srgba::hex(0x444444)),
+    (ColorRole::TextTertiary, Srgba::hex(0x555555)),
+    (ColorRole::TextDisabled, Srgba::hex(0x9A9A9A)),
+    (ColorRole::TextOnAccent, Srgba::hex(0x0B1526)),
+    (ColorRole::TextLink, Srgba::hex(0x0A50A8)),
+    (ColorRole::Accent, Srgba::hex(0x3482F6)),
+    (ColorRole::AccentHovered, Srgba::hex(0x4A90F7)),
+    (ColorRole::AccentPressed, Srgba::hex(0x3180F3)),
+    (ColorRole::AccentSubtle, Srgba::hexa(0x3482F61F)),
+    (ColorRole::AccentMuted, Srgba::hex(0x9FC0EA)),
+    (ColorRole::Success, Srgba::hex(0x1E7F3C)),
+    (ColorRole::SuccessSubtle, Srgba::hexa(0x1E7F3C1F)),
+    (ColorRole::Warning, Srgba::hex(0x9A6400)),
+    (ColorRole::WarningSubtle, Srgba::hexa(0x9A64001F)),
+    (ColorRole::Danger, Srgba::hex(0xC0261F)),
+    (ColorRole::DangerSubtle, Srgba::hexa(0xC0261F1F)),
+    (ColorRole::ControlFill, Srgba::hex(0xE0E0E0)),
+    (ColorRole::ControlFillHovered, Srgba::hex(0xD6D6D6)),
+    (ColorRole::ControlFillActive, Srgba::hex(0xCCCCCC)),
+    (ColorRole::ControlFillDisabled, Srgba::hex(0xEEEEEE)),
+    (ColorRole::ControlStroke, Srgba::hexa(0x00000026)),
+    (ColorRole::ControlStrokeStrong, Srgba::hexa(0x0000003D)),
+    (ColorRole::SelectionFill, Srgba::hexa(0x3482F63D)),
+    (ColorRole::SelectionStroke, Srgba::hex(0x3482F6)),
+    (ColorRole::FocusRing, Srgba::hexa(0x3482F699)),
+    (ColorRole::ShadowColor, Srgba::hexa(0x0000002E)),
+    (ColorRole::ChannelRed, Srgba::hex(0xC81E1E)),
+    (ColorRole::ChannelGreen, Srgba::hex(0x1A7436)),
+    (ColorRole::ChannelBlue, Srgba::hex(0x1F5FCC)),
+    (ColorRole::Luminance, Srgba::hex(0x4A4A50)),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,6 +396,16 @@ mod tests {
             BLACK_ROLES,
             [0x353535, 0x1A1A1A, 0x505050, 0x5A5A5A, 0xCCCCCC, 0x3482F6],
         ),
+        (
+            "Dark Grey",
+            DARK_GREY_ROLES,
+            [0x474747, 0x252525, 0x5D5D5D, 0x6A6A6A, 0xD5D5D5, 0x3482F6],
+        ),
+        (
+            "White",
+            WHITE_ROLES,
+            [0xF7F7F7, 0xE0E0E0, 0xE0E0E0, 0xD6D6D6, 0x333333, 0x3482F6],
+        ),
     ];
 
     const MAPPED: [ColorRole; 6] = [
@@ -319,6 +425,7 @@ mod tests {
         ("Blue", ColorRole::Accent, 0x5B9BF0),
         ("Dark Blue", ColorRole::SurfacePanel, 0x303445),
         ("Purple", ColorRole::Accent, 0x5B9BF0),
+        ("Dark Grey", ColorRole::Accent, 0x5B9BF0),
     ];
 
     fn value(table: &[(ColorRole, Srgba)], role: ColorRole) -> Srgba {

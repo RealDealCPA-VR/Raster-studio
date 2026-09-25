@@ -13,6 +13,12 @@
 
 use std::path::{Path, PathBuf};
 
+/// W15-A: AVIF and HEIC are decoded in a child process (the editor's own
+/// binary, run with `--decode-worker`), so a decoder panic cannot close the
+/// editor. Declared here, beside the open filters that offer those files.
+#[path = "decode_worker.rs"]
+pub mod decode_worker;
+
 /// What the user chose when asked about unsaved work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloseChoice {
@@ -24,9 +30,11 @@ pub enum CloseChoice {
 /// File filters, shared by the native dialog and the tests' assertions.
 ///
 /// W10-F: Netpbm (`ppm`/`pgm`/`pbm`/`pnm`), DDS, GIMP XCF (opened as a
-/// layered document, `import::document_from_xcf`) and JPEG XL join the list. AVIF and HEIC are *not*
-/// offered: neither has a reader (`raster::codec::formats` says why), and a
-/// filter must not advertise what File > Open cannot open.
+/// layered document, `import::document_from_xcf`) and JPEG XL join the list.
+///
+/// W15-A: AVIF joins it, read in the decode worker process
+/// ([`decode_worker`]); `.heic` / `.heif`, read the same way, are offered
+/// through [`HEIF_EXTENSIONS`].
 ///
 /// W11-H: OpenEXR and Radiance HDR (opened as 32 Bits/Channel documents), Apple ICNS,
 /// Amiga IFF ILBM/PBM and Krita KRA (its merged image) join the list.
@@ -39,8 +47,14 @@ pub const IMAGE_EXTENSIONS: &[&str] = &[
     // W13-C: Adobe DNG, developed into a 16 Bits/Channel document. The
     // vendor RAWs (CR2, CR3, NEF, ARW, RAF, ORF, RW2) are not offered: they
     // are recognised and refused by name (`raster::codec::formats::raw`).
-    "dng",
+    // W15-A: AVIF, decoded in the decode worker process.
+    "dng", "avif",
 ];
+/// W15-A: HEIC / HEIF, which File > Open reads in the decode worker process
+/// ([`decode_worker`]). Kept apart from [`IMAGE_EXTENSIONS`] because
+/// `raster::ImportFormat` has no `.heic` spelling: the codec finds a HEIC by
+/// its `ftyp` brand, whatever its name.
+pub const HEIF_EXTENSIONS: &[&str] = &["heic", "heif"];
 /// W10-F: extension of Photoshop's large-document format, opened through the
 /// same layered road as a `.psd` (both start `8BPS`; the `psd` crate reads
 /// version 2).
@@ -66,6 +80,8 @@ pub fn open_file_filters() -> Vec<(&'static str, Vec<&'static str>)> {
     let project = vec![PROJECT_EXTENSION, "json"];
     let mut everything = project.clone();
     everything.extend_from_slice(IMAGE_EXTENSIONS);
+    // W15-A: HEIC / HEIF, through the decode worker.
+    everything.extend_from_slice(HEIF_EXTENSIONS);
     everything.push(PSD_EXTENSION);
     everything.push(PSB_EXTENSION);
     // W9-E: a Photoshop brush file opens into the Brushes panel.
@@ -81,6 +97,7 @@ pub fn open_file_filters() -> Vec<(&'static str, Vec<&'static str>)> {
     // W13-K: a script opens in the File > Script window.
     everything.extend_from_slice(crate::script::SCRIPT_EXTENSIONS);
     let mut images = IMAGE_EXTENSIONS.to_vec();
+    images.extend_from_slice(HEIF_EXTENSIONS);
     images.push(PSD_EXTENSION);
     images.push(PSB_EXTENSION);
     vec![
@@ -895,9 +912,11 @@ mod tests {
         }
         assert!(default_filter.contains(&"svg"), "SVG is not offered");
         // W10-F: the new readers are offered, and so is `.psb`, which opens
-        // through the layered PSD road; AVIF and HEIC, which have no reader,
-        // are not.
-        for ext in ["ppm", "pgm", "pbm", "dds", "xcf", "jxl", "psb"] {
+        // through the layered PSD road. W15-A: AVIF, HEIC and HEIF, read in
+        // the decode worker process, are offered too.
+        for ext in [
+            "ppm", "pgm", "pbm", "dds", "xcf", "jxl", "psb", "avif", "heic", "heif",
+        ] {
             assert!(default_filter.contains(&ext), ".{ext} is not offered");
             assert!(
                 open_file_filters()[2].1.contains(&ext),
@@ -906,9 +925,7 @@ mod tests {
         }
         // W13-C: nor are the vendor RAWs, which are refused by name; DNG is
         // offered.
-        for ext in [
-            "avif", "heic", "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2",
-        ] {
+        for ext in ["cr2", "cr3", "nef", "arw", "raf", "orf", "rw2"] {
             assert!(
                 !default_filter.contains(&ext),
                 ".{ext} is offered but cannot open"

@@ -13,7 +13,8 @@
 //! | DDS | uncompressed RGB(A)/luminance, BC1, BC2, BC3 | uncompressed BGRA, BC3 | [`dds`] |
 //! | GIMP XCF | 8-bit RGB/RGBA/grey: the layer tree ([`xcf::read`], which app-shell opens layered) and the flattened composite ([`xcf::decode`]) | no | [`xcf`] |
 //! | JPEG XL | yes (`jxl-oxide`) | W11-H: lossless 8-bit RGBA only, at least 2x2 (`zune-jpegxl`, in `codec::encode_into`); 16-bit samples are refused | [`jxl`] |
-//! | AVIF | **refused by name** (see [`avif`]) | yes (`image` over `ravif`) | [`avif`] |
+//! | AVIF | W15-A: yes, **in the decode worker process only** (`rusty_av1d`; see [`heif`]); refused by name where no worker is installed | yes (`image` over `ravif`) | [`heif`], [`avif`] |
+//! | HEIC / HEIF | W15-A: yes, **in the decode worker process only** (`heic-rs`; see [`heif`]); refused by name where no worker is installed | no | [`heif`] |
 //! | PSB | through the `psd` crate, as a layered document | through the `psd` crate (W11-H: version 2, 8-byte lengths) | - |
 //! | OpenEXR, Radiance HDR (W11-H) | yes: File > Open makes a 32-bit document (`app-shell`); the surface returned here is clipped to 16-bit sRGB | EXR, 32-bit float | [`float`] |
 //! | Apple ICNS (W11-H) | PNG, ARGB and 24-bit RLE entries, largest | no | [`icns`] |
@@ -21,33 +22,25 @@
 //! | Krita KRA (W11-H) | the merged image only | no | [`kra`] |
 //! | PDF, PDF-compatible AI (W13-D) | every page, rendered by `hayro` (the flat decode answers page 1; `app-shell` opens one artboard per page) | no (the print path's writer is `crate::pdf`) | [`pdf`] |
 //! | WMF, EMF (W13-D) | the common GDI records, drawn through `resvg` | no | [`metafile`] |
-//! | EPS, Paint.NET PDN, Sketch, Adobe XD, Figma FIG (W13-D) | the embedded preview only, with a sentence saying so; a bare `fig-kiwi` canvas is refused by name | no | [`vector_docs`] |
+//! | EPS (W15-E) | the PostScript artwork, run by the bounded interpreter in [`postscript`]; the embedded TIFF / WMF / EPSI preview when that cannot draw it, saying why | no | [`vector_docs`], [`postscript`] |
+//! | Paint.NET PDN, Sketch, Adobe XD, Figma FIG (W13-D) | the embedded preview only, with a sentence saying so; a bare `fig-kiwi` canvas is refused by name | no | [`vector_docs`] |
 //! | DNG (W13-C) | CFA or linear raw, uncompressed or lossless JPEG: developed to 16-bit sRGB | no | [`raw`] |
 //! | CR2, CR3, NEF, ARW, RAF, ORF, RW2 (W13-C) | **refused by name**: no permissive reader (see [`raw`]) | no | [`raw`] |
 //!
-//! AVIF has no reader: `rav1d` (the pure-Rust dav1d port), the AV1 decoder
-//! this wave built a reader on, was found to abort the process on a damaged
-//! file (the reason is written up in [`avif`]; the other pure-Rust AV1
-//! decoders are 0.0.x releases this wave did not trust; the reader, its test
-//! and the dependency were removed together, so no test in this tree
-//! exercises `rav1d`), and a `.avif` is refused by name instead. What is
-//! tested is the refusal and the brand sniff.
-//!
-//! HEIC has no reader either. The pure-Rust HEVC decoders on crates.io are
-//! `heic` (AGPL-3.0-only or a commercial licence, which a proprietary build
-//! cannot take) and permissive first releases: W13-C measured `heic-rs`
-//! 0.1.1 (MIT OR Apache-2.0), which decodes a clean file correctly but
-//! panics on damaged ones (3 of 4000 bit-flipped or truncated files, a
-//! slice index at `src/hevc/decode/recon.rs:70`) - and the release profile
-//! is `panic = "abort"`, so that would take the editor down; `heif-oxide`
-//! 0.1.0 and `gamut-heic` 0.2.2 were not evaluated. Everything else binds
-//! libheif / libde265 (C/C++). W13-C also found `rusty_av1d` 1.2.0, a
-//! BSD-2-Clause rav1d fork with a Rust API: it carries the same `unwrap()`
-//! on a missing reference frame header (`src/decode.rs:4993`), so under
-//! `panic = "abort"` AVIF stays refused too. A `.heic` is refused
-//! by name, see
-//! [`heic_refusal`], instead of reaching `image` and failing as "unknown
-//! format".
+//! W15-A: AVIF and HEIC are read, but never in the calling process. The
+//! decoders (`rusty_av1d` 1.2.0, a BSD-2-Clause rav1d fork, and `heic-rs`
+//! 0.1.1, MIT OR Apache-2.0) both panic on some damaged files (an
+//! `unwrap()` on a missing reference frame header at `rusty_av1d`'s
+//! `src/decode.rs:4993`; a slice index at `heic-rs`'s
+//! `src/hevc/decode/recon.rs:70`), and the release profile is
+//! `panic = "abort"`. So [`decode`] and [`probe`] hand an AVIF / HEIC to the
+//! decoder installed with [`heif::install_isolated_decoder`] - in the
+//! application, `app-shell`'s decode worker, a child process running
+//! [`heif::decode_in_this_process`] - and with none installed refuse it by
+//! name ([`heif::no_worker_refusal`], [`heic_refusal`]). A HEIC is found by
+//! content (there is no `.heic` [`ImportFormat`]: see
+//! [`heif::HeifKind::import_format`]) and travels as [`ImportFormat::Avif`],
+//! the HEIF-family format; the decode tells the two apart by brand again.
 
 use std::io::{BufRead, Read, Seek};
 
@@ -56,6 +49,8 @@ use super::{read_head, CodecError, DecodedSurface, ImageInfo, ImportFormat, Impo
 pub mod avif;
 pub mod dds;
 pub mod float;
+/// W15-A: AVIF and HEIC reading, run in the decode worker process.
+pub mod heif;
 pub mod icns;
 pub mod iff;
 pub mod jxl;
@@ -64,6 +59,8 @@ pub mod kra;
 pub mod metafile;
 /// W13-D: PDF and PDF-compatible `.ai`.
 pub mod pdf;
+/// W15-E: the bounded PostScript interpreter that draws EPS artwork.
+pub mod postscript;
 /// W13-D: EPS, PDN, Sketch, XD and FIG previews.
 pub mod vector_docs;
 // W13-C: lossless JPEG, the compression DNG raw data uses.
@@ -133,19 +130,15 @@ pub fn looks_like_heic(head: &[u8]) -> bool {
     ) && !avif::looks_like_avif(head)
 }
 
-/// The refusal a HEIC file gets, naming why rather than "unknown format".
+/// The refusal a HEIC file gets where no decode worker is installed, naming
+/// why rather than "unknown format" (W15-A: see [`heif`]).
 pub fn heic_refusal() -> CodecError {
-    CodecError::Unsupported(
-        "HEIC/HEIF is not supported: this build has no HEVC decoder. The pure-Rust ones \
-         are AGPL-licensed (heic) or first releases, and the permissive heic-rs 0.1.1 \
-         panics on damaged files, which would close the editor (see \
-         docs/parity-matrix.md); convert it to JPEG or PNG first"
-            .into(),
-    )
+    heif::no_worker_refusal(heif::HeifKind::Heic)
 }
 
 /// Which of this module's formats `source` holds, by content; the stream is
-/// left where it was found. `Err` for a HEIC, which is refused by name.
+/// left where it was found. W15-A: a HEIC answers [`ImportFormat::Avif`],
+/// the HEIF family both travel as (see [`heif`]).
 pub(super) fn sniff_source<R: BufRead + Seek>(
     source: &mut R,
 ) -> Result<Option<ImportFormat>, CodecError> {
@@ -168,7 +161,7 @@ pub(super) fn sniff_source<R: BufRead + Seek>(
         }
     }
     if looks_like_heic(head) {
-        return Err(heic_refusal());
+        return Ok(Some(ImportFormat::Avif));
     }
     if mp4::looks_like_video(head) {
         return Err(mp4::video_refusal());
@@ -204,11 +197,10 @@ pub(super) fn probe<R: Read>(
     source: R,
     limits: ImportLimits,
 ) -> Result<ImageInfo, CodecError> {
-    if format == ImportFormat::Avif {
-        return Err(avif::refusal());
-    }
     let bytes = read_bounded(source, limits)?;
     match format {
+        // W15-A: AVIF and HEIC, through the decode worker.
+        ImportFormat::Avif => heif::probe_isolated(&bytes, limits),
         ImportFormat::Pnm => pnm::probe(&bytes, limits),
         ImportFormat::Dds => dds::probe(&bytes, limits),
         ImportFormat::Xcf => xcf::probe(&bytes, limits),
@@ -226,7 +218,6 @@ pub(super) fn probe<R: Read>(
         | ImportFormat::Fig => vector_docs::probe(format, &bytes, limits),
         ImportFormat::Dng => raw::probe(&bytes, limits),
         ImportFormat::CameraRaw => Err(raw::refusal(&bytes)),
-        ImportFormat::Avif => Err(avif::refusal()),
         other => Err(not_ours(other)),
     }
 }
@@ -237,11 +228,10 @@ pub(super) fn decode<R: Read>(
     source: R,
     limits: ImportLimits,
 ) -> Result<DecodedSurface, CodecError> {
-    if format == ImportFormat::Avif {
-        return Err(avif::refusal());
-    }
     let bytes = read_bounded(source, limits)?;
     match format {
+        // W15-A: AVIF and HEIC, through the decode worker.
+        ImportFormat::Avif => heif::decode_isolated(&bytes, limits),
         ImportFormat::Pnm => pnm::decode(&bytes, limits),
         ImportFormat::Dds => dds::decode(&bytes, limits),
         ImportFormat::Xcf => xcf::decode(&bytes, limits),
@@ -259,7 +249,6 @@ pub(super) fn decode<R: Read>(
         | ImportFormat::Fig => vector_docs::decode(format, &bytes, limits),
         ImportFormat::Dng => raw::decode(&bytes, limits),
         ImportFormat::CameraRaw => Err(raw::refusal(&bytes)),
-        ImportFormat::Avif => Err(avif::refusal()),
         other => Err(not_ours(other)),
     }
 }
@@ -433,9 +422,11 @@ mod tests {
         let err = decode_surface_bytes(&heic, ImportLimits::default()).unwrap_err();
         assert!(matches!(err, CodecError::Unsupported(_)));
         assert!(err.to_string().contains("HEIC"), "{err}");
-        // The advice names only formats this build opens: AVIF is refused on
-        // open too, so converting to it cannot help.
+        // W15-A: with no decode worker installed (this test process has
+        // none) the refusal says why, and its advice names formats that open
+        // everywhere.
         let advice = err.to_string();
+        assert!(advice.contains("decode worker"), "{advice}");
         assert!(advice.contains("JPEG or PNG"), "{advice}");
         assert!(!advice.contains("AVIF"), "{advice}");
         let err = probe_bytes(&heic, ImportLimits::default()).unwrap_err();
