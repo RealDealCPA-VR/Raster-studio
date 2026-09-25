@@ -93,6 +93,17 @@ impl Editor {
         if Self::is_resource_path(path) {
             return Some(self.open_resource(path));
         }
+        // W13X-8: Sketch / XD / Figma open as their layers (artboards,
+        // groups, shapes, text, bitmaps); the embedded preview only when the
+        // layers cannot be read, and the status line says why.
+        if let Some(result) = self.open_design_document(path) {
+            return Some(result);
+        }
+        // W13X-7: a multi-page PDF / AI asks which pages, at what resolution
+        // and how first (the import dialog); a Paint.NET file opens its layers.
+        if let Some(result) = self.open_w13x7_document(path) {
+            return Some(result);
+        }
         // W13-D: PDF / AI (a multi-page PDF opens one artboard per page),
         // WMF / EMF, and the preview formats (EPS, PDN, Sketch, XD, FIG),
         // which open with a status line saying what was read.
@@ -227,10 +238,24 @@ impl Editor {
             (doc.id(), self.prefs.history_depth)
         };
         // W13-D: a multi-page PDF comes back as its page artboards.
-        let pages = Self::open_pages_document(id, &path, depth)
-            .map_err(|e| format!("{}: {e}", path.display()))?
-            .map(|(doc, _, _)| doc);
+        // W13X-7: a PDF opened through the import dialog comes back as the
+        // pages, resolution and mode it was opened with, and a Paint.NET
+        // file as its layers.
+        let chosen = w13x7::reopen_for_revert(id, &path, depth)
+            .transpose()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let pages = match chosen {
+            Some(doc) => Some(doc),
+            None => Self::open_pages_document(id, &path, depth)
+                .map_err(|e| format!("{}: {e}", path.display()))?
+                .map(|(doc, _, _)| doc),
+        };
+        // W13X-8: a Sketch / XD / Figma file comes back as its layers.
+        let design = Self::open_design_layered(id, &path, depth)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
         let saved = if let Some(doc) = pages {
+            Ok(doc)
+        } else if let Some(doc) = design {
             Ok(doc)
         } else if Self::is_project_path(&path) {
             OpenDocument::open_project(id, &path, depth)
@@ -408,3 +433,11 @@ mod tests;
 /// W13-D: PDF pages as artboards, and the preview formats' open route.
 #[path = "editor_open_pages.rs"]
 pub(crate) mod open_pages;
+
+/// W13X-7: the PDF import dialog's open route and Paint.NET layers.
+#[path = "editor_open_w13x7.rs"]
+pub(crate) mod w13x7;
+
+/// W13X-8: Sketch / XD / Figma opened as layers.
+#[path = "import_design.rs"]
+pub(crate) mod import_design;

@@ -656,6 +656,8 @@ fn expected_effect(action: Action) -> Effect {
         | Action::DecreaseBrushSize
         | Action::IncreaseBrushSize => Effect::Tool,
         Action::SwapColors | Action::ResetColors => Effect::Color,
+        // W13X-1: the Move tool (the default) nudges the active layer.
+        Action::Nudge(_) => Effect::DocumentEdited,
     }
 }
 

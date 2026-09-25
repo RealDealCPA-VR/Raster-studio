@@ -230,6 +230,13 @@ pub(crate) fn hash_layer(layer: &TextLayer) -> u64 {
         layer.warp.bend.to_bits().hash(&mut h);
         layer.warp.horizontal.to_bits().hash(&mut h);
         layer.warp.vertical.to_bits().hash(&mut h);
+        // W13X-5: the Custom style's dragged mesh bends the outlines too.
+        if let Some(mesh) = &layer.warp.mesh {
+            for p in mesh {
+                p[0].to_bits().hash(&mut h);
+                p[1].to_bits().hash(&mut h);
+            }
+        }
     }
     if let Some(path) = &layer.path {
         8u8.hash(&mut h);
@@ -341,6 +348,14 @@ pub fn text_overset_lines(run: &text_engine::TextRun) -> Option<usize> {
 pub fn text_content_height(run: &text_engine::TextRun) -> f32 {
     let mut e = engine();
     text_engine::shape(&mut e.library, run).bounds.height
+}
+
+/// W13X-5: the run's line-box bounds in layer pixels, shaped with the
+/// library the canvas renders with: the box a Warp Text envelope (and the
+/// Custom style's mesh) is fitted to.
+pub fn text_bounds(run: &text_engine::TextRun) -> text_engine::Rect {
+    let mut e = engine();
+    text_engine::shape(&mut e.library, run).bounds
 }
 
 /// The byte caret index for a click at layer-local `(x, y)` — card 026's

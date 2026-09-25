@@ -108,6 +108,8 @@ pub mod other_extra;
 pub mod render_extra;
 pub mod shape_mosaic;
 pub mod three_d;
+// W13X-5: Flame along the active path, with Photopea's controls.
+pub mod flame;
 
 pub use buffer::{FilterBuffer, FilterError};
 pub use support::{EdgeMode, Interpolation, Sampling};

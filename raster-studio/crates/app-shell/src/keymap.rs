@@ -541,7 +541,9 @@ pub fn menu_twin(action: Action) -> Option<MenuAction> {
         | Action::SwapColors
         | Action::ResetColors
         | Action::NextDocument
-        | Action::PreviousDocument => return None,
+        | Action::PreviousDocument
+        // W13X-1: the arrow keys' nudge has no menu item.
+        | Action::Nudge(_) => return None,
     })
 }
 
@@ -787,6 +789,27 @@ impl Keymap {
         // Window
         add(Chord::ctrl(Key::Tab), NextDocument);
         add(Chord::ctrl_shift(Key::Tab), PreviousDocument);
+        // W13X-1: Photopea's arrow keys nudge — one pixel, ten with Shift,
+        // and with Alt the Move tool nudges a copy. Every spelling names the
+        // same action; the shell reads the step and the copy off the chord.
+        for (key, direction) in [
+            (Key::ArrowLeft, crate::action::NudgeDirection::Left),
+            (Key::ArrowRight, crate::action::NudgeDirection::Right),
+            (Key::ArrowUp, crate::action::NudgeDirection::Up),
+            (Key::ArrowDown, crate::action::NudgeDirection::Down),
+        ] {
+            for (alt, shift) in [(false, false), (false, true), (true, false), (true, true)] {
+                add(
+                    Chord {
+                        ctrl_or_cmd: false,
+                        alt,
+                        shift,
+                        key,
+                    },
+                    Nudge(direction),
+                );
+            }
+        }
         // Tools: one letter per registry cycle group.
         for key in ToolKey::all() {
             add(Chord::plain(Key::Char(key.char())), SelectTool(key));

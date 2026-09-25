@@ -20,8 +20,9 @@ use super::chrome::{
 use super::controls;
 use crate::strings::tr;
 
-/// The style choices, None first (it clears the warp).
-const STYLES: [WarpStyle; 14] = [
+/// The style choices, None first (it clears the warp). W13X-5: Custom last -
+/// its mesh handles are dragged on the canvas (`app-shell`'s `warp_custom`).
+const STYLES: [WarpStyle; 15] = [
     WarpStyle::None,
     WarpStyle::Arc,
     WarpStyle::ArcLower,
@@ -36,6 +37,7 @@ const STYLES: [WarpStyle; 14] = [
     WarpStyle::Inflate,
     WarpStyle::Squeeze,
     WarpStyle::Twist,
+    WarpStyle::Custom,
 ];
 
 /// Layer ▸ Text ▸ Warp Text….
@@ -107,6 +109,11 @@ impl WarpTextDialog {
             bend: self.bend as f32 / 100.0,
             horizontal: self.horizontal as f32 / 100.0,
             vertical: self.vertical as f32 / 100.0,
+            // W13X-5: Custom keeps the layer's dragged mesh (flat when it has
+            // none yet); the parametric styles carry none.
+            mesh: (self.style == WarpStyle::Custom)
+                .then_some(self.text.warp.mesh)
+                .flatten(),
         }
     }
 
@@ -146,7 +153,12 @@ impl WarpTextDialog {
                 |_| None,
             );
         });
-        let active = self.style != WarpStyle::None;
+        // W13X-5: Custom has no bend: its shape is the mesh on the canvas.
+        let custom = self.style == WarpStyle::Custom;
+        if custom {
+            super::chrome::caption(ui, tr("ui.warp_text.custom_hint"));
+        }
+        let active = self.style != WarpStyle::None && !custom;
         ui.add_enabled_ui(active, |ui| {
             for (key, value) in [
                 ("ui.warp_text.bend", &mut self.bend),
@@ -250,11 +262,38 @@ mod tests {
             bend: 0.25,
             horizontal: 0.0,
             vertical: 0.5,
+            mesh: None,
         };
         let mut dialog = WarpTextDialog::new(LayerId::new(), warped);
         assert!(dialog.confirm().is_none(), "opening on the stored warp");
         assert!(dialog.blocked_reason().is_some());
         dialog.set_style(WarpStyle::None);
         assert_eq!(confirmed_warp(&dialog), TextWarp::default());
+    }
+
+    /// W13X-5: Custom is offered, confirms the Custom style, and keeps the
+    /// mesh already dragged on the canvas; a parametric style drops it.
+    #[test]
+    fn w13x5_custom_is_offered_and_keeps_the_layers_mesh() {
+        assert!(STYLES.contains(&WarpStyle::Custom));
+        let mut mesh = text_engine::warp::FLAT_MESH;
+        mesh[15] = [1.2, 1.4];
+        let mut warped = text();
+        warped.warp = TextWarp {
+            style: WarpStyle::Custom,
+            mesh: Some(mesh),
+            ..TextWarp::default()
+        };
+        let mut dialog = WarpTextDialog::new(LayerId::new(), warped);
+        assert!(dialog.confirm().is_none(), "opening on the stored mesh");
+        dialog.set_style(WarpStyle::Arc);
+        assert_eq!(confirmed_warp(&dialog).mesh, None);
+        dialog.set_style(WarpStyle::Custom);
+        assert!(dialog.confirm().is_none(), "back to the stored mesh");
+        let mut fresh = WarpTextDialog::new(LayerId::new(), text());
+        fresh.set_style(WarpStyle::Custom);
+        let warp = confirmed_warp(&fresh);
+        assert_eq!(warp.style, WarpStyle::Custom);
+        assert_eq!(warp.mesh, None, "a new Custom warp starts flat");
     }
 }

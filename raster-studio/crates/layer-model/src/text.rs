@@ -312,6 +312,10 @@ pub enum WarpStyle {
     Inflate,
     Squeeze,
     Twist,
+    /// W13X-5: a free 4x4 Bezier mesh ([`TextWarp::mesh`]) whose handles are
+    /// dragged on the canvas. Not in [`WarpStyle::ALL`], which lists the
+    /// parametric envelopes a Bend slider drives.
+    Custom,
 }
 
 impl WarpStyle {
@@ -350,6 +354,7 @@ impl WarpStyle {
             WarpStyle::Inflate => "Inflate",
             WarpStyle::Squeeze => "Squeeze",
             WarpStyle::Twist => "Twist",
+            WarpStyle::Custom => "Custom",
         }
     }
 }
@@ -369,6 +374,13 @@ pub struct TextWarp {
     pub horizontal: f32,
     /// Vertical distortion: the top grows wider, the bottom narrower.
     pub vertical: f32,
+    /// W13X-5: the Custom style's 4x4 Bezier control mesh, row by row (top
+    /// row first, left to right), each point as a fraction of the text
+    /// block's line-box bounds (`[0, 0]` its top-left, `[1, 1]` its
+    /// bottom-right). `None` is the flat mesh (a third apart). Skipped when
+    /// `None`, so a layer without one serialises as before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh: Option<[[f32; 2]; 16]>,
 }
 
 impl Default for TextWarp {
@@ -378,6 +390,7 @@ impl Default for TextWarp {
             bend: 0.5,
             horizontal: 0.0,
             vertical: 0.0,
+            mesh: None,
         }
     }
 }
@@ -787,6 +800,12 @@ impl TextLayer {
                 return Err(TextError::NonFiniteWarp { value });
             }
         }
+        // W13X-5: the Custom mesh is geometry too.
+        for value in self.warp.mesh.iter().flatten().flatten() {
+            if !value.is_finite() {
+                return Err(TextError::NonFiniteWarp { value: *value });
+            }
+        }
         if let Some(path) = &self.path {
             if path.points.len() > MAX_TEXT_PATH_POINTS {
                 return Err(TextError::TextPathTooLong {
@@ -1140,6 +1159,7 @@ mod w9k_warp_path_tests {
                 bend: -0.3,
                 horizontal: 0.1,
                 vertical: 0.0,
+                mesh: None,
             },
             path: Some(TextPath {
                 points: vec![[0.0, 0.0], [10.0, 5.0]],
@@ -1157,6 +1177,55 @@ mod w9k_warp_path_tests {
             warp: TextWarp {
                 bend: f32::NAN,
                 ..TextWarp::new(WarpStyle::Flag)
+            },
+            ..plain
+        };
+        assert!(matches!(
+            broken.validate(),
+            Err(TextError::NonFiniteWarp { .. })
+        ));
+    }
+
+    /// W13X-5: the Custom style and its mesh are appended: a warp without a
+    /// mesh writes no `mesh` key (and a stored warp from before reads back
+    /// with none), a Custom mesh round-trips, and a non-finite point is
+    /// refused.
+    #[test]
+    fn a_custom_mesh_is_append_only_serde() {
+        let plain = TextLayer::legacy("Hi", "DejaVu Sans", 24.0);
+        let arc = TextLayer {
+            warp: TextWarp::new(WarpStyle::Arc),
+            ..plain.clone()
+        };
+        let json = serde_json::to_value(&arc).unwrap();
+        assert!(json["warp"].get("mesh").is_none(), "{json}");
+        let old = r#"{"style":"Arc","bend":0.5,"horizontal":0.0,"vertical":0.0}"#;
+        let read: TextWarp = serde_json::from_str(old).unwrap();
+        assert_eq!(read, TextWarp::new(WarpStyle::Arc));
+
+        let mut mesh = [[0.0f32; 2]; 16];
+        for (i, p) in mesh.iter_mut().enumerate() {
+            *p = [(i % 4) as f32 / 3.0, (i / 4) as f32 / 3.0];
+        }
+        mesh[15] = [1.25, 1.5];
+        let custom = TextLayer {
+            warp: TextWarp {
+                mesh: Some(mesh),
+                ..TextWarp::new(WarpStyle::Custom)
+            },
+            ..plain.clone()
+        };
+        assert!(custom.validate().is_ok());
+        let back: TextLayer =
+            serde_json::from_str(&serde_json::to_string(&custom).unwrap()).unwrap();
+        assert_eq!(back, custom);
+        assert_eq!(WarpStyle::Custom.label(), "Custom");
+
+        mesh[3][0] = f32::INFINITY;
+        let broken = TextLayer {
+            warp: TextWarp {
+                mesh: Some(mesh),
+                ..TextWarp::new(WarpStyle::Custom)
             },
             ..plain
         };

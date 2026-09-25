@@ -139,6 +139,29 @@ thread_local! {
     /// W11-H: set with the PSD arming when the canvas is past what a `.psd`
     /// can describe, so that picker offers `.psb` first; consumed with it.
     static PSB_PREFERRED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// W13X-6: a file name a script passed to `app.open` or `saveAs`, for
+    /// the *next* Open or Export picker on this thread; consumed by it.
+    static SUGGESTED_NAME: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// W13X-6: suggest `name` to the next Open or Export picker — the name a
+/// script passed to `app.open(file)` or `doc.saveAs(file)`. Only its last
+/// path component is kept, so a script can prefill the picker's file-name
+/// box but never choose a folder: the user still confirms where the file
+/// comes from or goes. An empty name suggests nothing.
+pub fn suggest_next_file_name(name: &str) {
+    let name = Path::new(name)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| !n.trim().is_empty());
+    SUGGESTED_NAME.with(|slot| *slot.borrow_mut() = name);
+}
+
+/// W13X-6: the name [`suggest_next_file_name`] left for the next picker, if
+/// any; consumed on read, so one suggestion reaches exactly one picker.
+pub fn take_suggested_file_name() -> Option<String> {
+    SUGGESTED_NAME.with(|slot| slot.borrow_mut().take())
 }
 
 /// W11-H: File ▸ Save as PSD… for a `width x height` canvas: arms the next
@@ -191,6 +214,19 @@ impl ExportPickerRequest {
     /// unarmed, it is the plain Export picker, which offers PSD too, last,
     /// because `export_to` writes a layered `.psd` by extension either way.
     pub fn next(suggested: &Path) -> Self {
+        // W13X-6: a script's `saveAs(name)` renames the suggestion, keeping
+        // the document's folder; without an extension of its own the name
+        // keeps the one the document would export as.
+        let renamed = take_suggested_file_name().map(|name| {
+            let mut path = suggested.with_file_name(&name);
+            if Path::new(&name).extension().is_none() {
+                if let Some(ext) = suggested.extension() {
+                    path.set_extension(ext);
+                }
+            }
+            path
+        });
+        let suggested = renamed.as_deref().unwrap_or(suggested);
         let psd = take_psd_save();
         // W11-H: consumed on every picker, used only when armed.
         let psb = PSB_PREFERRED.with(|preferred| preferred.replace(false)) && psd;
@@ -347,6 +383,10 @@ impl FileDialogs for NativeDialogs {
         for (name, extensions) in open_file_filters() {
             dialog = dialog.add_filter(name, &extensions);
         }
+        // W13X-6: a script's `app.open(name)` prefills the file-name box.
+        if let Some(name) = take_suggested_file_name() {
+            dialog = dialog.set_file_name(name);
+        }
         dialog.set_title("Open").pick_file()
     }
 
@@ -498,6 +538,9 @@ pub struct ScriptedDialogs {
     pub place_files: Vec<PathBuf>,
     /// Answers for the picker behind "Replace Contents…" (card 069).
     pub replace_files: Vec<PathBuf>,
+    /// W13X-6: the file name each Open picker was opened with (a script's
+    /// `app.open(name)`), `None` for a plain File ▸ Open.
+    pub open_suggestions: Vec<Option<String>>,
 }
 
 impl ScriptedDialogs {
@@ -555,6 +598,8 @@ impl ScriptedDialogs {
 
 impl FileDialogs for ScriptedDialogs {
     fn pick_open_file(&mut self) -> Option<PathBuf> {
+        // Consumes the suggestion exactly as the native picker does.
+        self.open_suggestions.push(take_suggested_file_name());
         (!self.open_files.is_empty()).then(|| self.open_files.remove(0))
     }
 

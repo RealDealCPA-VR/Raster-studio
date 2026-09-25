@@ -80,3 +80,11 @@ resvg = { version = "0.45", default-features = false, features = ["text", "syste
 hayro = "=0.4.0"
 # The same crate hayro reads with, named for its `LoadPdfError`.
 hayro-syntax = "=0.4.0"
+# W13X-8: a Figma `.fig` canvas (fig-kiwi) compresses its chunks with
+# Zstandard in newer files (raw DEFLATE in older ones, through flate2).
+# ruzstd is a pure-Rust Zstandard *decoder*, MIT. Default features off: no
+# `hash` (twox-hash, frame checksums are not verified) and no dict builder,
+# so it brings no dependency of its own. Output is read through a capped
+# reader (`src/formats/design_fig.rs`). Recorded in
+# LICENSES/THIRD_PARTY_NOTICES.md.
+ruzstd = { version = "0.9", default-features = false, features = ["std"] }

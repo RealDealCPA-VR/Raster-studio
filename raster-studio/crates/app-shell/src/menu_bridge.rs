@@ -361,10 +361,8 @@ pub fn pick(intent: &Intent, editor: &Editor) -> Option<Pick> {
         Intent::Action(action) => shell_action(*action, editor),
         Intent::SetTheme(theme) => {
             let mut prefs = editor.preferences().clone();
-            prefs.theme = match theme {
-                design::Theme::Light => ThemeChoice::Light,
-                design::Theme::Dark => ThemeChoice::Dark,
-            };
+            // W13X-4: any of Photopea's themes, pinned.
+            prefs.theme = ThemeChoice::from(*theme);
             Some(Pick::Preferences(Box::new(prefs)))
         }
         Intent::SelectTool(tool) => Some(Pick::Tool(*tool)),
@@ -2404,6 +2402,10 @@ pub(crate) fn run_filter_invocation(
     editor: &mut Editor,
     invocation: &ui::dialogs::FilterInvocation,
 ) -> Result<String, String> {
+    // W13X-5: Flame burns along the current path, or refuses without one
+    // with Photopea's "Make a path first".
+    let with_path = crate::flame_route::with_active_path(invocation)?;
+    let invocation: &ui::dialogs::FilterInvocation = &with_path;
     let spec = invocation.filter;
     let label = spec.name();
     // W7-E: over a smart object the filter joins its smart-filter stack; the
@@ -2473,6 +2475,11 @@ pub(crate) fn run_smart_filter(
     for (key, value) in &filter.params {
         params.set(key, dialog_param(*value));
     }
+    // W13X-5: a Flame renders along the path it was made with; one stored
+    // without a path renders nothing (a pass-through).
+    if crate::flame_route::is_flame(id) {
+        params = params.with_path(crate::flame_route::decode_stored(&filter.params)?);
+    }
     Some((spec.apply)(src, &params))
 }
 
@@ -2515,7 +2522,7 @@ fn smart_param(value: ui::dialogs::ParamValue) -> layer_model::SmartParam {
 /// The smart filter a confirmed dialog describes: its filter's key and every
 /// parameter the schema names.
 fn smart_filter_of(invocation: &ui::dialogs::FilterInvocation) -> layer_model::SmartFilter {
-    let params = invocation
+    let mut params: std::collections::BTreeMap<String, layer_model::SmartParam> = invocation
         .filter
         .params
         .iter()
@@ -2526,6 +2533,10 @@ fn smart_filter_of(invocation: &ui::dialogs::FilterInvocation) -> layer_model::S
                 .map(|v| (o.key.to_string(), smart_param(v)))
         })
         .collect();
+    // W13X-5: a Flame keeps the path it burns along.
+    if let Some(path) = invocation.params.path() {
+        params.extend(crate::flame_route::encode(path));
+    }
     layer_model::SmartFilter::new(filter_key(invocation.filter.id), params)
 }
 
@@ -6359,6 +6370,15 @@ mod tests {
                 continue;
             }
             let mut ed = opened(dir.path());
+            // W13X-5: with no path Flame answers Photopea's refusal;
+            // `flame_route`'s tests burn along a Paths-panel path.
+            if *id == ui::menu::FilterId::Flame {
+                assert_eq!(
+                    invoke(&mut ed, MenuAction::Filter(*id)),
+                    Err(crate::flame_route::NO_PATH.to_string())
+                );
+                continue;
+            }
             match invoke(&mut ed, MenuAction::Filter(*id)) {
                 Ok(true) => {}
                 Ok(false) => dead.push(format!("{}: changed nothing", id.label())),
@@ -10157,6 +10177,10 @@ mod tests {
                 // the_window_edits_the_document_as_one_undo_step` drives.
                 || action == MenuAction::Script
                 || matches!(action, MenuAction::Purge(_))
+                // W13X-5: the fixture has no path, so Flame refuses loudly
+                // with Photopea's "Make a path first"; `flame_route::tests`
+                // burns along a Paths-panel path through the menu.
+                || action == MenuAction::Filter(ui::menu::FilterId::Flame)
             {
                 match perform(action, &mut ed) {
                     Ok(_) | Err(_) => checked += 1,
@@ -10301,6 +10325,8 @@ mod tests {
             // pixel for a matte to be in.
             MenuAction::Matting(ui::menu::MattingOp::RemoveBlackMatte),
             MenuAction::Matting(ui::menu::MattingOp::RemoveWhiteMatte),
+            // W13X-5: nor any path, so Flame says "Make a path first".
+            MenuAction::Filter(ui::menu::FilterId::Flame),
         ];
 
         let mut broken = Vec::new();
@@ -10428,13 +10454,15 @@ mod tests {
                 .map(MenuAction::Filter),
             );
             // W13-J: the rest of Photopea's Filter menu, the one-click
-            // Fourier rows included.
+            // Fourier rows included. W13X-5: not Flame, which asks only over
+            // a path (this fixture has none, so it refuses, above);
+            // `w13j_every_new_row_opens_its_dialog_from_the_menu_bar` opens
+            // it over one.
             asked.extend(
                 [
                     F::Kaleidoscope,
                     F::Dents,
                     F::ShapeMosaic,
-                    F::Flame,
                     F::Repeat,
                     F::ColorToAlpha,
                     F::Dither,
@@ -11096,16 +11124,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut ed = editor(dir.path());
         let context = context(&mut ed, &Workspace::new());
-        let other = match context.theme {
-            design::Theme::Dark => design::Theme::Light,
-            design::Theme::Light => design::Theme::Dark,
-        };
+        let other = context.theme.toggled();
         match resolve(MenuAction::SetTheme(other), &context, &ed) {
             Ok(Pick::Preferences(prefs)) => assert_eq!(
                 prefs.theme,
                 match other {
                     design::Theme::Light => ThemeChoice::Light,
                     design::Theme::Dark => ThemeChoice::Dark,
+                    theme => panic!("toggled to {theme:?}"),
                 }
             ),
             got => panic!("appearance resolved to {got:?}"),
@@ -12910,6 +12936,10 @@ mod tests {
         fn w13j_filters_open_from_the_menu_and_land_as_one_step_or_a_smart_filter() {
             for id in W13J {
                 let open = |ed: &mut Editor| -> ui::dialogs::FilterInvocation {
+                    // W13X-5: Flame burns along the current path.
+                    if id == ui::menu::FilterId::Flame {
+                        set_current_vector_path(Some("M4 24 L44 24".to_string()));
+                    }
                     let mut host = crate::dialog_host::DialogHost::default();
                     assert!(
                         host.open_for_menu_action(&MenuAction::Filter(id), ed),
@@ -13001,6 +13031,10 @@ mod tests {
                     let _ = chrome.ui(ctx, &mut ed);
                 });
                 let menu_ctx = context(&mut ed, chrome.workspace());
+                // W13X-5: Flame opens its dialog over a current path.
+                if id == ui::menu::FilterId::Flame {
+                    set_current_vector_path(Some("M4 24 L44 24".to_string()));
+                }
                 let action = MenuAction::Filter(id);
                 let intent = resolve_intent(action, &menu_ctx, &ed)
                     .unwrap_or_else(|reason| panic!("{id:?} is greyed: {reason}"));

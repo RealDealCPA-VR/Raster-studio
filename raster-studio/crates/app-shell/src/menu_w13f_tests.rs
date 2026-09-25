@@ -997,3 +997,306 @@ fn pattern_preview_tiles_the_canvas_around_itself_and_unticks() {
         .get(ui::ViewFlag::PatternPreview));
     assert!(meshes_with(&shapes, texture).is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// W13X-2: the canvas is colour-managed, and Pattern Preview draws its bytes
+// ---------------------------------------------------------------------------
+
+/// What the canvas texture receives for the whole document: the presenter's
+/// own upload path ([`crate::presenter::CanvasPresenter::composite_masked`],
+/// which `sync` runs for every full and per-tile upload).
+fn presented(presenter: &crate::presenter::CanvasPresenter, ed: &mut Editor) -> Vec<u8> {
+    let doc = ed.active_mut().unwrap();
+    let rect = doc.canvas_rect();
+    presenter.composite_masked(doc, rect).unwrap()
+}
+
+/// The largest per-channel difference between two RGBA8 buffers.
+fn worst(a: &[u8], b: &[u8]) -> i32 {
+    assert_eq!(a.len(), b.len());
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| (i32::from(*x) - i32::from(*y)).abs())
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn the_canvas_shows_the_documents_profile_assign_changes_it_and_convert_keeps_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (w, h) = (24u32, 20u32);
+    let mut ed = opened(dir.path(), w, h, &card(w, h));
+    let mut presenter = crate::presenter::CanvasPresenter::new();
+    assert!(presenter.follow_display_space(ed.active().unwrap()));
+    assert!(!presenter.follow_display_space(ed.active().unwrap()));
+
+    // sRGB: the texture receives the composite as it is.
+    let layer = active_pixels(&ed);
+    let numbers = composite(&mut ed);
+    let srgb_shown = presented(&presenter, &mut ed);
+    assert_eq!(srgb_shown, numbers);
+
+    // Assign Adobe RGB: not one number moves, the screen does.
+    click(
+        &mut ed,
+        "Edit",
+        MenuAction::AssignProfile(ProfileChoice::AdobeRgb),
+    )
+    .unwrap();
+    assert_eq!(active_pixels(&ed), layer, "Assign changes no number");
+    assert!(
+        presenter.follow_display_space(ed.active().unwrap()),
+        "a new tag re-sends the whole canvas (it dirties no tile)"
+    );
+    // The composite, encoded in the new profile (the same numbers to the
+    // compositor's linear round trip).
+    let numbers = composite(&mut ed);
+    let adobe_shown = presented(&presenter, &mut ed);
+    assert!(
+        worst(&adobe_shown, &srgb_shown) > 20,
+        "Assign must change what the canvas shows"
+    );
+    // Each presented pixel is its Adobe RGB numbers decoded and written as
+    // sRGB, clipped: the nearest code of the exact float transform.
+    let adobe = SpaceTransform::new(&tag(&ed)).unwrap();
+    let srgb = SpaceTransform::new(&ColorSpace::Srgb).unwrap();
+    for (n, s) in numbers
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(adobe_shown.as_chunks::<4>().0)
+    {
+        let ideal = srgb.convert(&adobe, [n[0], n[1], n[2]].map(|c| f32::from(c) / 255.0));
+        for c in 0..3 {
+            let miss = (ideal[c] * 255.0 - f32::from(s[c])).abs();
+            assert!(miss <= 0.5 + 0.05, "{n:?} shows {s:?}, ideal {ideal:?}");
+        }
+        assert_eq!(n[3], s[3], "alpha untouched");
+    }
+
+    // Convert the Adobe RGB document to sRGB: the numbers move and the
+    // screen keeps every pixel (the new sRGB numbers are the nearest codes of
+    // what the canvas showed; clipped colours clip the same way).
+    through_dialog(
+        &mut ed,
+        "Edit",
+        MenuAction::ConvertToProfile,
+        convert_spec(ProfileChoice::Srgb, RenderingIntent::RelativeColorimetric),
+    )
+    .unwrap();
+    assert_eq!(tag(&ed), ColorSpace::Srgb);
+    assert_ne!(active_pixels(&ed), layer, "Convert changes the numbers");
+    assert!(presenter.follow_display_space(ed.active().unwrap()));
+    let moved = worst(&presented(&presenter, &mut ed), &adobe_shown);
+    assert!(
+        moved <= 2,
+        "Convert to sRGB moved the screen by {moved} codes"
+    );
+
+    // Undo twice: the sRGB tag and the first picture are back.
+    ed.dispatch(Action::Undo).unwrap();
+    ed.dispatch(Action::Undo).unwrap();
+    assert_eq!(tag(&ed), ColorSpace::Srgb);
+    assert_eq!(active_pixels(&ed), layer);
+    assert!(
+        !presenter.follow_display_space(ed.active().unwrap()),
+        "sRGB again, as after the Convert: nothing to re-send for the tag"
+    );
+    assert_eq!(presented(&presenter, &mut ed), srgb_shown);
+
+    // Convert sRGB to Adobe RGB: sRGB fits inside Adobe RGB, so the screen
+    // keeps its colours to the 8-bit rounding of the new numbers: within 2
+    // codes, except where one Adobe RGB code spans more sRGB codes than
+    // that (an sRGB channel low in its steep toe beside a strong other
+    // channel, e.g. red 12 beside green 229). Each pixel is held to its own
+    // bound: the farthest the screen moves when each new number rounds by
+    // half a code, plus the display's own rounding.
+    through_dialog(
+        &mut ed,
+        "Edit",
+        MenuAction::ConvertToProfile,
+        convert_spec(
+            ProfileChoice::AdobeRgb,
+            RenderingIntent::RelativeColorimetric,
+        ),
+    )
+    .unwrap();
+    let adobe = SpaceTransform::new(&tag(&ed)).unwrap();
+    assert!(presenter.follow_display_space(ed.active().unwrap()));
+    let converted_shown = presented(&presenter, &mut ed);
+    let (mut within_two, mut channels) = (0usize, 0usize);
+    for (after, before) in converted_shown
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(srgb_shown.as_chunks::<4>().0)
+    {
+        let old = [before[0], before[1], before[2]].map(|c| f32::from(c) / 255.0);
+        let exact = adobe.convert(&srgb, old).map(|v| v * 255.0);
+        let mut bound = [0.0f32; 3];
+        for corner in 0..8 {
+            let mut a = exact;
+            for (k, v) in a.iter_mut().enumerate() {
+                let dir = if corner & (1 << k) == 0 { -0.5 } else { 0.5 };
+                *v = (*v + dir).clamp(0.0, 255.0) / 255.0;
+            }
+            let shown = srgb.convert(&adobe, a);
+            for c in 0..3 {
+                bound[c] = bound[c].max((shown[c] * 255.0 - f32::from(before[c])).abs());
+            }
+        }
+        for c in 0..3 {
+            channels += 1;
+            let moved = (i32::from(after[c]) - i32::from(before[c])).abs();
+            assert!(
+                moved as f32 <= (bound[c] + 1.0).max(2.0),
+                "{before:?} now shows {after:?} (bound {bound:?})"
+            );
+            within_two += usize::from(moved <= 2);
+        }
+    }
+    assert!(
+        within_two * 100 >= channels * 97,
+        "{within_two} of {channels} channels within 2 codes"
+    );
+}
+
+#[test]
+fn pattern_preview_on_an_adobe_rgb_document_draws_the_canvas_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (w, h) = (32u32, 24u32);
+    let mut ed = opened(dir.path(), w, h, &card(w, h));
+    click(
+        &mut ed,
+        "Edit",
+        MenuAction::AssignProfile(ProfileChoice::AdobeRgb),
+    )
+    .unwrap();
+    {
+        let doc = ed.active_mut().unwrap();
+        doc.set_viewport(glam::Vec2::new(1400.0, 900.0));
+        doc.camera.zoom = 2.0;
+        doc.camera.center = glam::Vec2::new(w as f32 / 2.0, h as f32 / 2.0);
+    }
+    let ctx = chrome_ctx();
+    let mut chrome = Chrome::new();
+    chrome_frame(&ctx, &mut chrome, &mut ed, Vec::new());
+    let pattern = MenuAction::ToggleView(ui::ViewFlag::PatternPreview);
+    let menu_ctx = crate::menu_bridge::context(&mut ed, chrome.workspace());
+    let intent = crate::menu_bridge::resolve_intent(pattern, &menu_ctx, &ed).unwrap();
+    chrome.emit(intent);
+    chrome_frame(&ctx, &mut chrome, &mut ed, Vec::new());
+    chrome_frame(&ctx, &mut chrome, &mut ed, Vec::new());
+    let image = pattern_preview_image(&ctx).expect("built once ticked");
+    assert_eq!(image.size, [w as usize, h as usize]);
+    let copy: Vec<u8> = image
+        .pixels
+        .iter()
+        .flat_map(|p| p.to_srgba_unmultiplied())
+        .collect();
+
+    let mut presenter = crate::presenter::CanvasPresenter::new();
+    presenter.follow_display_space(ed.active().unwrap());
+    let canvas = presented(&presenter, &mut ed);
+    // Every tile edge: where a copy's column/row meets the canvas's opposite
+    // one, both sides are the canvas texture's own bytes.
+    let at = |buf: &[u8], x: u32, y: u32| {
+        let i = ((y * w + x) * 4) as usize;
+        [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+    };
+    for y in 0..h {
+        for x in [0, w - 1] {
+            assert_eq!(at(&copy, x, y), at(&canvas, x, y), "column {x}, row {y}");
+        }
+    }
+    for x in 0..w {
+        for y in [0, h - 1] {
+            assert_eq!(at(&copy, x, y), at(&canvas, x, y), "row {y}, column {x}");
+        }
+    }
+    assert_eq!(copy, canvas, "the whole copy is the canvas texture's bytes");
+    assert_ne!(
+        canvas,
+        composite(&mut ed),
+        "an Adobe RGB document's numbers are not what the screen shows"
+    );
+
+    // The GPU texture the canvas samples, where an adapter exists.
+    let gpu = match render::GpuContext::headless_blocking() {
+        Ok(gpu) => gpu,
+        Err(e) => {
+            eprintln!("SKIP GPU half: no adapter ({e:#})");
+            return;
+        }
+    };
+    let mut presenter = crate::presenter::CanvasPresenter::new();
+    presenter.sync(&gpu, ed.active_mut().unwrap()).unwrap();
+    let back = presenter.texture().unwrap().read_level(&gpu, 0).unwrap();
+    assert_eq!(
+        back.as_rgba8(),
+        &copy[..],
+        "the texture holds the copy's bytes"
+    );
+
+    // Assign sRGB: the live presenter re-sends the whole canvas without a
+    // dirty tile, and the texture now holds the numbers themselves.
+    click(
+        &mut ed,
+        "Edit",
+        MenuAction::AssignProfile(ProfileChoice::Srgb),
+    )
+    .unwrap();
+    ed.active_mut().unwrap().take_dirty();
+    let report = presenter.sync(&gpu, ed.active_mut().unwrap()).unwrap();
+    assert_eq!(report.full_uploads, 1, "{report:?}");
+    let back = presenter.texture().unwrap().read_level(&gpu, 0).unwrap();
+    assert_eq!(back.as_rgba8(), &composite(&mut ed)[..]);
+}
+
+#[test]
+fn a_profile_the_engine_cannot_transform_shows_the_numbers_on_canvas_and_in_pattern_preview() {
+    let dir = tempfile::tempdir().unwrap();
+    let (w, h) = (32u32, 24u32);
+    let mut ed = opened(dir.path(), w, h, &card(w, h));
+    // An ICC tag kept on import (PNG/JPEG/PSD) whose bytes are not a
+    // matrix-shaper profile: LUT, Lab-PCS, gray or unparseable alike.
+    let unsupported = ColorSpace::IccProfile {
+        asset_hash: "not-a-matrix-shaper".into(),
+        profile: vec![0u8; 200],
+    };
+    assert!(!unsupported.is_transform_supported());
+    {
+        let doc = ed.active_mut().unwrap();
+        doc.document.meta.color_space = unsupported.clone();
+        doc.set_viewport(glam::Vec2::new(1400.0, 900.0));
+        doc.camera.zoom = 2.0;
+        doc.camera.center = glam::Vec2::new(w as f32 / 2.0, h as f32 / 2.0);
+    }
+    assert_eq!(tag(&ed), unsupported);
+
+    // The canvas: the numbers as they are, not washed out by treating the
+    // encoded numbers as linear light.
+    let mut presenter = crate::presenter::CanvasPresenter::new();
+    assert!(presenter.follow_display_space(ed.active().unwrap()));
+    let numbers = composite(&mut ed);
+    let canvas = presented(&presenter, &mut ed);
+    assert_eq!(worst(&canvas, &numbers), 0, "the canvas shows the numbers");
+
+    // Pattern Preview: the same bytes at every tile edge and everywhere.
+    let ctx = chrome_ctx();
+    let mut chrome = Chrome::new();
+    chrome_frame(&ctx, &mut chrome, &mut ed, Vec::new());
+    let pattern = MenuAction::ToggleView(ui::ViewFlag::PatternPreview);
+    let menu_ctx = crate::menu_bridge::context(&mut ed, chrome.workspace());
+    let intent = crate::menu_bridge::resolve_intent(pattern, &menu_ctx, &ed).unwrap();
+    chrome.emit(intent);
+    chrome_frame(&ctx, &mut chrome, &mut ed, Vec::new());
+    chrome_frame(&ctx, &mut chrome, &mut ed, Vec::new());
+    let image = pattern_preview_image(&ctx).expect("built once ticked");
+    let copy: Vec<u8> = image
+        .pixels
+        .iter()
+        .flat_map(|p| p.to_srgba_unmultiplied())
+        .collect();
+    assert_eq!(copy, canvas, "Pattern Preview draws the canvas bytes");
+}

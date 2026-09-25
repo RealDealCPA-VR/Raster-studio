@@ -1,7 +1,7 @@
-//! W13-J: Filter ▸ Render ▸ Flame and Filter ▸ Other ▸ Particles.
+//! W13-J: Filter ▸ Other ▸ Particles.
 //!
-//! Both render light *onto* the layer and **screen** it over the pixels, so
-//! they only ever brighten, and alpha rises to at least the rendered coverage.
+//! It renders light *onto* the layer and **screens** it over the pixels, so
+//! it only ever brightens, and alpha rises to at least the rendered coverage.
 //! The same settings always render the same picture.
 //!
 //! **Particles** is Photopea's renderer, ported from its code with its
@@ -10,163 +10,13 @@
 //! and its own random generator, so a seed scatters the particles where
 //! Photopea's does.
 //!
-//! **Flame is not Photopea's.** Photopea's Flame draws only along the active
-//! path — its code stops with "Make a path first" when there is none — and has
-//! eighteen controls (Type, one of six along-path modes, Length, Randomize
-//! Length, Width, Angle, Interval, Adapt Interval for Loops, Quality, Color,
-//! Turbulent, Jag, Opacity, Lines, Bottom, Style, Shape, Randomize Shape,
-//! Random Seed). The filter pipeline hands a filter pixels and parameters and
-//! no path, so this Flame renders seeded flames at random points in the lower
-//! half of the layer, with this build's own five controls, drawn from a
-//! sequential [`Rng`] before any pixel is touched.
+//! **Flame** lives in [`crate::flame`] (W13X-5): it draws along the active
+//! path with Photopea's controls, and refuses without one.
 
 use color::{linear_to_srgb, premultiply, srgb_to_linear, unpremultiply};
-use serde::{Deserialize, Serialize};
 
 use crate::buffer::FilterBuffer;
-use crate::rng::{Perlin, Rng};
 use crate::support::fill_tiles;
-
-/// Most flames [`flame`] renders.
-pub const MAX_FLAMES: u32 = 64;
-
-/// A flame's colour scheme.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum FlameKind {
-    /// Red at the edges through orange and yellow to a white core.
-    Natural,
-    /// A gas flame: deep blue through cyan to white.
-    Blue,
-}
-
-impl FlameKind {
-    pub const ALL: [FlameKind; 2] = [FlameKind::Natural, FlameKind::Blue];
-
-    /// Linear colour of heat `t` in `[0, 1]`.
-    fn color(self, t: f32) -> [f32; 3] {
-        let t = t.clamp(0.0, 1.0);
-        let stops: &[[f32; 3]] = match self {
-            FlameKind::Natural => &[
-                [0.0, 0.0, 0.0],
-                [0.6, 0.03, 0.0],
-                [1.0, 0.25, 0.0],
-                [1.0, 0.7, 0.1],
-                [1.0, 1.0, 0.8],
-            ],
-            FlameKind::Blue => &[
-                [0.0, 0.0, 0.0],
-                [0.0, 0.02, 0.5],
-                [0.05, 0.3, 1.0],
-                [0.4, 0.8, 1.0],
-                [0.9, 1.0, 1.0],
-            ],
-        };
-        let f = t * (stops.len() - 1) as f32;
-        let i = (f.floor() as usize).min(stops.len() - 2);
-        let k = f - i as f32;
-        [0, 1, 2].map(|c| stops[i][c] + (stops[i + 1][c] - stops[i][c]) * k)
-    }
-}
-
-/// Screen `light` (straight linear colour) at coverage `a` over a
-/// premultiplied pixel.
-fn screen(px: [f32; 4], light: [f32; 3], a: f32) -> [f32; 4] {
-    let a = a.clamp(0.0, 1.0);
-    let mut out = px;
-    for c in 0..3 {
-        let l = light[c] * a;
-        out[c] = 1.0 - (1.0 - px[c].clamp(0.0, 1.0)) * (1.0 - l.clamp(0.0, 1.0));
-    }
-    out[3] = px[3].max(a);
-    // Keep the result a valid premultiplied pixel.
-    for c in 0..3 {
-        out[c] = out[c].min(out[3]);
-    }
-    out
-}
-
-/// Stamp a soft disc of `value` at (`cx`, `cy`) into `plane`, keeping the
-/// maximum. The profile is `(1 - (d/r)^2)^2`, zero at the rim.
-fn stamp_max(plane: &mut [f32], w: u32, h: u32, cx: f32, cy: f32, r: f32, value: f32) {
-    let r = r.max(0.5);
-    let x0 = ((cx - r).floor().max(0.0)) as u32;
-    let y0 = ((cy - r).floor().max(0.0)) as u32;
-    let x1 = ((cx + r).ceil().max(0.0) as u32).min(w);
-    let y1 = ((cy + r).ceil().max(0.0) as u32).min(h);
-    for y in y0..y1 {
-        for x in x0..x1 {
-            let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
-            let q = (dx * dx + dy * dy) / (r * r);
-            if q < 1.0 {
-                let v = value * (1.0 - q) * (1.0 - q);
-                let i = (y * w + x) as usize;
-                if v > plane[i] {
-                    plane[i] = v;
-                }
-            }
-        }
-    }
-}
-
-/// Flame: render `count` flames rising from random points in the lower half
-/// of the layer.
-///
-/// Each flame is `length` pixels tall and `width` pixels wide at its base,
-/// tapering to a point, and sways sideways along a Perlin curve. Its heat is
-/// hottest along the core and at the base; [`FlameKind`] colours the heat.
-/// `count` is clamped to `1 ..= MAX_FLAMES`.
-pub fn flame(
-    src: &FilterBuffer,
-    count: u32,
-    length: f32,
-    width: f32,
-    kind: FlameKind,
-    seed: u64,
-) -> FilterBuffer {
-    if src.is_empty() {
-        return src.clone();
-    }
-    let (w, h) = src.dimensions();
-    let length = if length.is_finite() {
-        length.clamp(2.0, 4096.0)
-    } else {
-        2.0
-    };
-    let width = if width.is_finite() {
-        width.clamp(1.0, 1024.0)
-    } else {
-        1.0
-    };
-    let mut rng = Rng::new(seed ^ 0xF1A3_E5ED);
-    let sway = Perlin::new(seed);
-    let mut heat = vec![0.0f32; (w as usize) * (h as usize)];
-    for i in 0..count.clamp(1, MAX_FLAMES) {
-        let bx = rng.next_f32() * w as f32;
-        let by = h as f32 * (0.5 + 0.5 * rng.next_f32());
-        let len = length * (0.7 + 0.6 * rng.next_f32());
-        let lean = rng.next_signed() * 0.25;
-        let steps = (len.ceil() as u32).max(2);
-        for s in 0..=steps {
-            let t = s as f32 / steps as f32;
-            let wobble = sway.fbm(i as f32 * 7.31, t * 2.5, 2, 0.5) * width * 1.2 * t;
-            let x = bx + wobble + lean * len * t;
-            let y = by - len * t;
-            let r = 0.5 * width * (1.0 - t).powf(0.7) + 0.5;
-            let v = (1.0 - t).powf(0.6);
-            stamp_max(&mut heat, w, h, x, y, r, v);
-        }
-    }
-    let mut out = src.same_size_blank();
-    fill_tiles(w, h, out.pixels_mut(), |x, y| {
-        let t = heat[(y * w + x) as usize];
-        let px = src.get(x, y);
-        if t <= 0.0 {
-            return px;
-        }
-        screen(px, kind.color(t), t.sqrt().min(1.0))
-    });
-    out
-}
 
 /// Photopea's own random generator for Particles (a pair of
 /// multiply-with-carry sequences), reproduced bit for bit so a seed places the
@@ -439,33 +289,6 @@ mod tests {
 
     fn black(w: u32, h: u32) -> FilterBuffer {
         FilterBuffer::filled(w, h, [0.0, 0.0, 0.0, 1.0]).unwrap()
-    }
-
-    #[test]
-    fn a_flame_is_seeded_brightens_only_and_rises_from_the_lower_half() {
-        let src = black(64, 64);
-        let a = flame(&src, 3, 30.0, 10.0, FlameKind::Natural, 5);
-        assert_eq!(a, flame(&src, 3, 30.0, 10.0, FlameKind::Natural, 5));
-        assert_ne!(a, flame(&src, 3, 30.0, 10.0, FlameKind::Natural, 6));
-        assert_ne!(a, flame(&src, 3, 30.0, 10.0, FlameKind::Blue, 5));
-        // Only brightens.
-        let lit = a.pixels().iter().filter(|p| p[0] > 0.0).count();
-        assert!(lit > 50, "only {lit} pixels lit");
-        // A natural flame is warm: red never below green or blue.
-        assert!(a
-            .pixels()
-            .iter()
-            .all(|p| p[0] + 1e-6 >= p[1] && p[1] + 1e-6 >= p[2]));
-        // Flames rise from the lower half: with bases at y >= 32, lengths of
-        // at most 1.3 * 10 = 13 and a base radius of 5.5, rows above y = 13
-        // are never touched.
-        let short = flame(&src, 8, 10.0, 10.0, FlameKind::Natural, 5);
-        assert_ne!(short, src);
-        for y in 0..13u32 {
-            for x in 0..64 {
-                assert_eq!(short.get(x, y), src.get(x, y), "({x}, {y})");
-            }
-        }
     }
 
     #[test]

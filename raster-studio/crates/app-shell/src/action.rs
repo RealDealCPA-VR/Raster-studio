@@ -155,6 +155,51 @@ pub enum Action {
     // ---- Window ----
     NextDocument,
     PreviousDocument,
+    // ---- W13X-1: arrow-key nudge ----
+    /// Photopea's arrow keys: with the Move tool the active layer(s) (or the
+    /// selected pixels) move one pixel that way, with a selection tool the
+    /// selection outline does. The shell reads Shift (ten pixels) and Alt
+    /// (move a copy) off the pressed chord (`crate::tool_input::ToolPointer`'s
+    /// `nudge`); dispatched on its own it is the plain one-pixel nudge.
+    Nudge(NudgeDirection),
+}
+
+/// W13X-1: which way an arrow key nudges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum NudgeDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl NudgeDirection {
+    /// Every direction, in the order the catalogue lists them.
+    pub const ALL: [NudgeDirection; 4] = [
+        NudgeDirection::Left,
+        NudgeDirection::Right,
+        NudgeDirection::Up,
+        NudgeDirection::Down,
+    ];
+
+    /// The one-pixel step this direction names, in document pixels (y down).
+    pub const fn unit(self) -> (i32, i32) {
+        match self {
+            NudgeDirection::Left => (-1, 0),
+            NudgeDirection::Right => (1, 0),
+            NudgeDirection::Up => (0, -1),
+            NudgeDirection::Down => (0, 1),
+        }
+    }
+
+    const fn id(self) -> &'static str {
+        match self {
+            NudgeDirection::Left => "left",
+            NudgeDirection::Right => "right",
+            NudgeDirection::Up => "up",
+            NudgeDirection::Down => "down",
+        }
+    }
 }
 
 /// The fixed part of the catalogue — every variant that carries no payload.
@@ -195,6 +240,11 @@ const FIXED: &[Action] = &[
     Action::ResetColors,
     Action::NextDocument,
     Action::PreviousDocument,
+    // W13X-1
+    Action::Nudge(NudgeDirection::Left),
+    Action::Nudge(NudgeDirection::Right),
+    Action::Nudge(NudgeDirection::Up),
+    Action::Nudge(NudgeDirection::Down),
 ];
 
 impl Action {
@@ -249,6 +299,7 @@ impl Action {
             Action::ResetColors => "reset-colors".into(),
             Action::NextDocument => "next-document".into(),
             Action::PreviousDocument => "previous-document".into(),
+            Action::Nudge(d) => format!("nudge-{}", d.id()),
         }
     }
 
@@ -302,6 +353,7 @@ impl Action {
             | Action::SwapColors
             | Action::ResetColors => Category::Tool,
             Action::NextDocument | Action::PreviousDocument => Category::Window,
+            Action::Nudge(_) => Category::Tool,
         }
     }
 
@@ -350,6 +402,10 @@ impl Action {
             Action::ResetColors => "Default Colours".into(),
             Action::NextDocument => "Next Document".into(),
             Action::PreviousDocument => "Previous Document".into(),
+            Action::Nudge(NudgeDirection::Left) => "Nudge Left".into(),
+            Action::Nudge(NudgeDirection::Right) => "Nudge Right".into(),
+            Action::Nudge(NudgeDirection::Up) => "Nudge Up".into(),
+            Action::Nudge(NudgeDirection::Down) => "Nudge Down".into(),
         }
     }
 }

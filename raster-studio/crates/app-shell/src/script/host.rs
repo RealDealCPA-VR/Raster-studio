@@ -20,8 +20,12 @@
 //!
 //! Nothing here reads or writes a path the script names. `app.open` runs
 //! File ▸ Open (the platform picker) and `saveAs` runs File ▸ Export (the
-//! platform save picker, opened at the document's own export name). A name
-//! the script passes is only written to the log; it never reaches a picker.
+//! platform save picker, opened in the document's own export folder). W13X-6:
+//! a name the script passes is suggested to that picker as its file name
+//! (`dialogs::suggest_next_file_name`, which keeps only the last path
+//! component), so the picker opens prefilled, as Photopea's does; the user
+//! still confirms or changes it, and no folder of the script's choosing is
+//! ever used.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -329,11 +333,16 @@ impl<'a> Host<'a> {
                     self.log.push(ScriptLogLine {
                         kind: ScriptLogKind::Info,
                         text: format!(
-                            "saveAs(\"{name}\"): the save picker chooses where the file goes"
+                            "saveAs(\"{name}\"): the save picker opens with that name and chooses where the file goes"
                         ),
                     });
+                    crate::dialogs::suggest_next_file_name(name);
                 }
-                match self.editor.dispatch(Action::Export) {
+                let result = self.editor.dispatch(Action::Export);
+                // A refusal before the picker opened must not leave the name
+                // for a later, user-started picker.
+                let _ = crate::dialogs::take_suggested_file_name();
+                match result {
                     Ok(_) => Ok(json!(self.editor.status().unwrap_or("Exported"))),
                     Err(crate::editor::ActionError::Cancelled(_)) => Ok(Value::Null),
                     Err(e) => Err(e.to_string()),
@@ -704,11 +713,17 @@ impl<'a> Host<'a> {
         if let Some(name) = suggested {
             self.log.push(ScriptLogLine {
                 kind: ScriptLogKind::Info,
-                text: format!("app.open(\"{name}\"): the file picker chooses what opens"),
+                text: format!(
+                    "app.open(\"{name}\"): the file picker opens with that name and chooses what opens"
+                ),
             });
+            crate::dialogs::suggest_next_file_name(name);
         }
         let before: Vec<DocumentId> = self.editor.documents().iter().map(|d| d.id()).collect();
-        match self.editor.dispatch(Action::Open) {
+        let result = self.editor.dispatch(Action::Open);
+        // Never left for a later, user-started picker.
+        let _ = crate::dialogs::take_suggested_file_name();
+        match result {
             Ok(_) => {}
             Err(crate::editor::ActionError::Cancelled(_)) => return Ok(Value::Null),
             Err(e) => return Err(e.to_string()),

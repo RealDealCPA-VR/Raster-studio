@@ -18,7 +18,11 @@
 //!   Photoshop style set ([`WarpStyle`]). `bend` scales the envelope; the
 //!   horizontal and vertical distortions are applied first as a simple
 //!   perspective-like taper. The Arc style is a true circular arc: glyph
-//!   centres land on a circle, rotated to its tangent.
+//!   centres land on a circle, rotated to its tangent. W13X-5: the Custom
+//!   style is a bicubic Bezier patch over a 4x4 control mesh
+//!   ([`TextWarp::mesh`], fractions of the bounds) whose handles the canvas
+//!   drags ([`mesh_handles`], [`with_mesh_handle`]); bend and the
+//!   distortions do not apply to it.
 //! * A **path** is a polyline in layer space. A point `s` pixels right of the
 //!   block's left edge and `d` pixels above the first baseline maps to the
 //!   point `start + s` along the path, `d` pixels out along its left normal.
@@ -89,6 +93,7 @@ impl Distortion {
             bend: clamp(text.warp.bend),
             horizontal: clamp(text.warp.horizontal),
             vertical: clamp(text.warp.vertical),
+            mesh: text.warp.mesh,
         };
         Some(Self::Warp { warp, bounds })
     }
@@ -109,6 +114,9 @@ impl Distortion {
 /// rasterising anything.
 #[must_use]
 pub fn warp_point(warp: &TextWarp, bounds: Rect, x: f32, y: f32) -> [f32; 2] {
+    if warp.style == WarpStyle::Custom {
+        return custom_point(&custom_mesh(warp), bounds, x, y);
+    }
     let hw = (bounds.width * 0.5).max(1e-3);
     let hh = (bounds.height * 0.5).max(1e-3);
     let cx = bounds.x + hw;
@@ -120,7 +128,8 @@ pub fn warp_point(warp: &TextWarp, bounds: Rect, x: f32, y: f32) -> [f32; 2] {
     u *= 1.0 - warp.vertical * v * 0.5;
     let b = warp.bend;
     let (u, v) = match warp.style {
-        WarpStyle::None => (u, v),
+        // Custom is answered above; the flat map keeps the match total.
+        WarpStyle::None | WarpStyle::Custom => (u, v),
         WarpStyle::Arc => return arc(cx, cy, hw, u, v * hh, b),
         WarpStyle::ArcLower => (u, v + b * (1.0 - u * u) * (v + 1.0) * 0.5),
         WarpStyle::ArcUpper => (u, v - b * (1.0 - u * u) * (1.0 - v) * 0.5),
@@ -154,6 +163,97 @@ pub fn warp_point(warp: &TextWarp, bounds: Rect, x: f32, y: f32) -> [f32; 2] {
         }
     };
     [cx + u * hw, cy + v * hh]
+}
+
+/// W13X-5: the flat Custom mesh - sixteen control points a third apart over
+/// the unit square, row by row. A bicubic Bezier patch over it is the
+/// identity map (the Bernstein basis reproduces a linear function exactly).
+pub const FLAT_MESH: [[f32; 2]; 16] = {
+    let mut mesh = [[0.0f32; 2]; 16];
+    let mut i = 0;
+    while i < 16 {
+        mesh[i] = [(i % 4) as f32 / 3.0, (i / 4) as f32 / 3.0];
+        i += 1;
+    }
+    mesh
+};
+
+/// W13X-5: the Custom mesh a warp renders with: its stored one, a stored
+/// non-finite point read as its flat position, or [`FLAT_MESH`].
+#[must_use]
+pub fn custom_mesh(warp: &TextWarp) -> [[f32; 2]; 16] {
+    let mut mesh = warp.mesh.unwrap_or(FLAT_MESH);
+    for (i, p) in mesh.iter_mut().enumerate() {
+        if !(p[0].is_finite() && p[1].is_finite()) {
+            *p = FLAT_MESH[i];
+        }
+    }
+    mesh
+}
+
+/// W13X-5: where each Custom mesh control point sits in layer space over
+/// `bounds` - the handles the canvas draws and drags.
+#[must_use]
+pub fn mesh_handles(warp: &TextWarp, bounds: Rect) -> [[f32; 2]; 16] {
+    custom_mesh(warp).map(|p| {
+        [
+            bounds.x + p[0] * bounds.width,
+            bounds.y + p[1] * bounds.height,
+        ]
+    })
+}
+
+/// W13X-5: `warp` as a Custom warp with control point `index` moved to the
+/// layer-space point `to` (over `bounds`). Any other style becomes Custom
+/// from the flat mesh. An index past 15, a degenerate `bounds` or a
+/// non-finite point changes nothing.
+#[must_use]
+pub fn with_mesh_handle(warp: &TextWarp, bounds: Rect, index: usize, to: [f32; 2]) -> TextWarp {
+    let mut out = *warp;
+    if warp.style != WarpStyle::Custom {
+        out.style = WarpStyle::Custom;
+        out.mesh = None;
+    }
+    let ok = index < 16
+        && bounds.width > 0.0
+        && bounds.height > 0.0
+        && to[0].is_finite()
+        && to[1].is_finite();
+    if !ok {
+        return out;
+    }
+    let mut mesh = custom_mesh(&out);
+    mesh[index] = [
+        (to[0] - bounds.x) / bounds.width,
+        (to[1] - bounds.y) / bounds.height,
+    ];
+    out.mesh = Some(mesh);
+    out
+}
+
+/// The cubic Bernstein weights at `t`.
+fn bernstein(t: f32) -> [f32; 4] {
+    let mt = 1.0 - t;
+    [mt * mt * mt, 3.0 * mt * mt * t, 3.0 * mt * t * t, t * t * t]
+}
+
+/// Map `(x, y)` through the bicubic Bezier patch `mesh` fitted to `bounds`.
+/// A point outside the block extrapolates along the same polynomials, so a
+/// descender below the line box bends with it.
+fn custom_point(mesh: &[[f32; 2]; 16], bounds: Rect, x: f32, y: f32) -> [f32; 2] {
+    let w = bounds.width.max(1e-3);
+    let h = bounds.height.max(1e-3);
+    let bu = bernstein((x - bounds.x) / w);
+    let bv = bernstein((y - bounds.y) / h);
+    let mut p = [0.0f32; 2];
+    for (row, wv) in bv.iter().enumerate() {
+        for (col, wu) in bu.iter().enumerate() {
+            let c = mesh[row * 4 + col];
+            p[0] += wu * wv * c[0];
+            p[1] += wu * wv * c[1];
+        }
+    }
+    [bounds.x + p[0] * w, bounds.y + p[1] * h]
 }
 
 /// The Arc style: the block's horizontal centre line becomes a circular arc
@@ -603,4 +703,111 @@ pub fn outline_svg(library: &mut FontLibrary, text: &ShapedText) -> String {
     }
     out.truncate(out.trim_end().len());
     out
+}
+
+#[cfg(test)]
+mod custom_tests {
+    //! W13X-5: the Custom mesh, asserted on rasterised ink.
+    use super::*;
+    use crate::{rasterize, shape, CoverageMask, FontLibrary, GlyphRasterCache, TextRun};
+
+    fn library() -> FontLibrary {
+        let mut library = FontLibrary::empty();
+        library.load_bytes(dejavu::sans::regular().to_vec());
+        library
+    }
+
+    fn mask_of(run: &TextRun) -> CoverageMask {
+        let mut library = library();
+        let mut cache = GlyphRasterCache::new();
+        let shaped = shape(&mut library, run);
+        rasterize(&mut library, &mut cache, &shaped)
+    }
+
+    /// Coverage-weighted ink centroid of the columns in `x0..x1`.
+    fn centroid(mask: &CoverageMask, x0: i32, x1: i32) -> Option<(f32, f32)> {
+        let (mut sx, mut sy, mut s) = (0.0f64, 0.0f64, 0.0f64);
+        for x in x0..x1 {
+            for row in 0..mask.height as i32 {
+                let y = mask.origin_y + row;
+                let c = f64::from(mask.coverage(x, y));
+                sx += c * (f64::from(x) + 0.5);
+                sy += c * (f64::from(y) + 0.5);
+                s += c;
+            }
+        }
+        (s > 0.0).then(|| ((sx / s) as f32, (sy / s) as f32))
+    }
+
+    #[test]
+    fn the_flat_mesh_is_the_identity_map() {
+        let warp = TextWarp::new(WarpStyle::Custom);
+        let bounds = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 300.0,
+            height: 60.0,
+        };
+        for (x, y) in [(10.0, 20.0), (160.0, 50.0), (310.0, 80.0), (40.0, 95.0)] {
+            let p = warp_point(&warp, bounds, x, y);
+            assert!((p[0] - x).abs() < 1e-3 && (p[1] - y).abs() < 1e-3, "{p:?}");
+        }
+    }
+
+    /// Dragging the bottom-right handle down moves the right-hand glyph's
+    /// outline down, and the left-hand glyph (far from the handle) stays.
+    #[test]
+    fn a_dragged_mesh_handle_moves_the_glyph_outlines_under_it() {
+        let flat = TextRun::point("I       I       I", "DejaVu Sans", 48.0);
+        let mut library = library();
+        let bounds = shape(&mut library, &flat).bounds;
+        let base = mask_of(&flat);
+        let third = bounds.width / 3.0;
+        let left_cols = (bounds.x as i32, (bounds.x + third) as i32);
+        let right_cols = (
+            (bounds.x + 2.0 * third) as i32,
+            (bounds.right() + 1.0) as i32,
+        );
+        let flat_left = centroid(&base, left_cols.0, left_cols.1).expect("left ink");
+        let flat_right = centroid(&base, right_cols.0, right_cols.1).expect("right ink");
+
+        let mut custom = flat.clone();
+        custom.warp = TextWarp::new(WarpStyle::Custom);
+        let handles = mesh_handles(&custom.warp, bounds);
+        let corner = handles[15];
+        custom.warp = with_mesh_handle(&custom.warp, bounds, 15, [corner[0], corner[1] + 60.0]);
+        custom.warp = with_mesh_handle(&custom.warp, bounds, 3, {
+            let top = mesh_handles(&custom.warp, bounds)[3];
+            [top[0], top[1] + 60.0]
+        });
+        assert_eq!(custom.warp.style, WarpStyle::Custom);
+        let warped = mask_of(&custom);
+        let left = centroid(&warped, left_cols.0, left_cols.1).expect("left ink");
+        let right = centroid(&warped, right_cols.0 - 4, right_cols.1 + 4).expect("right ink");
+        assert!(
+            right.1 - flat_right.1 > 25.0,
+            "the right glyph follows the dragged handles down: {flat_right:?} -> {right:?}"
+        );
+        assert!(
+            (left.1 - flat_left.1).abs() < 3.0 && (left.0 - flat_left.0).abs() < 3.0,
+            "the left glyph, far from the handles, stays: {flat_left:?} -> {left:?}"
+        );
+    }
+
+    #[test]
+    fn a_handle_edit_is_stored_as_a_fraction_of_the_bounds() {
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 100.0,
+        };
+        let warp = with_mesh_handle(&TextWarp::default(), bounds, 5, [100.0, 10.0]);
+        assert_eq!(warp.style, WarpStyle::Custom);
+        let mesh = warp.mesh.expect("stored");
+        assert_eq!(mesh[5], [0.5, 0.1]);
+        assert_eq!(mesh[0], FLAT_MESH[0]);
+        // Nothing moves for an index past the mesh.
+        assert_eq!(with_mesh_handle(&warp, bounds, 16, [1.0, 1.0]), warp);
+    }
 }

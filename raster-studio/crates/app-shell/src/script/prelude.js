@@ -139,8 +139,9 @@
 
   // ---- a file is only a name ----------------------------------------------
   // A script cannot read or write a path of its own choosing: app.open and
-  // saveAs ask the user with the platform picker. A File's name is only
-  // written to the output log; the picker does not open at it.
+  // saveAs ask the user with the platform picker. A File's name (its last
+  // path component only) is suggested to that picker's file-name box; the
+  // user still chooses the file (W13X-6).
   function File(path) {
     this.fsName = String(path === undefined ? "" : path);
     var parts = this.fsName.split(/[\\/]/);

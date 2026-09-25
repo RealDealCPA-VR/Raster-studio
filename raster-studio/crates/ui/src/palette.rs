@@ -408,6 +408,54 @@ pub fn tooltip(info: &ToolInfo) -> String {
     }
 }
 
+/// W13X-6: the tool last used from each tool letter's group, for this
+/// session — Photopea's rule for entering a group by its letter: `M` from
+/// the Brush goes back to the Elliptical Marquee when that was the marquee
+/// last used, not to the group's first member.
+///
+/// The application records every tool it makes active
+/// ([`ToolLetterMemory::record`]) and asks [`ToolLetterMemory::pick`] what a
+/// letter selects. Nothing is persisted: a new session starts every group on
+/// its first member, as a fresh Photopea tab does.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ToolLetterMemory {
+    last: HashMap<char, ToolId>,
+}
+
+impl ToolLetterMemory {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Remember `tool` as the one last used from its letter's group. A tool
+    /// no letter selects is not remembered.
+    pub fn record(&mut self, tool: ToolId) {
+        if let Some(letter) = registry::info(tool).and_then(|i| i.shortcut) {
+            self.last.insert(letter.to_ascii_lowercase(), tool);
+        }
+    }
+
+    /// The tool last used from `letter`'s group, if one was recorded.
+    pub fn last_used(&self, letter: char) -> Option<ToolId> {
+        self.last.get(&letter.to_ascii_lowercase()).copied()
+    }
+
+    /// The tool `letter` selects with `active` in hand: inside the group the
+    /// rule is [`crate::keys::tool_for_letter`]'s (the bare letter keeps the
+    /// tool, `step` moves to the next member); from outside, the member last
+    /// used from the group, else its first member.
+    pub fn pick(&self, letter: char, step: bool, active: Option<ToolId>) -> Option<ToolId> {
+        let group = registry::by_shortcut(letter);
+        let inside = active.is_some_and(|a| group.contains(&a));
+        if !inside {
+            if let Some(last) = self.last_used(letter).filter(|t| group.contains(t)) {
+                return Some(last);
+            }
+        }
+        crate::keys::tool_for_letter(letter, step, active)
+    }
+}
+
 /// Palette-group heading, used for the fly-out and for accessibility labels.
 pub const fn group_label(group: ToolGroup) -> &'static str {
     match group {
@@ -672,6 +720,31 @@ mod tests {
         state.activate(&m, first);
         // W13-M: pressed again it keeps the tool (Shift steps; see keys.rs).
         assert_eq!(state.tool_for_key('m'), Some(group[0]));
+    }
+
+    /// W13X-6: from outside a group its letter enters at the member last
+    /// used from it; inside, the bare letter keeps the tool and the step
+    /// walks the group as before.
+    #[test]
+    fn a_tool_letter_enters_its_group_at_the_member_last_used() {
+        let group = registry::by_shortcut('m');
+        assert!(group.len() > 1);
+        let mut memory = ToolLetterMemory::new();
+        assert_eq!(
+            memory.pick('m', false, Some(ToolId::Brush)),
+            Some(group[0]),
+            "nothing used yet: the first member"
+        );
+        let last = group[group.len() - 1];
+        memory.record(last);
+        memory.record(ToolId::Brush);
+        assert_eq!(memory.last_used('m'), Some(last));
+        assert_eq!(memory.pick('m', false, Some(ToolId::Brush)), Some(last));
+        assert_eq!(memory.pick('M', true, Some(ToolId::Brush)), Some(last));
+        // Inside the group the W13-M rule is untouched.
+        assert_eq!(memory.pick('m', false, Some(group[0])), Some(group[0]));
+        assert_eq!(memory.pick('m', true, Some(group[0])), Some(group[1]));
+        assert_eq!(memory.pick('§', false, Some(ToolId::Brush)), None);
     }
 
     #[test]

@@ -98,7 +98,7 @@ impl AppPaths {
 
 /// The user's theme choice.
 ///
-/// Photopea's dark grey is the shipped default: a fresh profile launches dark
+/// Dark (modelled on Photopea's Dark Grey) is the shipped default: a fresh profile launches dark
 /// on any host. `System` is the opt-in "follow the OS" mode, and stays a real
 /// third state rather than a synonym for one of the other two — it has to
 /// track the OS while the app is running.
@@ -110,46 +110,124 @@ pub enum ThemeChoice {
     Dark,
     /// Opt-in: follow the operating system's light/dark setting.
     System,
+    /// W13X-4: five of Photopea's themes, appended (the file stores the
+    /// lowercase variant name: `"lightgrey"`, `"darkblue"`, ...).
+    LightGrey,
+    Blue,
+    DarkBlue,
+    Purple,
+    Black,
 }
 
 impl ThemeChoice {
-    pub const ALL: &'static [ThemeChoice] =
-        &[ThemeChoice::Light, ThemeChoice::Dark, ThemeChoice::System];
+    pub const ALL: &'static [ThemeChoice] = &[
+        ThemeChoice::Light,
+        ThemeChoice::Dark,
+        ThemeChoice::System,
+        ThemeChoice::LightGrey,
+        ThemeChoice::Blue,
+        ThemeChoice::DarkBlue,
+        ThemeChoice::Purple,
+        ThemeChoice::Black,
+    ];
 
-    /// The theme to install, given what the OS currently reports.
-    pub fn resolve(self, system: design::Theme) -> design::Theme {
+    /// The fixed theme this choice pins, or `None` for System.
+    pub const fn theme(self) -> Option<design::Theme> {
         match self {
-            ThemeChoice::Light => design::Theme::Light,
-            ThemeChoice::Dark => design::Theme::Dark,
-            ThemeChoice::System => system,
+            ThemeChoice::Light => Some(design::Theme::Light),
+            ThemeChoice::Dark => Some(design::Theme::Dark),
+            ThemeChoice::System => None,
+            ThemeChoice::LightGrey => Some(design::Theme::LightGrey),
+            ThemeChoice::Blue => Some(design::Theme::Blue),
+            ThemeChoice::DarkBlue => Some(design::Theme::DarkBlue),
+            ThemeChoice::Purple => Some(design::Theme::Purple),
+            ThemeChoice::Black => Some(design::Theme::Black),
         }
     }
 
+    /// The theme to install, given what the OS currently reports.
+    pub fn resolve(self, system: design::Theme) -> design::Theme {
+        self.theme().unwrap_or(system)
+    }
+
     pub const fn label(self) -> &'static str {
-        match self {
-            ThemeChoice::Light => "Light",
-            ThemeChoice::Dark => "Dark",
-            ThemeChoice::System => "System",
+        match self.theme() {
+            Some(theme) => theme.name(),
+            None => "System",
+        }
+    }
+}
+
+/// W13X-4: the theme `choice` wants installed, given the OS's `system`
+/// theme, or `None` while `installed` already is it. The shell's per-frame
+/// appearance sync (`Shell::sync_appearance`) asks exactly this, so a theme
+/// picked in Preferences (or Window ▸ Appearance) is installed the next frame.
+///
+/// A `--shot` run started with [`SHOT_THEME_ENV`] set captures in that theme
+/// instead ([`set_shot_theme`]), without touching the stored preference.
+pub(crate) fn theme_to_install(
+    choice: ThemeChoice,
+    system: design::Theme,
+    installed: design::Theme,
+) -> Option<design::Theme> {
+    let resolved = SHOT_THEME
+        .get()
+        .copied()
+        .unwrap_or_else(|| choice.resolve(system));
+    (resolved != installed).then_some(resolved)
+}
+
+/// W13X-4: the environment variable a `--shot` reads for the theme to
+/// capture in, as a [`design::Theme::key`] (`light`, `dark`, `light-grey`,
+/// `blue`, `dark-blue`, `purple`, `black`). Ignored without `--shot`, and
+/// never written to the preferences file.
+pub const SHOT_THEME_ENV: &str = "RASTER_SHOT_THEME";
+
+static SHOT_THEME: std::sync::OnceLock<design::Theme> = std::sync::OnceLock::new();
+
+/// W13X-4: pin the theme a `--shot` run captures in (see [`SHOT_THEME_ENV`]).
+/// Only `launch` calls this, and only for a `--shot` run; `false` when the
+/// key names no theme.
+pub fn set_shot_theme(key: &str) -> bool {
+    match design::Theme::from_key(key.trim()) {
+        Some(theme) => {
+            let _ = SHOT_THEME.set(theme);
+            true
+        }
+        None => false,
+    }
+}
+
+/// W13X-4: the choice that pins `theme` — what Window ▸ Appearance ▸ <theme>
+/// writes.
+impl From<design::Theme> for ThemeChoice {
+    fn from(theme: design::Theme) -> Self {
+        match theme {
+            design::Theme::Light => Self::Light,
+            design::Theme::Dark => Self::Dark,
+            design::Theme::LightGrey => Self::LightGrey,
+            design::Theme::Blue => Self::Blue,
+            design::Theme::DarkBlue => Self::DarkBlue,
+            design::Theme::Purple => Self::Purple,
+            design::Theme::Black => Self::Black,
         }
     }
 }
 
 impl From<ThemeChoice> for ui::dialogs::ThemeChoice {
     fn from(t: ThemeChoice) -> Self {
-        match t {
-            ThemeChoice::Light => Self::Light,
-            ThemeChoice::Dark => Self::Dark,
-            ThemeChoice::System => Self::System,
+        match t.theme() {
+            Some(theme) => Self::of(theme),
+            None => Self::System,
         }
     }
 }
 
 impl From<ui::dialogs::ThemeChoice> for ThemeChoice {
     fn from(t: ui::dialogs::ThemeChoice) -> Self {
-        match t {
-            ui::dialogs::ThemeChoice::Light => Self::Light,
-            ui::dialogs::ThemeChoice::Dark => Self::Dark,
-            ui::dialogs::ThemeChoice::System => Self::System,
+        match t.theme() {
+            Some(theme) => theme.into(),
+            None => Self::System,
         }
     }
 }
@@ -743,6 +821,111 @@ mod tests {
         assert_eq!(
             ThemeChoice::Light.resolve(design::Theme::Dark),
             design::Theme::Light
+        );
+    }
+
+    /// W13X-4: each theme picked in the Preferences dialog
+    /// the chrome draws, confirmed with Enter and applied the way the shell
+    /// applies it, installs that theme's visuals: the style's panel fill and
+    /// dark mode, and the panel colour in the shapes the next chrome frame
+    /// paints.
+    #[test]
+    fn picking_a_theme_in_preferences_installs_its_visuals() {
+        use crate::chrome::{install_theme, Chrome, ChromeOutput};
+        let dir = tmp();
+        let mut ed = crate::editor::Editor::with_state(
+            AppPaths::rooted(dir.path().join("config")),
+            Preferences::default(),
+            crate::recent::RecentFiles::new(),
+            Box::new(crate::dialogs::ScriptedDialogs::new()),
+        );
+        let ctx = egui::Context::default();
+        let mut installed = design::Theme::Dark;
+        install_theme(&ctx, installed);
+        let mut chrome = Chrome::new();
+        let input = |events| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        for theme in design::Theme::ALL.iter().rev() {
+            ed.dispatch(crate::action::Action::ShowPreferences).unwrap();
+            let mut out = ChromeOutput::default();
+            for _ in 0..3 {
+                let _ = ctx.run(input(Vec::new()), |ctx| out = chrome.ui(ctx, &mut ed));
+                for action in std::mem::take(&mut out.actions) {
+                    ed.dispatch(action).unwrap();
+                }
+            }
+            assert!(out.dialog_open, "Preferences opened");
+            chrome
+                .dialogs_for_test()
+                .active_preferences_for_test()
+                .prefs_mut()
+                .interface
+                .theme = ui::dialogs::ThemeChoice::of(*theme);
+            let enter = egui::Event::Key {
+                key: egui::Key::Enter,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+                physical_key: None,
+            };
+            let _ = ctx.run(input(vec![enter]), |ctx| out = chrome.ui(ctx, &mut ed));
+            let confirmed = out.set_ui_preferences.take().expect("OK sent the prefs");
+            ed.apply_ui_preferences(&confirmed);
+            assert_eq!(ed.preferences().theme, ThemeChoice::from(*theme));
+
+            // The shell's appearance sync, against a dark OS.
+            if let Some(next) =
+                theme_to_install(ed.preferences().theme, design::Theme::Dark, installed)
+            {
+                install_theme(&ctx, next);
+                installed = next;
+            }
+            assert_eq!(installed, *theme, "{theme:?} was not installed");
+            assert_eq!(design::current_theme(&ctx), *theme);
+            let panel = design::color32(theme.palette().color(design::ColorRole::SurfacePanel));
+            let style = ctx.style();
+            assert_eq!(style.visuals.panel_fill, panel, "{theme:?}");
+            assert_eq!(style.visuals.dark_mode, theme.is_dark(), "{theme:?}");
+            let drawn = ctx.run(input(Vec::new()), |ctx| out = chrome.ui(ctx, &mut ed));
+            let painted = drawn
+                .shapes
+                .iter()
+                .any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == panel));
+            assert!(
+                painted,
+                "{theme:?}: no chrome surface painted in its panel colour"
+            );
+        }
+    }
+
+    /// W13X-4: every Photopea theme survives the file and the dialog's own
+    /// enum, both ways, and resolves to itself whatever the OS reports.
+    #[test]
+    fn every_photopea_theme_persists_and_round_trips_through_the_dialog() {
+        let dir = tmp();
+        let path = dir.path().join("preferences.json");
+        for theme in design::Theme::ALL {
+            let choice = ThemeChoice::from(*theme);
+            assert_eq!(choice.resolve(design::Theme::Light), *theme);
+            assert_eq!(choice.resolve(design::Theme::Dark), *theme);
+            let dialog: ui::dialogs::ThemeChoice = choice.into();
+            assert_eq!(ThemeChoice::from(dialog), choice, "{theme:?}");
+            let p = Preferences {
+                theme: choice,
+                ..Preferences::default()
+            };
+            p.save(&path).unwrap();
+            assert_eq!(Preferences::load(&path).theme, choice, "{theme:?}");
+        }
+        assert_eq!(
+            ThemeChoice::from(ui::dialogs::ThemeChoice::System),
+            ThemeChoice::System
         );
     }
 

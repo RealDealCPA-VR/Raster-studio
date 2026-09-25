@@ -138,11 +138,17 @@ pub mod warp_text;
 // W13-F: Edit > Convert to Profile..., Image > Reduce Colors... / Wavelet
 // Decompose...
 pub mod w13f;
+// W13X-7: File > Open of a multi-page PDF / AI: pages, resolution, mode.
+pub mod pdf_import;
+// W13X-3: Layer > Layer Style > Scale Effects...
+pub mod scale_effects;
 // W13-N: Select > Magic Cut..., File > Automate > Resize Images... /
 // Generate Mockups...
 pub mod magic_cut;
 pub mod merge_channels;
 pub mod resize_images;
+// W13X-4: Channels > New Spot Channel.
+pub mod spot_channel;
 
 pub use about::AboutDialog;
 pub use action::DialogAction;

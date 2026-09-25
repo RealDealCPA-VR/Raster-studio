@@ -90,6 +90,8 @@ pub(crate) fn import_resources(
             )),
         }
     }
+    // W13X-4: the channels DisplayInfo marks spot are spot channels.
+    crate::spot_channel::adopt_psd_spots(file, document);
     res::saved_paths(&file.resources, width, height)
 }
 
@@ -217,14 +219,21 @@ pub(crate) fn export_resources(
             names.join(", ")
         ));
     }
-    let channels: Vec<AlphaChannel> = fits
+    let mut channels: Vec<AlphaChannel> = fits
         .iter()
         .map(|(name, sel)| AlphaChannel {
             name: name.clone(),
             coverage: coverage(sel, width, height),
         })
         .collect();
+    // W13X-4: the spot channels follow, marked spot by DisplayInfo (1077).
+    let (spot_info, spot_notes) =
+        crate::spot_channel::push_psd_spots(document, width, height, room, &mut channels);
+    for note in spot_notes {
+        notes.push(note);
+    }
     res::set_alpha_channels(file, &channels)?;
+    file.resources.extend(spot_info);
     Ok(())
 }
 

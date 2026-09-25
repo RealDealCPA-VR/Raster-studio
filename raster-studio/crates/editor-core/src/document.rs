@@ -220,6 +220,9 @@ struct DocumentRepr {
     /// W13-L: the Animation panel's video timeline.
     #[serde(default)]
     timeline: crate::timeline::DocumentTimeline,
+    /// W13X-4: the spot channels.
+    #[serde(default)]
+    spot_channels: Vec<crate::spot::SpotChannel>,
 }
 
 impl TryFrom<DocumentRepr> for Document {
@@ -271,6 +274,7 @@ impl TryFrom<DocumentRepr> for Document {
             extras: r.extras,
             slices: r.slices,
             timeline: r.timeline,
+            spot_channels: r.spot_channels,
             dirty: false,
             path: None,
         })
@@ -363,6 +367,11 @@ pub struct Document {
     /// Persisted but omitted while it is the default; edited through
     /// [`crate::Command::SetTimeline`], one undo step per edit.
     pub timeline: crate::timeline::DocumentTimeline,
+    /// W13X-4: the spot channels ([`crate::spot::SpotChannel`]), composited
+    /// over the image as ink in list order. Persisted but omitted while
+    /// empty; edited through [`crate::Command::SetSpotChannels`], one undo
+    /// step per edit.
+    pub spot_channels: Vec<crate::spot::SpotChannel>,
     /// Unsaved-changes flag. Session state, not document content: never
     /// serialized, and a freshly loaded document is clean.
     dirty: bool,
@@ -411,7 +420,9 @@ impl Serialize for Document {
         let extras = (!self.extras.is_empty()).then_some(&self.extras);
         let slices = (!self.slices.is_empty()).then_some(&self.slices);
         let timeline = (!self.timeline.is_empty()).then_some(&self.timeline);
+        let spots = (!self.spot_channels.is_empty()).then_some(&self.spot_channels);
         let fields = 3
+            + usize::from(spots.is_some())
             + usize::from(timeline.is_some())
             + usize::from(extras.is_some())
             + usize::from(slices.is_some())
@@ -456,6 +467,9 @@ impl Serialize for Document {
         if let Some(timeline) = timeline {
             s.serialize_field("timeline", timeline)?;
         }
+        if let Some(spots) = spots {
+            s.serialize_field("spot_channels", spots)?;
+        }
         s.end()
     }
 }
@@ -473,6 +487,7 @@ impl PartialEq for Document {
             || self.extras != other.extras
             || self.slices != other.slices
             || self.timeline != other.timeline
+            || self.spot_channels != other.spot_channels
             // Through the accessor, not the field: a cursor left pointing at a
             // deleted layer reads as "no active layer" everywhere else, so it
             // must here too.
@@ -509,6 +524,7 @@ impl Document {
             extras: layer_model::DocumentExtras::default(),
             slices: Vec::new(),
             timeline: crate::timeline::DocumentTimeline::default(),
+            spot_channels: Vec::new(),
             dirty: false,
             path: None,
         }

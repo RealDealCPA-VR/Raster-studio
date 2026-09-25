@@ -170,6 +170,8 @@ pub fn touched_by(command: &Command) -> DirtyTiles {
         | Command::ResampleImage { .. }
         // W13-F: a new profile tag shows every pixel differently.
         | Command::SetMetaColorSpace { .. }
+        // W13X-4: spot inks lie over the whole composite.
+        | Command::SetSpotChannels { .. }
         | Command::TransformLayer { .. } => DirtyTiles::all(),
     }
 }

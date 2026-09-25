@@ -153,7 +153,7 @@ fn scale_effects_scales_every_size_as_one_step_and_is_greyed_without_a_style() {
     let mut ed = editor_with(dir.path(), ScriptedDialogs::new());
     let id = block(&mut ed, "Box", (20, 20, 20, 16), [40, 90, 200]);
     assert_eq!(
-        greyed(&mut ed, row(Op::ScaleEffects(200))),
+        greyed(&mut ed, row(Op::ScaleEffects(ui::menu::SCALE_EFFECTS_ROW))),
         ui::menu::LAYER_EXTRA_NO_STYLE
     );
     let fx = LayerEffects {
@@ -174,7 +174,7 @@ fn scale_effects_scales_every_size_as_one_step_and_is_greyed_without_a_style() {
     };
     set_effects(&mut ed, id, fx.clone());
     let before = depth(&ed);
-    click(&mut ed, row(Op::ScaleEffects(200))).unwrap();
+    scale_through_dialog(&mut ed, 200);
     assert_eq!(depth(&ed), before + 1, "one undo step");
     let got = &layer(&ed, id).effects;
     let shadow = got.drop_shadow.as_ref().unwrap();
@@ -182,7 +182,7 @@ fn scale_effects_scales_every_size_as_one_step_and_is_greyed_without_a_style() {
     assert_eq!(shadow.opacity, 0.75, "an opacity is not a size");
     assert_eq!(got.outer_glow.as_ref().unwrap().size_px, 10.0);
     assert_eq!(got.stroke.as_ref().unwrap().size_px, 4.0);
-    click(&mut ed, row(Op::ScaleEffects(25))).unwrap();
+    scale_through_dialog(&mut ed, 25);
     assert_eq!(layer(&ed, id).effects.stroke.as_ref().unwrap().size_px, 1.0);
     undo(&mut ed);
     undo(&mut ed);
@@ -621,13 +621,12 @@ fn each_row_sits_in_photopeas_submenu() {
     let cases: Vec<(&[&str], Vec<Op>)> = vec![
         (&["New"], vec![Op::ArtboardFromLayers]),
         (&["Layer Mask"], vec![Op::MaskFromTransparency]),
-        (&["Layer Style"], vec![Op::CreateLayers]),
         (
-            &["Layer Style", "Scale Effects"],
-            ui::menu::SCALE_EFFECTS_PERCENTS
-                .iter()
-                .map(|p| Op::ScaleEffects(*p))
-                .collect(),
+            &["Layer Style"],
+            vec![
+                Op::CreateLayers,
+                Op::ScaleEffects(ui::menu::SCALE_EFFECTS_ROW),
+            ],
         ),
         (&["Smart Object"], vec![Op::ResetTransform]),
         (
@@ -896,7 +895,286 @@ fn stack_mode_counts_the_layers_of_a_deep_bit_depth_source_too() {
 }
 
 #[test]
-fn the_scale_effects_rows_read_as_bare_percentages() {
-    assert_eq!(Op::ScaleEffects(25).label(), "25%");
-    assert_eq!(Op::ScaleEffects(200).label(), "200%");
+fn the_scale_effects_row_asks_for_its_percent() {
+    assert_eq!(
+        Op::ScaleEffects(ui::menu::SCALE_EFFECTS_ROW).label(),
+        "Scale Effects…"
+    );
+    // One row, not a submenu of fixed percentages.
+    let dir = tempfile::tempdir().unwrap();
+    let ed = editor_with(dir.path(), ScriptedDialogs::new());
+    let bar = menus(&ed);
+    let layer_menu = bar.iter().find(|m| m.title == "Layer").unwrap();
+    fn submenus(entries: &[ui::menu::Entry], out: &mut Vec<String>) {
+        for e in entries {
+            if let ui::menu::Entry::Submenu { label, entries } = e {
+                out.push(label.to_string());
+                submenus(entries, out);
+            }
+        }
+    }
+    let mut labels = Vec::new();
+    submenus(&layer_menu.entries, &mut labels);
+    assert!(
+        !labels.iter().any(|l| l.starts_with("Scale Effects")),
+        "{labels:?}"
+    );
+    let rows: Vec<_> = MenuAction::all()
+        .into_iter()
+        .filter(|a| matches!(a, MenuAction::LayerExtra(Op::ScaleEffects(_))))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![row(Op::ScaleEffects(ui::menu::SCALE_EFFECTS_ROW))]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// W13X-3: Scale Effects… through its dialog; Stack Mode's enable count
+// ---------------------------------------------------------------------------
+
+fn raw_input(events: Vec<egui::Event>) -> egui::RawInput {
+    egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1400.0, 900.0),
+        )),
+        events,
+        ..Default::default()
+    }
+}
+
+/// `key` in the chrome's open dialog, through the host's own `ui`: a settle
+/// frame, then the key. Returns what that produced.
+fn press_key(chrome: &mut Chrome, key: egui::Key) -> ChromeOutput {
+    let ctx = egui::Context::default();
+    design::apply_theme(&ctx, design::Theme::Dark);
+    let mut out = ChromeOutput::default();
+    let host = chrome.dialogs_for_test();
+    let _ = ctx.run(raw_input(Vec::new()), |ctx| host.ui(ctx, None, &mut out));
+    let key = egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::default(),
+    };
+    let _ = ctx.run(raw_input(vec![key]), |ctx| host.ui(ctx, None, &mut out));
+    out
+}
+
+/// Click Layer ▸ Layer Style ▸ Scale Effects… on the menu bar through the
+/// chrome's click handler; the dialog must open and nothing change yet.
+fn open_scale_effects(ed: &mut Editor) -> Chrome {
+    let action = row(Op::ScaleEffects(ui::menu::SCALE_EFFECTS_ROW));
+    assert!(
+        menus(ed)
+            .iter()
+            .flat_map(|m| m.actions())
+            .any(|a| a == action),
+        "{action:?} is not on the menu bar"
+    );
+    let mut chrome = Chrome::new();
+    let ctx = context(ed, chrome.workspace());
+    let intent = resolve_intent(action, &ctx, ed)
+        .unwrap_or_else(|reason| panic!("{action:?} is greyed: {reason}"));
+    let mut out = ChromeOutput::default();
+    chrome.menu_click(intent, ed, &mut out);
+    assert!(chrome.dialog_open(), "Scale Effects asks for its percent");
+    assert!(out.is_empty(), "opening the dialog edits nothing");
+    chrome
+}
+
+/// The whole route: the row, the dialog set to `percent`, Enter, and the
+/// pick applied the way the shell applies a frame's output.
+fn scale_through_dialog(ed: &mut Editor, percent: u16) {
+    let mut chrome = open_scale_effects(ed);
+    chrome
+        .dialogs_for_test()
+        .active_scale_effects_for_test()
+        .set_percent(percent);
+    let out = press_key(&mut chrome, egui::Key::Enter);
+    assert!(!chrome.dialog_open(), "Enter confirms");
+    assert_eq!(out.menu, vec![row(Op::ScaleEffects(percent))]);
+    for picked in out.menu {
+        perform(picked, ed).unwrap();
+    }
+}
+
+#[test]
+fn scale_effects_asks_for_any_percent_previews_it_and_lands_37_percent_as_one_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ed = editor_with(dir.path(), ScriptedDialogs::new());
+    let id = block(&mut ed, "Box", (20, 20, 20, 16), [40, 90, 200]);
+    let fx = LayerEffects {
+        drop_shadow: Some(ShadowEffect {
+            distance_px: 4.0,
+            size_px: 6.0,
+            ..Default::default()
+        }),
+        outer_glow: Some(GlowEffect {
+            size_px: 5.0,
+            ..Default::default()
+        }),
+        stroke: Some(StrokeEffect {
+            size_px: 2.0,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    set_effects(&mut ed, id, fx.clone());
+    let start = depth(&ed);
+    let unscaled = composite(&mut ed);
+
+    // Escape backs out and changes nothing.
+    let mut chrome = open_scale_effects(&mut ed);
+    chrome
+        .dialogs_for_test()
+        .active_scale_effects_for_test()
+        .set_percent(37);
+    let out = press_key(&mut chrome, egui::Key::Escape);
+    assert!(!chrome.dialog_open(), "Escape closes");
+    assert!(out.menu.is_empty(), "a cancel picks nothing");
+    assert_eq!(depth(&ed), start);
+
+    // The dialog opens at 100% (OK blocked), takes 37, and previews it.
+    let mut chrome = open_scale_effects(&mut ed);
+    {
+        let dialog = chrome.dialogs_for_test().active_scale_effects_for_test();
+        assert_eq!(dialog.percent(), 100);
+        assert_eq!(dialog.confirm(), None, "100% changes nothing");
+        assert!(dialog.preview_enabled());
+        dialog.set_percent(37);
+    }
+    chrome.dialogs_for_test().refresh_preview(&ed);
+    assert_eq!(
+        chrome
+            .dialogs_for_test()
+            .active_scale_effects_for_test()
+            .preview_percent(),
+        Some(37),
+        "the host rendered the preview at the dialog's percent"
+    );
+    assert_eq!(depth(&ed), start, "previewing is not an edit");
+    assert_eq!(layer(&ed, id).effects, fx);
+    let (preview, pw, ph) = super::scale_effects_preview(&ed, 37, 1024).unwrap();
+    assert_eq!((pw, ph), (W, H));
+    assert!(
+        max_diff(&preview, &unscaled) > 16,
+        "the preview shows the style scaled"
+    );
+
+    let out = press_key(&mut chrome, egui::Key::Enter);
+    assert!(!chrome.dialog_open(), "Enter confirms");
+    assert_eq!(out.menu, vec![row(Op::ScaleEffects(37))]);
+    for picked in out.menu {
+        perform(picked, &mut ed).unwrap();
+    }
+    assert_eq!(depth(&ed), start + 1, "one undo step");
+    let got = &layer(&ed, id).effects;
+    let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
+    let shadow = got.drop_shadow.as_ref().unwrap();
+    assert!(close(shadow.distance_px, 1.48), "{}", shadow.distance_px);
+    assert!(close(shadow.size_px, 2.22), "{}", shadow.size_px);
+    assert!(close(got.outer_glow.as_ref().unwrap().size_px, 1.85));
+    assert!(close(got.stroke.as_ref().unwrap().size_px, 0.74));
+    assert!(
+        max_diff(&preview, &composite(&mut ed)) <= 1,
+        "the preview showed what OK landed"
+    );
+    undo(&mut ed);
+    assert_eq!(layer(&ed, id).effects, fx);
+}
+
+/// An opaque full-canvas PSD layer, red `red`.
+fn psd_red(name: &str, red: u8, visible: bool) -> psd::model::PsdLayer {
+    let plane = |v: u8| vec![v; (W * H) as usize];
+    let mut layer = psd::model::PsdLayer::raster(name, psd::model::Rect::sized(W, H));
+    layer.channels = vec![
+        psd::model::Channel::new(psd::model::CHANNEL_ALPHA, plane(255)),
+        psd::model::Channel::new(0, plane(red)),
+        psd::model::Channel::new(1, plane(10)),
+        psd::model::Channel::new(2, plane(10)),
+    ];
+    layer.visible = visible;
+    layer
+}
+
+/// An 8-bit RGB PSD of `layers` (bottom first), by this repo's own writer.
+fn psd8(layers: Vec<psd::model::PsdLayer>) -> Vec<u8> {
+    let mut file = psd::model::PsdFile::new(psd::PsdHeader {
+        channels: 4,
+        width: W,
+        height: H,
+        depth: psd::Depth::Eight,
+        color_mode: psd::ColorMode::Rgb,
+    });
+    file.layers = layers;
+    psd::write::write(&file).unwrap()
+}
+
+#[test]
+fn stack_mode_counts_only_visible_top_level_layers_so_a_single_group_is_greyed() {
+    let dir = tempfile::tempdir().unwrap();
+    let group = {
+        let mut g = psd::model::PsdLayer::group("G");
+        g.group_data_mut().unwrap().children =
+            vec![psd_red("a", 20, true), psd_red("b", 240, true)];
+        g
+    };
+    // One group holding two layers: four records (divider, two, group).
+    let grouped = psd8(vec![group.clone()]);
+    // One visible layer among hidden ones.
+    let hidden = psd8(vec![psd_red("A", 20, true), psd_red("B", 100, false)]);
+    // A group and a layer beside it: two things to stack.
+    let mixed = psd8(vec![psd_red("L", 100, true), group]);
+    assert_eq!(ui::menu::psd_header_layer_count(&grouped), Some(1));
+    assert_eq!(ui::menu::psd_header_layer_count(&hidden), Some(1));
+    assert_eq!(ui::menu::psd_header_layer_count(&mixed), Some(2));
+
+    let (mut ed, id) = placed(dir.path(), W, H);
+    let LayerKind::SmartObject(so) = &layer(&ed, id).kind else {
+        unreachable!()
+    };
+    let asset = so.asset;
+    let embed = |ed: &mut Editor, bytes: Vec<u8>| {
+        ed.active_mut()
+            .unwrap()
+            .document
+            .set_asset_origin(layer_model::AssetRecord {
+                id: asset,
+                origin: AssetOrigin::Embedded {
+                    name: "stack.psd".to_string(),
+                    bytes,
+                },
+                source_size: Some((W, H)),
+            });
+    };
+    for (what, bytes) in [("a single group", grouped), ("one visible", hidden)] {
+        embed(&mut ed, bytes);
+        for mode in StackMode::ALL {
+            assert!(
+                !enabled(&mut ed, row(Op::StackMode(*mode))),
+                "{what}: {mode:?} is live"
+            );
+        }
+        assert_eq!(
+            greyed(&mut ed, row(Op::StackMode(StackMode::Median))),
+            "Stack Mode needs two or more visible layers in the smart object",
+            "{what}"
+        );
+        // What the gate says is what the click would have said.
+        assert_eq!(
+            super::stack_mode(&mut ed, StackMode::Median).unwrap_err(),
+            "Stack Mode needs two or more visible layers in the smart object",
+            "{what}"
+        );
+    }
+    embed(&mut ed, mixed);
+    let before = depth(&ed);
+    click(&mut ed, row(Op::StackMode(StackMode::Maximum))).unwrap();
+    assert_eq!(depth(&ed), before + 1, "one undo step");
+    let result = ed.active().unwrap().document.active_layer().unwrap();
+    let px = crate::menu_bridge::pixels::read_layer(ed.active().unwrap(), result);
+    assert_eq!(px[0], 240, "the maximum of the group (240 on top) and 100");
 }

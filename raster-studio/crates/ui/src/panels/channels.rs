@@ -93,6 +93,8 @@ pub struct ChannelsState {
     components: [bool; 4],
     /// The row the user has selected for editing.
     pub selected: ChannelKind,
+    /// W13X-4: the open New Spot Channel dialog, if any.
+    pub spot_dialog: Option<SpotChannelDialog>,
 }
 
 impl Default for ChannelsState {
@@ -100,6 +102,7 @@ impl Default for ChannelsState {
         Self {
             components: [true; 4],
             selected: ChannelKind::Composite,
+            spot_dialog: None,
         }
     }
 }
@@ -204,6 +207,42 @@ impl ChannelsState {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// W13X-4: the Channels panel menu and New Spot Channel
+// ---------------------------------------------------------------------------
+
+/// Stable ids for the Channels panel menu's rows, the spot rows and the New
+/// Spot Channel dialog, for a headless test.
+pub mod spot_ids {
+    /// A row of the Channels panel menu (`"new-spot"`, `"merge"`).
+    pub fn menu_row(name: &'static str) -> egui::Id {
+        egui::Id::new(("raster-channels-menu", name))
+    }
+
+    /// The `index`th spot channel's ink swatch.
+    pub fn spot_swatch(index: usize) -> egui::Id {
+        egui::Id::new(("raster-channels-spot-swatch", index))
+    }
+
+    /// The dialog's ink swatch.
+    pub fn dialog_swatch() -> egui::Id {
+        egui::Id::new("raster-spot-channel-ink")
+    }
+
+    /// Holds the keyboard while the dialog is up and none of its fields has
+    /// it, so a chord cannot act on the document behind it.
+    pub fn keyboard_sink() -> egui::Id {
+        egui::Id::new("raster-spot-channel-keyboard")
+    }
+}
+
+pub use crate::dialogs::spot_channel::{SpotChannelDialog, SpotChannelSpec, DEFAULT_SPOT_INK};
+
+/// W13X-4: the Channels panel menu, driven through the real workspace.
+#[cfg(test)]
+#[path = "w13x4_channels_tests.rs"]
+mod w13x4_channels_tests;
 
 /// W10-B: the id of the `index`th saved-selection (alpha) row's eye in the
 /// Channels panel.

@@ -1,8 +1,10 @@
 //! Semantic color roles and the light/dark palettes that fill them.
 //!
-//! Raw hex appears in exactly two places in this crate — [`LIGHT_ROLES`] and
-//! [`DARK_ROLES`]. Everything else addresses color by [`ColorRole`], so a
-//! palette can be swapped wholesale and the UI keeps its meaning.
+//! Raw hex appears only in the role tables — [`LIGHT_ROLES`] and
+//! [`DARK_ROLES`] here, and five of Photopea's themes in
+//! [`super::photopea_themes`]. Everything else addresses color by
+//! [`ColorRole`], so a palette can be swapped wholesale and the UI keeps its
+//! meaning.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -322,6 +324,13 @@ impl Palette {
 /// Light appearance — Photopea's light theme: a #F0F0F0 chrome around a
 /// #D8D8D8 pasteboard, so the document sits in a recess and the panels stand
 /// off it. Surfaces climb from the sunken wells to near-white cards.
+///
+/// Modelled on Photopea's White, not a copy of it. Against `pp.js` White:
+/// panel #F0F0F0 (Photopea `--base` #F7F7F7), pasteboard #D8D8D8
+/// (`--bg-canvas` #E0E0E0), buttons #FFFFFF / hover #E8E8E8 (`--bg-bbtn`
+/// #E0E0E0 / `--bg-bbtnOver` #D6D6D6), text #16161A (`--text-color`
+/// #333333), accent #0B62CE (`--accent` #3482F6). These predate W13X-4 and
+/// are kept: the shipped light UI, its tests and its shots are built on them.
 pub const LIGHT_ROLES: &[(ColorRole, Srgba)] = &[
     (ColorRole::SurfaceSunken, Srgba::hex(0xCCCCCC)),
     (ColorRole::BackgroundCanvas, Srgba::hex(0xD8D8D8)),
@@ -373,6 +382,14 @@ pub const LIGHT_ROLES: &[(ColorRole, Srgba)] = &[
 /// #3A3A3A header bands) around a DARKER pasteboard (#2B2B2B), so the panels
 /// stand off the document area instead of sinking below it. The previous ramp
 /// had this inverted (#282828 chrome over a #3C pasteboard).
+///
+/// Modelled on Photopea's Dark Grey, not a copy of it: the #474747 panel
+/// matches, but against `pp.js` Dark Grey the pasteboard is #2B2B2B
+/// (`--bg-canvas` #252525), buttons #555555 / hover #606060 (`--bg-bbtn`
+/// #5D5D5D / `--bg-bbtnOver` #6A6A6A), text #F2F2F2 (`--text-color`
+/// #D5D5D5) and accent #5B9BF0 (`--accent` #3482F6; Photopea's blue stands
+/// only 2.5:1 off this panel, under the 3:1 accent-border gate). These
+/// predate W13X-4 and are kept for the same reason as [`LIGHT_ROLES`].
 pub const DARK_ROLES: &[(ColorRole, Srgba)] = &[
     // Neutral greys throughout (R = G = B).
     (ColorRole::SurfaceSunken, Srgba::hex(0x232323)),

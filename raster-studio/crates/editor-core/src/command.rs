@@ -591,6 +591,17 @@ pub enum Command {
     ///
     /// Appended after every other variant and purely additive.
     SetMetaColorSpace { space: color::ColorSpace },
+    /// W13X-4: replace the document's spot channels wholesale (Channels ▸
+    /// New Spot Channel appends one). The inverse carries the previous list.
+    /// Spot channels are composited over the image as ink, so the reach is
+    /// the whole canvas.
+    ///
+    /// # Wire format
+    ///
+    /// Appended after every other variant and purely additive.
+    SetSpotChannels {
+        channels: Vec<crate::spot::SpotChannel>,
+    },
 }
 
 /// The class of a layer kind, as a word an error message can use.
@@ -1328,6 +1339,11 @@ impl Command {
                 Ok(Command::SetMetaColorSpace { space: previous })
             }
 
+            Command::SetSpotChannels { channels } => {
+                let previous = std::mem::replace(&mut doc.spot_channels, channels.clone());
+                Ok(Command::SetSpotChannels { channels: previous })
+            }
+
             Command::SetSavedSelection {
                 index,
                 name,
@@ -1397,6 +1413,7 @@ impl Command {
             Command::SetSlices { .. } => "Edit Slices".into(),
             Command::SetTimeline { .. } => "Edit Timeline".into(),
             Command::SetMetaColorSpace { .. } => "Assign Profile".into(),
+            Command::SetSpotChannels { .. } => "Spot Channel".into(),
         }
     }
 }
@@ -1772,7 +1789,9 @@ impl Command {
             | Command::SetCanvasSize { .. }
             | Command::ResampleImage { .. }
             // W13-F: the same numbers shown through another profile.
-            | Command::SetMetaColorSpace { .. } => DirtyReach::everything(),
+            | Command::SetMetaColorSpace { .. }
+            // W13X-4: spot inks lie over every pixel of the composite.
+            | Command::SetSpotChannels { .. } => DirtyReach::everything(),
             Command::Transaction { commands, .. } => {
                 let mut out = DirtyReach::nothing();
                 for c in commands {

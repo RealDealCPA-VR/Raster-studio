@@ -922,14 +922,92 @@ fn pattern_stamp_paints_the_defined_pattern_under_the_stroke() {
     undo_restores(&mut ed, id, &run);
 }
 
+/// W13X-6: Photopea's Background Eraser starts on Sampling: Continuous, so
+/// every dab samples the colour under its own centre and a stroke started on
+/// red that crosses into blue erases both. The options bar shows that default
+/// and the tool the palette hands over paints with it.
 #[test]
-fn background_eraser_clears_only_the_colour_first_touched() {
+fn background_eraser_by_default_erases_every_colour_it_crosses() {
     let id = ToolId::BackgroundEraser;
+    let chrome = Chrome::new();
+    assert_eq!(
+        chrome
+            .workspace()
+            .options
+            .get(id, tools::stroke_options::SAMPLING_KEY),
+        Some(ui::OptionValue::Choice(0)),
+        "the options bar does not start Sampling on Continuous"
+    );
     let (_dir, mut ed) = open(&halves);
     let mut pointer = ToolPointer::new();
     // Start on red, cross into blue.
     let (a, b) = (v(56.0, 64.0), v(72.0, 64.0));
     let run = run_pixel_route(&mut ed, &mut pointer, id, |p, ed| drag(p, ed, &[a, b]));
+    assert_eq!(
+        px(&run.after, 50, 64)[3],
+        0,
+        "red under the stroke is erased"
+    );
+    assert_eq!(
+        px(&run.after, 80, 64)[3],
+        0,
+        "blue under the stroke is erased too"
+    );
+    assert_eq!(
+        px(&run.after, 10, 64),
+        RED,
+        "red outside the stroke is kept"
+    );
+    assert_eq!(
+        px(&run.after, 120, 64),
+        BLUE,
+        "blue outside the stroke is kept"
+    );
+    changed_only_within(id, &run.before, &run.after, a, b, 21.0);
+    undo_restores(&mut ed, id, &run);
+}
+
+/// W13X-6: Sampling: Once, chosen in the options bar, samples the colour the
+/// stroke first touches and keeps every other colour it crosses.
+#[test]
+fn background_eraser_on_once_clears_only_the_colour_first_touched() {
+    let id = ToolId::BackgroundEraser;
+    let (_dir, mut ed) = open(&halves);
+    let mut pointer = ToolPointer::new();
+    select_tool(&mut ed, id);
+    let mut chrome = Chrome::new();
+    chrome.set_tool_choice(id, tools::stroke_options::SAMPLING_KEY, 1);
+    let seed: Vec<(String, tools::ToolSetting)> = chrome
+        .tool_options(id)
+        .into_iter()
+        .map(|(key, value)| {
+            let setting = match value {
+                ui::OptionValue::Float(v) => tools::ToolSetting::Float(v),
+                ui::OptionValue::Int(v) => tools::ToolSetting::Int(v),
+                ui::OptionValue::Bool(v) => tools::ToolSetting::Bool(v),
+                ui::OptionValue::Choice(v) => tools::ToolSetting::Choice(v),
+                ui::OptionValue::Color(v) => tools::ToolSetting::Color(v),
+            };
+            (key, setting)
+        })
+        .collect();
+    assert!(
+        seed.iter()
+            .any(|(k, s)| k == tools::stroke_options::SAMPLING_KEY
+                && *s == tools::ToolSetting::Choice(1)),
+        "the options bar does not forward Sampling: Once: {seed:?}"
+    );
+    // Start on red, cross into blue.
+    let (a, b) = (v(56.0, 64.0), v(72.0, 64.0));
+    let before = composite(&mut ed);
+    let d0 = depth(&ed);
+    let outcomes = seeded_stroke(&mut pointer, &mut ed, &[a, b], &seed);
+    all_reached(id, &outcomes);
+    assert_eq!(depth(&ed), d0 + 1, "one stroke, one history entry");
+    let run = PixelRun {
+        before,
+        after: composite(&mut ed),
+    };
     assert_eq!(
         px(&run.after, 50, 64)[3],
         0,

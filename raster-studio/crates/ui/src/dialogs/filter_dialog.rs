@@ -73,6 +73,10 @@ pub enum ParamValue {
 pub struct FilterParams {
     schema: &'static [OptionSpec],
     values: BTreeMap<&'static str, ParamValue>,
+    /// W13X-5: the path a path-drawn filter (Flame) renders along, flattened
+    /// in the filtered buffer's pixel space; `None` until the host hands it
+    /// the document's active path. Not a schema value: no control edits it.
+    path: Option<std::sync::Arc<Vec<filters::flame::FlamePath>>>,
 }
 
 impl FilterParams {
@@ -82,7 +86,23 @@ impl FilterParams {
             .iter()
             .map(|spec| (spec.key, default_value(spec.kind)))
             .collect();
-        Self { schema, values }
+        Self {
+            schema,
+            values,
+            path: None,
+        }
+    }
+
+    /// W13X-5: these parameters with the path a path-drawn filter follows.
+    #[must_use]
+    pub fn with_path(mut self, path: Vec<filters::flame::FlamePath>) -> Self {
+        self.path = Some(std::sync::Arc::new(path));
+        self
+    }
+
+    /// W13X-5: the path handed in by [`FilterParams::with_path`], if any.
+    pub fn path(&self) -> Option<&[filters::flame::FlamePath]> {
+        self.path.as_deref().map(Vec::as_slice)
     }
 
     /// The schema these parameters belong to.
@@ -783,8 +803,9 @@ fn channel_model(p: &FilterParams, key: &str) -> hsb::ChannelModel {
 // ---------------------------------------------------------------------------
 
 // Photopea's own controls, ranges and defaults (its descriptors and filter
-// dialogs), except Flame's, which are this build's: Photopea's Flame renders
-// only along a path, which a filter here is not handed.
+// dialogs). W13X-5: Flame's too: it renders along the path the host hands
+// it (`FilterParams::with_path`), and the host refuses with Photopea's
+// "Make a path first" when the document has none.
 const KALEIDOSCOPE: &[OptionSpec] = &[
     int("mirrors", "Mirrors", 2, 20, 6),
     int("angle", "Angle", 0, 360, 0),
@@ -803,14 +824,92 @@ const SHAPE_MOSAIC: &[OptionSpec] = &[
     flag("monochromatic", "Monochromatic", false),
     flag("invert", "Invert", false),
 ];
-const FLAME_KINDS: &[&str] = &["Natural", "Blue"];
-const FLAME: &[OptionSpec] = &[
-    int("count", "Flames", 1, 64, 5),
-    float("length", "Length", 10.0, 2000.0, 120.0),
-    float("width", "Width", 2.0, 400.0, 20.0),
-    choice("kind", "Colour", FLAME_KINDS, 0),
-    int("seed", "Seed", 0, 9999, 1),
+// W13X-5: Photopea's Flame dialog (Basic, then Advanced) and `Flam`
+// descriptor defaults; its Color (255, 110, 28) is stored linear.
+const FLAME_TYPES: &[&str] = &[
+    "One Flame Along Path",
+    "Multiple Flames Along Path",
+    "Multiple Flames One Direction",
+    "Multiple Flames Path Directed",
+    "Multiple Flames Various Angle",
+    "Candle Light",
 ];
+const FLAME_QUALITIES: &[&str] = &["1: Draft", "2: Low", "3: Medium", "4: High", "5: Fine"];
+const FLAME_STYLES: &[&str] = &["Normal", "Violent", "Flat"];
+const FLAME_SHAPES: &[&str] = &["Parallel", "To the center", "Spread", "Oval", "Pointing"];
+const FLAME: &[OptionSpec] = &[
+    choice("type", "Flame Type", FLAME_TYPES, 0),
+    int("length", "Length", 20, 1000, 140),
+    flag("randomize_length", "Randomize Length", false),
+    int("width", "Width", 5, 600, 100),
+    int("angle", "Angle", 0, 360, 0),
+    int("interval", "Interval", 10, 200, 100),
+    flag("adapt_interval", "Adapt Interval for Loops", false),
+    color("color", "Color", [1.0, 0.155_931, 0.011_52, 1.0]),
+    choice("quality", "Quality", FLAME_QUALITIES, 1),
+    int("turbulent", "Turbulent", 0, 100, 50),
+    int("jag", "Jag", 0, 100, 0),
+    int("opacity", "Opacity", 0, 100, 25),
+    int("lines", "Lines", 2, 30, 10),
+    int("bottom", "Bottom", 0, 100, 30),
+    choice("style", "Style", FLAME_STYLES, 0),
+    choice("shape", "Shape", FLAME_SHAPES, 0),
+    flag("randomize_shape", "Randomize Shape", false),
+    int("seed", "Random Seed", 0, 100, 18),
+];
+
+/// W13X-5: the Flame dialog's parameters as the renderer's settings.
+pub fn flame_settings(p: &FilterParams) -> filters::flame::FlameSettings {
+    use filters::flame::{FlameSettings, FlameShape, FlameStyle, FlameType};
+    let c = p.color("color");
+    FlameSettings {
+        flame_type: p
+            .choose("type", &FlameType::ALL)
+            .unwrap_or(FlameType::OneAlongPath),
+        length: p.int("length") as f32,
+        randomize_length: p.flag("randomize_length"),
+        width: p.int("width") as f32,
+        angle: p.int("angle") as f32,
+        interval: p.int("interval") as f32,
+        adapt_interval: p.flag("adapt_interval"),
+        color: [c[0], c[1], c[2]],
+        quality: p.choice("quality") as u32,
+        turbulent: p.int("turbulent") as f32,
+        jag: p.int("jag") as f32,
+        opacity: p.int("opacity") as f32,
+        lines: p.uint("lines"),
+        bottom: p.int("bottom") as f32,
+        style: p
+            .choose("style", &FlameStyle::ALL)
+            .unwrap_or(FlameStyle::Normal),
+        shape: p
+            .choose("shape", &FlameShape::ALL)
+            .unwrap_or(FlameShape::Parallel),
+        randomize_shape: p.flag("randomize_shape"),
+        seed: p.uint("seed"),
+    }
+}
+
+/// W13X-5: the path a Flame preview burns along when the dialog was handed
+/// none, which only a proxy with no document behind it is (the catalogue's
+/// tests, a placeholder): a closed loop around the proxy's centre. The
+/// application never runs Flame without a real path: the host refuses first
+/// with Photopea's "Make a path first".
+fn flame_stand_in_path(src: &FilterBuffer) -> Vec<filters::flame::FlamePath> {
+    let (w, h) = src.dimensions();
+    let (cx, cy) = (w as f32 * 0.5, h as f32 * 0.5);
+    let (rx, ry) = (w as f32 * 0.3, h as f32 * 0.3);
+    let points = (0..32)
+        .map(|i| {
+            let a = i as f32 / 32.0 * std::f32::consts::TAU;
+            [cx + rx * a.cos(), cy + ry * a.sin()]
+        })
+        .collect();
+    vec![filters::flame::FlamePath {
+        points,
+        closed: true,
+    }]
+}
 const REPEAT: &[OptionSpec] = &[
     float("scale", "Scale (%)", 1.0, 300.0, 100.0),
     float("row_shift", "Row Shift (%)", -50.0, 50.0, 0.0),
@@ -1685,18 +1784,20 @@ pub const FILTERS: &[FilterSpec] = &[
     },
     FilterSpec {
         id: FilterId::Flame,
-        summary: "Renders seeded flames rising from the lower half of the layer.",
+        summary: "Renders flames along the active path (Make a path first).",
         params: FLAME,
         apply: |src, p| {
-            render_extra::flame(
-                src,
-                p.uint("count"),
-                p.float("length"),
-                p.float("width"),
-                p.choose("kind", &render_extra::FlameKind::ALL)
-                    .unwrap_or(render_extra::FlameKind::Natural),
-                u64::from(p.uint("seed")),
-            )
+            let stand_in;
+            let path = match p.path() {
+                Some(path) => path,
+                None => {
+                    stand_in = flame_stand_in_path(src);
+                    &stand_in
+                }
+            };
+            // A path with no length is refused by the host before any run;
+            // a preview over one shows the layer unchanged.
+            filters::flame::flame(src, &flame_settings(p), path).unwrap_or_else(|_| src.clone())
         },
     },
     FilterSpec {
@@ -1898,9 +1999,20 @@ impl FilterDialog {
         changed
     }
 
-    /// Put every parameter back to its schema default.
+    /// Put every parameter back to its schema default. The path handed in
+    /// by [`FilterDialog::set_path`] is not a parameter and stays.
     pub fn reset(&mut self) {
+        let path = self.params.path.take();
         self.params = FilterParams::defaults(self.spec.params);
+        self.params.path = path;
+        self.cached_for = None;
+    }
+
+    /// W13X-5: the path a path-drawn filter (Flame) previews and confirms
+    /// along: the document's active path, flattened in the source's pixel
+    /// space.
+    pub fn set_path(&mut self, path: Vec<filters::flame::FlamePath>) {
+        self.params = self.params.clone().with_path(path);
         self.cached_for = None;
     }
 
@@ -2602,7 +2714,127 @@ mod tests {
             "fall",
             "Fall moves the particles down by Time, and the default Time is 0",
         ),
+        // W13X-5: Photopea's dialog disables these five for its default
+        // type, One Flame Along Path, whose flame is the path itself.
+        (
+            FilterId::Flame,
+            "length",
+            "One Flame Along Path (the default type) burns the whole path, so it has no Length",
+        ),
+        (
+            FilterId::Flame,
+            "randomize_length",
+            "One Flame Along Path (the default type) has no Length to randomise",
+        ),
+        (
+            FilterId::Flame,
+            "angle",
+            "One Flame Along Path (the default type) follows the path, so it has no Angle",
+        ),
+        (
+            FilterId::Flame,
+            "interval",
+            "One Flame Along Path (the default type) is one flame, so it has no Interval",
+        ),
+        (
+            FilterId::Flame,
+            "adapt_interval",
+            "One Flame Along Path (the default type) has no Interval to adapt to a loop",
+        ),
     ];
+
+    /// W13X-5: Flame's controls the default type ignores come alive under a
+    /// Multiple type (Adapt Interval once the stand-in loop's length is not
+    /// a whole number of Intervals).
+    #[test]
+    fn w13x5_flames_type_dependent_controls_come_alive() {
+        let source = busy_buffer(24);
+        let spec = filter_by_id(FilterId::Flame).unwrap();
+        type Case = (
+            &'static [(&'static str, ParamValue)],
+            (&'static str, ParamValue),
+        );
+        let cases: [Case; 5] = [
+            (
+                &[
+                    ("type", ParamValue::Choice(2)),
+                    ("width", ParamValue::Int(5)),
+                ],
+                ("length", ParamValue::Int(20)),
+            ),
+            (
+                &[
+                    ("type", ParamValue::Choice(2)),
+                    ("width", ParamValue::Int(5)),
+                ],
+                ("randomize_length", ParamValue::Bool(true)),
+            ),
+            (
+                &[
+                    ("type", ParamValue::Choice(2)),
+                    ("width", ParamValue::Int(5)),
+                ],
+                ("angle", ParamValue::Int(90)),
+            ),
+            (
+                &[
+                    ("type", ParamValue::Choice(1)),
+                    ("width", ParamValue::Int(5)),
+                ],
+                ("interval", ParamValue::Int(10)),
+            ),
+            (
+                &[
+                    ("type", ParamValue::Choice(1)),
+                    ("width", ParamValue::Int(5)),
+                    ("interval", ParamValue::Int(10)),
+                ],
+                ("adapt_interval", ParamValue::Bool(true)),
+            ),
+        ];
+        for (first, then) in cases {
+            let mut dialog = FilterDialog::new(spec, source.clone());
+            for (key, value) in first {
+                assert!(dialog.set_param(key, *value));
+            }
+            let before = dialog.preview_buffer().to_rgba8();
+            assert!(dialog.set_param(then.0, then.1));
+            assert_ne!(
+                dialog.preview_buffer().to_rgba8(),
+                before,
+                "Flame/{} does nothing under {first:?}",
+                then.0
+            );
+        }
+    }
+
+    /// W13X-5: handed a path, the Flame dialog's preview and its confirmed
+    /// run burn along THAT path: near it, and nowhere far from it.
+    #[test]
+    fn w13x5_flame_burns_along_the_path_the_dialog_is_handed() {
+        let source = FilterBuffer::filled(96, 96, [0.0, 0.0, 0.0, 1.0]).unwrap();
+        let spec = filter_by_id(FilterId::Flame).unwrap();
+        let mut dialog = FilterDialog::new(spec, source.clone());
+        assert!(dialog.set_param("width", ParamValue::Int(10)));
+        dialog.set_path(vec![filters::flame::FlamePath {
+            points: vec![[8.0, 12.0], [40.0, 12.0]],
+            closed: false,
+        }]);
+        let preview = dialog.preview_buffer();
+        assert_eq!(dialog.invocation().run(&source), preview);
+        let lit = |x: u32, y: u32| preview.get(x, y) != source.get(x, y);
+        assert!(lit(24, 12), "the path's middle burns");
+        for y in 0..96 {
+            for x in 0..96 {
+                if x > 52 || y > 24 {
+                    assert!(!lit(x, y), "({x}, {y}) is far from the path but lit");
+                }
+            }
+        }
+        // Reset keeps the path: it is the document's, not a control.
+        dialog.reset();
+        assert!(dialog.params().path().is_some());
+    }
 
     /// W10-C: the four new filters' inert-at-default controls come alive as
     /// soon as the control they depend on moves.
@@ -3175,8 +3407,7 @@ mod tests {
 
     /// W13-J: the dialogs carry Photopea's controls — the names, ranges and
     /// defaults of its own filter dialogs (read from its descriptors and
-    /// dialog definitions) — for every new filter but Flame, whose Photopea
-    /// original draws only along a path.
+    /// dialog definitions) — W13X-5: Flame's included.
     #[test]
     fn w13j_dialogs_carry_photopeas_controls() {
         let keys = |id: FilterId| -> Vec<&str> {
@@ -3228,6 +3459,56 @@ mod tests {
             ["blur", "scale", "invert", "high", "medium", "low"]
         );
         assert_eq!(keys(FilterId::TextureDilation), ["crop", "radius"]);
+        // W13X-5: Photopea's eighteen Flame controls, in its dialog's order.
+        assert_eq!(
+            keys(FilterId::Flame),
+            [
+                "type",
+                "length",
+                "randomize_length",
+                "width",
+                "angle",
+                "interval",
+                "adapt_interval",
+                "color",
+                "quality",
+                "turbulent",
+                "jag",
+                "opacity",
+                "lines",
+                "bottom",
+                "style",
+                "shape",
+                "randomize_shape",
+                "seed"
+            ]
+        );
+        let flame = FilterParams::defaults(filter_by_id(FilterId::Flame).unwrap().params);
+        let s = flame_settings(&flame);
+        let d = filters::flame::FlameSettings::default();
+        assert_eq!(
+            (
+                s.flame_type,
+                s.length,
+                s.width,
+                s.interval,
+                s.quality,
+                s.lines,
+                s.seed
+            ),
+            (
+                d.flame_type,
+                d.length,
+                d.width,
+                d.interval,
+                d.quality,
+                d.lines,
+                d.seed
+            )
+        );
+        for c in 0..3 {
+            assert!((s.color[c] - d.color[c]).abs() < 1e-4, "{:?}", s.color);
+        }
         // Defaults that differ from what a guess would pick.
         let defaults = |id: FilterId| FilterParams::defaults(filter_by_id(id).unwrap().params);
         assert_eq!(

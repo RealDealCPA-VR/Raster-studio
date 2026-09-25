@@ -19,6 +19,11 @@ use tools::ToolRequest;
 
 use crate::editor::Editor;
 
+// W13X-1: the arrow keys' nudge, whose Alt half is this module's copy path.
+// A child of this module so it drives the pointer's off-pointer context.
+#[path = "nudge.rs"]
+pub(crate) mod nudge;
+
 /// The History row an Alt+drag copy lands as.
 pub(crate) const LABEL: &str = "Duplicate and Move";
 
@@ -94,23 +99,30 @@ fn copy_commands(
     let doc = editor.active().ok_or("No document is open")?;
     let tree = &doc.document.layers;
     for (layer, _) in moves {
-        let node = tree
-            .get(*layer)
+        tree.get(*layer)
             .ok_or("The moved layer is not in the tree")?;
-        if node.is_group() {
-            // Layer > Duplicate Layer copies one node; a group's children
-            // would be left behind, so the copy is refused rather than made
-            // as an empty group.
-            return Err(format!(
-                "Alt+drag copies layers; {} is a group, which it cannot copy yet",
-                node.name
-            ));
-        }
     }
+    // W13X-6: a group is copied whole — Layer > Duplicate Layer copies its
+    // subtree (`layer_ops::duplicate_commands`) — so a moved layer inside a
+    // moved group is already in that group's copy and is not copied again.
+    let inside_a_moved_group = |layer: LayerId| {
+        let mut up = tree.parent_of(layer);
+        while let Some(parent) = up {
+            if moves.iter().any(|(m, _)| *m == parent) {
+                return true;
+            }
+            up = tree.parent_of(parent);
+        }
+        false
+    };
     // Each copy is seated at its source's index, pushing every sibling at or
     // below that index down one. Copying the BOTTOM-most first leaves the
     // indices still to be used untouched.
-    let mut ordered: Vec<(LayerId, [f32; 6])> = moves.to_vec();
+    let mut ordered: Vec<(LayerId, [f32; 6])> = moves
+        .iter()
+        .copied()
+        .filter(|(layer, _)| !inside_a_moved_group(*layer))
+        .collect();
     ordered.sort_by_key(|(layer, _)| std::cmp::Reverse(tree.index_in_parent(*layer).unwrap_or(0)));
     let active = doc.document.active_layer();
     let mut commands = Vec::new();
@@ -335,6 +347,197 @@ mod tests {
             is_white(rgba_at(&mut editor, 30, 14)),
             "the copy's ink stayed"
         );
+    }
+
+    /// W13X-6: Ink inside a group "Set", with a second inked child "Ink 2"
+    /// above it, the group the one selected layer. Answers (group, Ink,
+    /// Ink 2).
+    fn editor_with_a_group(
+        dir: &std::path::Path,
+    ) -> (
+        Editor,
+        layer_model::LayerId,
+        layer_model::LayerId,
+        layer_model::LayerId,
+    ) {
+        let (mut editor, ink) = editor_with_ink(dir);
+        let second = layer_model::Layer::raster("Ink 2");
+        let second_id = second.id;
+        let group = layer_model::Layer::group("Set");
+        let group_id = group.id;
+        {
+            let doc = editor.active_mut().unwrap();
+            doc.apply(Command::create_layer(second)).unwrap();
+            doc.apply(Command::create_layer(group)).unwrap();
+            for (i, child) in [second_id, ink].into_iter().enumerate() {
+                doc.apply(Command::MoveLayer {
+                    layer_id: child,
+                    parent: Some(group_id),
+                    index: i,
+                })
+                .unwrap();
+            }
+        }
+        ink_square(&mut editor, second_id, 40, 44);
+        editor.set_layer_selection(vec![group_id], Some(group_id));
+        (editor, group_id, ink, second_id)
+    }
+
+    fn children(editor: &Editor, group: layer_model::LayerId) -> Vec<layer_model::LayerId> {
+        editor
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .get(group)
+            .unwrap()
+            .children()
+            .to_vec()
+    }
+
+    fn name(editor: &Editor, id: layer_model::LayerId) -> String {
+        let doc = &editor.active().unwrap().document;
+        doc.layers.get(id).unwrap().name.clone()
+    }
+
+    /// W13X-6: Alt+drag on a group copies the group WITH its children as one
+    /// step (Photopea duplicates the group); the copy took the move, the
+    /// original group and its children stayed, one Undo takes it all back.
+    #[test]
+    fn alt_drag_on_a_group_copies_the_group_with_its_children_as_one_step() {
+        // Where a PLAIN drag of the group puts its children: the copy must
+        // land exactly there (the Move tool's own snapping included).
+        let plain_dir = tempfile::tempdir().unwrap();
+        let (mut plain, _, plain_ink, plain_second) = editor_with_a_group(plain_dir.path());
+        drag(
+            &mut plain,
+            Vec2::new(10.0, 10.0),
+            Vec2::new(30.0, 14.0),
+            Modifiers::NONE,
+        );
+        let moved_ink = bounds(&plain, plain_ink);
+        let moved_second = bounds(&plain, plain_second);
+        assert_ne!(
+            moved_ink,
+            PixelRect::new(8, 8, 8, 8),
+            "the plain drag moved nothing"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let (mut editor, group, ink, second) = editor_with_a_group(dir.path());
+        let before = layers(&editor);
+        let depth = editor.active().unwrap().history_depth();
+
+        let steps = drag(
+            &mut editor,
+            Vec2::new(10.0, 10.0),
+            Vec2::new(30.0, 14.0),
+            alt(),
+        );
+
+        assert_eq!(steps, 1, "the copy and its move are one step");
+        assert_eq!(editor.active().unwrap().history_depth(), depth + 1);
+        assert_eq!(undo_label(&editor).as_deref(), Some(super::LABEL));
+        let after = layers(&editor);
+        assert_eq!(after.len(), before.len() + 3, "group + two children");
+        let root = editor.active().unwrap().document.layers.root().to_vec();
+        let at = root.iter().position(|l| *l == group).unwrap();
+        assert!(at > 0, "no copy above the group");
+        let copy = root[at - 1];
+        assert!(!before.contains(&copy), "the layer above is not a new one");
+        assert!(editor
+            .active()
+            .unwrap()
+            .document
+            .layers
+            .get(copy)
+            .unwrap()
+            .is_group());
+        assert_eq!(
+            name(&editor, copy),
+            ui::dialogs::DuplicateLayerDialog::suggested_name("Set")
+        );
+        let copied = children(&editor, copy);
+        assert_eq!(copied.len(), 2, "the copy holds both children");
+        assert!(
+            copied.iter().all(|c| !before.contains(c)),
+            "children shared"
+        );
+        assert_eq!(
+            copied.iter().map(|c| name(&editor, *c)).collect::<Vec<_>>(),
+            vec!["Ink 2".to_string(), "Ink".to_string()],
+            "the children keep their names and order"
+        );
+        assert_eq!(children(&editor, group), vec![second, ink]);
+        // The copy's children took the move; the originals did not.
+        assert_eq!(bounds(&editor, copied[1]), moved_ink);
+        assert_eq!(bounds(&editor, copied[0]), moved_second);
+        assert_eq!(bounds(&editor, ink), PixelRect::new(8, 8, 8, 8));
+        assert_eq!(bounds(&editor, second), PixelRect::new(40, 40, 4, 4));
+        assert!(is_red(rgba_at(&mut editor, 10, 10)), "the original moved");
+        let (cx, cy) = (moved_ink.x as u32 + 2, moved_ink.y as u32 + 2);
+        assert!(is_red(rgba_at(&mut editor, cx, cy)), "no copy drawn");
+        assert_eq!(
+            editor.active().unwrap().document.active_layer(),
+            Some(copy),
+            "the copy is what the panel selects"
+        );
+
+        assert!(editor.active_mut().unwrap().undo().unwrap());
+        assert_eq!(layers(&editor), before, "undo left a copy behind");
+        assert!(
+            is_white(rgba_at(&mut editor, cx, cy)),
+            "the copy's ink stayed"
+        );
+    }
+
+    /// W13X-6: Layer > Duplicate Layer on a group — through its keyboard
+    /// action (Ctrl+Alt+J, `Action::DuplicateLayer`) and through the menu
+    /// arm its name dialog confirms into — copies the group with its
+    /// children, seated directly above it, as one step.
+    #[test]
+    fn duplicate_layer_on_a_group_copies_its_children_on_both_routes() {
+        use ui::menu::MenuAction;
+        for route in ["chord", "menu"] {
+            let dir = tempfile::tempdir().unwrap();
+            let (mut editor, group, ink, _) = editor_with_a_group(dir.path());
+            let before = layers(&editor);
+            let depth = editor.active().unwrap().history_depth();
+            match route {
+                "chord" => {
+                    editor
+                        .dispatch(crate::action::Action::DuplicateLayer)
+                        .unwrap_or_else(|e| panic!("{route}: {e}"));
+                }
+                _ => {
+                    crate::menu_bridge::perform(MenuAction::DuplicateLayer, &mut editor)
+                        .unwrap_or_else(|e| panic!("{route}: {e}"));
+                }
+            }
+            assert_eq!(
+                editor.active().unwrap().history_depth(),
+                depth + 1,
+                "{route}: one step"
+            );
+            assert_eq!(layers(&editor).len(), before.len() + 3, "{route}");
+            let root = editor.active().unwrap().document.layers.root().to_vec();
+            let at = root.iter().position(|l| *l == group).unwrap();
+            let copy = root[at - 1];
+            let copied = children(&editor, copy);
+            assert_eq!(copied.len(), 2, "{route}: the children were left behind");
+            assert_eq!(
+                bounds(&editor, copied[1]),
+                bounds(&editor, ink),
+                "{route}: the child copy carries its pixels"
+            );
+            assert_eq!(
+                editor.active().unwrap().document.active_layer(),
+                Some(copy),
+                "{route}"
+            );
+            assert!(editor.active_mut().unwrap().undo().unwrap());
+            assert_eq!(layers(&editor), before, "{route}: undo");
+        }
     }
 
     #[test]

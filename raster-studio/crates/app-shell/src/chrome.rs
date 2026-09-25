@@ -113,9 +113,11 @@ pub fn install_theme(ctx: &egui::Context, theme: design::Theme) {
     let style = design::style_for(theme);
     ctx.set_style_of(egui::Theme::Dark, style.clone());
     ctx.set_style_of(egui::Theme::Light, style);
-    ctx.set_theme(match theme {
-        design::Theme::Dark => egui::ThemePreference::Dark,
-        design::Theme::Light => egui::ThemePreference::Light,
+    // W13X-4: every Photopea theme is a dark or a light one.
+    ctx.set_theme(if theme.is_dark() {
+        egui::ThemePreference::Dark
+    } else {
+        egui::ThemePreference::Light
     });
 }
 

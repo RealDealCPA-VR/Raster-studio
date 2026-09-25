@@ -2229,12 +2229,17 @@ pub enum MenuAction {
 
     // ---- W13-F: profiles, Reduce Colors, Wavelet Decompose, slice rows ----
     /// Edit ▸ Assign Profile ▸ …: tag the document with a profile without
-    /// changing a pixel number, so the same numbers show differently.
+    /// changing a pixel number. The shell's canvas is colour-managed (it
+    /// converts the document's profile to sRGB on the way to the screen),
+    /// so the same numbers show differently.
     AssignProfile(ProfileChoice),
     /// Edit ▸ Convert to Profile…: the dialog (destination, rendering
     /// intent, black point compensation), then every pixel layer's numbers
-    /// rewritten so the picture looks the same under the new profile, and
-    /// the tag, as one undo step.
+    /// rewritten so the colour-managed canvas shows the same colours under
+    /// the new profile (to the 8-bit rounding of the new numbers: on
+    /// saturated colours converted to a wider profile, up to what one 8-bit
+    /// code of the destination spans on screen), and the tag, as one undo
+    /// step.
     ConvertToProfile,
     /// Image ▸ Reduce Colors…: the dialog (palette, colour count, dither),
     /// then the active layer's colours onto that palette, one undo step. The
@@ -5038,12 +5043,10 @@ fn layer_menu() -> Menu {
                 // W13-G
                 e.push(Entry::Separator);
                 e.push(item(MenuAction::LayerExtra(LayerExtraOp::CreateLayers)));
-                e.push(Entry::submenu(
-                    "Scale Effects",
-                    items(SCALE_EFFECTS_PERCENTS, |p| {
-                        MenuAction::LayerExtra(LayerExtraOp::ScaleEffects(p))
-                    }),
-                ));
+                // W13X-3: one row, which asks for the percent.
+                e.push(item(MenuAction::LayerExtra(LayerExtraOp::ScaleEffects(
+                    SCALE_EFFECTS_ROW,
+                ))));
                 e
             }),
             item(MenuAction::ConvertToSmartObject),
@@ -5358,14 +5361,18 @@ impl StackMode {
     }
 }
 
-/// W13-G: the percentages Layer ▸ Layer Style ▸ Scale Effects offers as rows.
-pub const SCALE_EFFECTS_PERCENTS: &[u16] = &[25, 50, 75, 150, 200];
+/// W13X-3: the percent the Layer ▸ Layer Style ▸ Scale Effects… row carries.
+/// The row opens the percent dialog (1–1000%), which answers with
+/// `ScaleEffects(chosen)`; performed without the dialog, 100% is refused as
+/// changing nothing.
+pub const SCALE_EFFECTS_ROW: u16 = 100;
 
 /// W13-G: one of the last Layer-menu rows from the parity audit.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub enum LayerExtraOp {
-    /// Layer Style ▸ Scale Effects ▸ `n`%: every size and distance of the
-    /// active layer's style times `n / 100`.
+    /// Layer Style ▸ Scale Effects…: every size and distance of the active
+    /// layer's style times `n / 100`. The menu row is
+    /// `ScaleEffects(SCALE_EFFECTS_ROW)`, which opens the percent dialog.
     ScaleEffects(u16),
     /// Layer Style ▸ Create Layers: the style's effects become raster
     /// layers (clipped for the interior ones) that composite the same.
@@ -5399,11 +5406,7 @@ impl LayerExtraOp {
             LayerExtraOp::MaskFromTransparency,
             LayerExtraOp::CreateLayers,
         ];
-        out.extend(
-            SCALE_EFFECTS_PERCENTS
-                .iter()
-                .map(|p| LayerExtraOp::ScaleEffects(*p)),
-        );
+        out.push(LayerExtraOp::ScaleEffects(SCALE_EFFECTS_ROW));
         out.push(LayerExtraOp::ResetTransform);
         out.extend(StackMode::ALL.iter().map(|m| LayerExtraOp::StackMode(*m)));
         out.extend([
@@ -5416,7 +5419,7 @@ impl LayerExtraOp {
 
     pub fn label(self) -> String {
         match self {
-            LayerExtraOp::ScaleEffects(p) => format!("{p}%"),
+            LayerExtraOp::ScaleEffects(_) => tr("ui.scale_effects.menu").into(),
             LayerExtraOp::CreateLayers => "Create Layers".into(),
             LayerExtraOp::ArtboardFromLayers => "Artboard from Layers".into(),
             LayerExtraOp::MaskFromTransparency => "From Transparency".into(),
@@ -5552,17 +5555,115 @@ impl LayerExtraFacts {
     }
 }
 
-/// W13-G: the layer count a PSD declares (the signed count at the head of
-/// the layer-info block, negative when the first alpha is the merged result),
-/// read without decoding a pixel. A 16- or 32-bit file leaves the classic
-/// layer-info block empty and keeps its layers in an `Lr16` / `Lr32` (or
-/// `Layr`) tagged block after the global mask, so the walk follows it there,
-/// the way `psd::read` does. `None` for anything that is not a well-formed
-/// PSD / PSB, so a file this cannot read never greys a row.
+/// W13-G / W13X-3: the layers Stack Mode would stack in a PSD — its visible
+/// top-level layers, a visible group counting once — read from the layer
+/// records without decoding a pixel. Group punctuation (the `lsct` / `lsdk`
+/// bounding divider and the group record that closes it) and everything
+/// inside a group is not counted, and neither is a hidden layer, so a source
+/// holding one group, or one visible layer among hidden ones, reads 1. A 16-
+/// or 32-bit file leaves the classic layer-info block empty and keeps its
+/// layers in an `Lr16` / `Lr32` (or `Layr`) tagged block after the global
+/// mask, so the walk follows it there, the way `psd::read` does. `None` for
+/// anything that is not a well-formed PSD / PSB, so a file this cannot read
+/// never greys a row.
 pub fn psd_header_layer_count(bytes: &[u8]) -> Option<usize> {
     fn be(bytes: &[u8], at: usize, n: usize) -> Option<u64> {
         let b = bytes.get(at..at.checked_add(n)?)?;
         Some(b.iter().fold(0u64, |acc, v| (acc << 8) | u64::from(*v)))
+    }
+    const LONG_IN_PSB: [&[u8; 4]; 13] = [
+        b"LMsk", b"Lr16", b"Lr32", b"Layr", b"Mt16", b"Mt32", b"Mtrn", b"Alph", b"FMsk", b"lnk2",
+        b"FEid", b"FXid", b"PxSD",
+    ];
+    fn is_sig(bytes: &[u8], at: usize) -> bool {
+        at.checked_add(4)
+            .and_then(|end| bytes.get(at..end))
+            .is_some_and(|s| s == b"8BIM" || s == b"8B64")
+    }
+    /// Walk the tagged blocks in `at..end`, calling `found(key, data_at,
+    /// len)` for each until it answers `Some`. Writers pad blocks to two or
+    /// four bytes: resynchronise over at most three, as the reader does.
+    fn blocks<T>(
+        bytes: &[u8],
+        mut at: usize,
+        end: usize,
+        wide: usize,
+        mut found: impl FnMut(&[u8], usize, usize) -> Option<T>,
+    ) -> Option<Option<T>> {
+        while at.checked_add(12)? <= end {
+            if !is_sig(bytes, at) {
+                let skip = (1..=3usize).find(|k| is_sig(bytes, at + k))?;
+                at += skip;
+                continue;
+            }
+            let key = bytes.get(at + 4..at + 8)?;
+            let long = wide == 8 && LONG_IN_PSB.iter().any(|k| &k[..] == key);
+            let len_width = if long { 8 } else { 4 };
+            let len = usize::try_from(be(bytes, at + 8, len_width)?).ok()?;
+            let data = at.checked_add(8 + len_width)?;
+            if let Some(hit) = found(key, data, len) {
+                return Some(Some(hit));
+            }
+            at = data.checked_add(len)?.checked_add(len % 2)?;
+        }
+        Some(None)
+    }
+    /// The records' count at `at` (a signed 16-bit count, negative when the
+    /// first alpha is the merged result), then the records up to `end`:
+    /// how many are visible and at the top level.
+    fn top_level(bytes: &[u8], mut at: usize, end: usize, wide: usize) -> Option<usize> {
+        let raw = be(bytes, at, 2)? as u16 as i16;
+        let n = usize::from(raw.unsigned_abs());
+        at = at.checked_add(2)?;
+        let (mut depth, mut count) = (0usize, 0usize);
+        for _ in 0..n {
+            // Bounds (16), then the channel count and per channel an id (2)
+            // and a length (4, or 8 in a PSB).
+            let channels = usize::try_from(be(bytes, at.checked_add(16)?, 2)?).ok()?;
+            at = at
+                .checked_add(18)?
+                .checked_add(channels.checked_mul(2 + wide)?)?;
+            // Blend signature and key (8), opacity, clipping, flags, filler.
+            let flags = *bytes.get(at.checked_add(10)?)?;
+            at = at.checked_add(12)?;
+            let extra = usize::try_from(be(bytes, at, 4)?).ok()?;
+            at = at.checked_add(4)?;
+            let extra_end = at.checked_add(extra)?;
+            if extra_end > end {
+                return None;
+            }
+            // The mask and blending-range blocks, then the name (a Pascal
+            // string padded to four), then the record's tagged blocks.
+            let mut inner = at;
+            for _ in 0..2 {
+                let len = usize::try_from(be(bytes, inner, 4)?).ok()?;
+                inner = inner.checked_add(4)?.checked_add(len)?;
+            }
+            let name = usize::from(*bytes.get(inner)?);
+            inner = inner.checked_add((name + 1).div_ceil(4) * 4)?;
+            let divider = if inner <= extra_end {
+                blocks(bytes, inner, extra_end, wide, |key, data, len| {
+                    (matches!(key, b"lsct" | b"lsdk") && len >= 4)
+                        .then(|| be(bytes, data, 4))
+                        .flatten()
+                })?
+            } else {
+                None
+            };
+            at = extra_end;
+            let visible = flags & 0b10 == 0;
+            match divider {
+                // The hidden record that opens a group (it comes first).
+                Some(3) => depth += 1,
+                // The group's own record closes it.
+                Some(1) | Some(2) => {
+                    depth = depth.saturating_sub(1);
+                    count += usize::from(depth == 0 && visible);
+                }
+                _ => count += usize::from(depth == 0 && visible),
+            }
+        }
+        Some(count)
     }
     if !bytes.starts_with(b"8BPS") {
         return None;
@@ -5590,15 +5691,11 @@ pub fn psd_header_layer_count(bytes: &[u8]) -> Option<usize> {
     if end > bytes.len() {
         return None;
     }
-    let count_at = |at: usize| -> Option<usize> {
-        let raw = be(bytes, at, 2)? as u16 as i16;
-        Some(usize::from(raw.unsigned_abs()))
-    };
     let info = usize::try_from(be(bytes, at, wide)?).ok()?;
     if info >= 2 {
-        let n = count_at(at.checked_add(wide)?)?;
-        if n > 0 {
-            return Some(n);
+        let count_at = at.checked_add(wide)?;
+        if be(bytes, count_at, 2)? != 0 {
+            return top_level(bytes, count_at, count_at.checked_add(info)?, wide);
         }
     }
     // Deep bit depths: past the (empty) layer info and the global mask,
@@ -5607,37 +5704,14 @@ pub fn psd_header_layer_count(bytes: &[u8]) -> Option<usize> {
     let mask = usize::try_from(be(bytes, at, 4)?).ok()?;
     at = at.checked_add(4)?.checked_add(mask)?;
     const NESTED: [&[u8; 4]; 3] = [b"Lr16", b"Lr32", b"Layr"];
-    const LONG_IN_PSB: [&[u8; 4]; 13] = [
-        b"LMsk", b"Lr16", b"Lr32", b"Layr", b"Mt16", b"Mt32", b"Mtrn", b"Alph", b"FMsk", b"lnk2",
-        b"FEid", b"FXid", b"PxSD",
-    ];
-    let is_sig = |at: usize| -> Option<()> {
-        matches!(
-            bytes.get(at..at.checked_add(4)?),
-            Some(b"8BIM") | Some(b"8B64")
-        )
-        .then_some(())
-    };
-    while at.checked_add(12)? <= end {
-        if is_sig(at).is_none() {
-            // Writers pad blocks to two or four bytes: resynchronise over at
-            // most three, as the reader does, and give up otherwise.
-            let skip = (1..=3usize).find(|k| at.checked_add(*k).and_then(is_sig).is_some())?;
-            at += skip;
-            continue;
-        }
-        let key = bytes.get(at + 4..at + 8)?;
-        let long = wide == 8 && LONG_IN_PSB.iter().any(|k| &k[..] == key);
-        let len_width = if long { 8 } else { 4 };
-        let len = usize::try_from(be(bytes, at + 8, len_width)?).ok()?;
-        let data = at.checked_add(8 + len_width)?;
-        if NESTED.iter().any(|k| &k[..] == key) {
-            return if len >= 2 { count_at(data) } else { Some(0) };
-        }
-        at = data.checked_add(len)?.checked_add(len % 2)?;
+    let nested = blocks(bytes, at, end, wide, |key, data, len| {
+        NESTED.iter().any(|k| &k[..] == key).then_some((data, len))
+    })?;
+    match nested {
+        Some((data, len)) if len >= 2 => top_level(bytes, data, data.checked_add(len)?, wide),
+        // An empty nested block, or none: the file really has no layers.
+        _ => Some(0),
     }
-    // No nested block: the file really has no layers.
-    Some(0)
 }
 
 /// W13-G: why the 8-bit-only rows are greyed in a deeper document.

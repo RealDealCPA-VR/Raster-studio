@@ -39,6 +39,12 @@ pub const MIN_EDGE: u32 = 16;
 /// The movie timescale: durations are written in milliseconds.
 pub const TIMESCALE: u32 = 1000;
 
+/// W13X-9: the most samples (frames) [`probe`] reads from one track: an
+/// hour at 60 fps is 216 000, so a million is far past any real clip, and it
+/// bounds what the sample tables may make `probe` allocate (a few MiB)
+/// whatever count a damaged or hostile `stsz` names.
+pub const MAX_PROBE_SAMPLES: u32 = 1_000_000;
+
 /// The encoder speed preset (0 slowest .. 10 fastest). 8 keeps an export of
 /// a few seconds interactive at the cost of a little compression.
 const SPEED: u8 = 8;
@@ -501,6 +507,25 @@ pub fn probe(bytes: &[u8]) -> Result<Mp4Info, CodecError> {
     let stsz = child(stbl, b"stsz")?;
     let uniform = u32_at(stsz, 4)?;
     let frame_count = u32_at(stsz, 8)?;
+    // W13X-9: bound the count before anything is sized by it. Past the cap
+    // it is refused outright; under it, every sample must still fit: a
+    // uniform size puts `count * size` bytes in the file, a size table
+    // needs four bytes per sample inside `stsz`.
+    if frame_count > MAX_PROBE_SAMPLES {
+        return Err(malformed(format!(
+            "stsz names {frame_count} samples, more than the {MAX_PROBE_SAMPLES} this build reads"
+        )));
+    }
+    let fits = if uniform != 0 {
+        u64::from(frame_count) * u64::from(uniform) <= bytes.len() as u64
+    } else {
+        12 + u64::from(frame_count) * 4 <= stsz.len() as u64
+    };
+    if !fits {
+        return Err(malformed(format!(
+            "stsz names {frame_count} samples, more than the file holds"
+        )));
+    }
     let sizes: Vec<u32> = if uniform != 0 {
         vec![uniform; frame_count as usize]
     } else {
@@ -620,10 +645,11 @@ pub fn looks_like_video(head: &[u8]) -> bool {
 pub fn video_refusal() -> CodecError {
     CodecError::Unsupported(
         "opening video files (MP4, MOV, WebM, AVI) as video layers is not supported: this \
-         build has no permissively licensed pure-Rust video decoder (the H.264 / HEVC / VP9 \
-         decoders are C libraries, some GPL/LGPL, and rav1d, the pure-Rust AV1 decoder, \
-         aborts on damaged input); export the frames as an animated GIF, APNG or WebP, or \
-         as images, and open those instead"
+         build has no permissively licensed pure-Rust video decoder it can run safely (the \
+         H.264 / HEVC / VP9 decoders are C libraries, some GPL/LGPL; rav1d, the pure-Rust \
+         AV1 decoder, aborts the process on damaged input and this build aborts on a panic; \
+         rav1d-safe is AGPL); export the frames as an animated GIF, APNG or WebP, or as \
+         images, and open those instead"
             .into(),
     )
 }
@@ -736,6 +762,62 @@ mod tests {
             flipped[i] ^= 0xA5;
             let _ = probe(&flipped);
         }
+    }
+
+    /// W13X-9: a `stsz` naming an absurd sample count is refused before any
+    /// table is sized by it (a uniform-size `stsz` of `u32::MAX` samples
+    /// would otherwise ask for 16 GiB of sizes).
+    #[test]
+    fn probe_refuses_an_absurd_frame_count_before_allocating() {
+        let px = frames(16, 16, 2);
+        let input: Vec<Mp4Frame<'_>> = px
+            .iter()
+            .map(|p| Mp4Frame {
+                rgba8: p,
+                duration_ms: 50,
+            })
+            .collect();
+        let bytes = encode(16, 16, &input, 50).unwrap();
+        let at = bytes
+            .windows(4)
+            .position(|w| w == b"stsz")
+            .expect("an stsz box");
+        // kind, version + flags, uniform size, sample count.
+        let patched = |uniform: u32, count: u32| {
+            let mut b = bytes.clone();
+            b[at + 8..at + 12].copy_from_slice(&uniform.to_be_bytes());
+            b[at + 12..at + 16].copy_from_slice(&count.to_be_bytes());
+            b
+        };
+        for (uniform, count) in [(1, u32::MAX), (0, u32::MAX), (1, MAX_PROBE_SAMPLES + 1)] {
+            let err = probe(&patched(uniform, count)).unwrap_err().to_string();
+            assert!(err.contains(&format!("{count} samples")), "{err}");
+            assert!(err.contains("more than"), "{err}");
+        }
+        // Under the cap but more than the file can hold: refused too.
+        let err = probe(&patched(1, MAX_PROBE_SAMPLES))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("more than the file holds"), "{err}");
+        // A file big enough to hold the samples (a `free` box of padding
+        // at the end) is still refused past the cap, by the cap.
+        let mut padded = patched(1, MAX_PROBE_SAMPLES + 1);
+        let pad = MAX_PROBE_SAMPLES as usize + 64;
+        padded.extend_from_slice(&(pad as u32 + 8).to_be_bytes());
+        padded.extend_from_slice(b"free");
+        padded.resize(padded.len() + pad, 0);
+        let err = probe(&padded).unwrap_err().to_string();
+        assert!(
+            err.contains(&format!("more than the {MAX_PROBE_SAMPLES}")),
+            "{err}"
+        );
+        // The untouched file still probes, padded or not.
+        assert_eq!(probe(&bytes).unwrap().frame_count, 2);
+        let mut padded = bytes.clone();
+        padded.extend_from_slice(&(pad as u32 + 8).to_be_bytes());
+        padded.extend_from_slice(b"free");
+        padded.resize(padded.len() + pad, 0);
+        assert_eq!(probe(&padded).unwrap().frame_count, 2);
     }
 
     #[test]

@@ -499,6 +499,8 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
     pub(crate) fn composite_root(&self, rect: PixelRect) -> Result<Canvas, CompositeError> {
         let mut c = Canvas::transparent(rect)?;
         self.composite_ids(self.doc.layers.root(), rect, &mut c)?;
+        // W13X-4: the document's spot channels, as ink over the stack.
+        crate::spot::lay_spot_inks(self.doc, &self.space, self.level, &mut c);
         self.clip_to_document(&mut c);
         Ok(c)
     }
@@ -1622,6 +1624,8 @@ impl<'a, S: TileSource + ?Sized> Ctx<'a, S> {
         self.space.name().hash(&mut h);
         self.opts.hash(&mut h);
         self.hash_ids(self.doc.layers.root(), tile_rect(coord), &mut h);
+        // W13X-4: the ink the spot pass lays over this tile.
+        crate::spot::hash_spot_inks(self.doc, self.level, tile_rect(coord), &mut h);
         h.finish()
     }
 

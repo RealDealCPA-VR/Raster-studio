@@ -588,6 +588,9 @@ pub struct Editor {
     /// and read back through [`Editor::brush_for`], which seeds an absent one
     /// from [`tools::registry::make`] so the registry stays the one table.
     brushes: BTreeMap<ToolId, BrushSettings>,
+    /// W13X-6: the tool last used from each tool letter's group this
+    /// session, which [`Editor::select_tool_letter`] enters a group at.
+    tool_letters: ui::palette::ToolLetterMemory,
     foreground: [f32; 4],
     background: [f32; 4],
     /// Card 058: the content colour wells stashed while a document's edit
@@ -925,6 +928,7 @@ impl Editor {
             tool: ToolId::Move,
             brush: seeded_brush(ToolId::Move),
             brushes: BTreeMap::new(),
+            tool_letters: ui::palette::ToolLetterMemory::new(),
             foreground: DEFAULT_FOREGROUND,
             background: DEFAULT_BACKGROUND,
             content_color_backups: std::collections::HashMap::new(),
@@ -1800,12 +1804,17 @@ impl Editor {
     /// Through `set_tool`, so a tool reached by its keyboard letter takes up
     /// its own brush exactly as one clicked in the palette does. `None` when
     /// no tool answers to the letter.
+    ///
+    /// W13X-6: from outside the group the letter enters it at the member
+    /// last used from it this session (`ui::palette::ToolLetterMemory`,
+    /// recorded by `set_tool` whichever route chose the tool), as Photopea
+    /// does; the group's first member only when none was used yet.
     pub fn select_tool_letter(
         &mut self,
         key: crate::action::ToolKey,
         step: bool,
     ) -> Option<ToolId> {
-        let next = ui::keys::tool_for_letter(key.char(), step, Some(self.tool))?;
+        let next = self.tool_letters.pick(key.char(), step, Some(self.tool))?;
         self.set_tool(next);
         self.status = Some(
             registry::info(next)
@@ -4146,6 +4155,8 @@ impl Editor {
             self.tool = tool;
             self.touch();
         }
+        // W13X-6: whichever route chose it (palette, fly-out, letter).
+        self.tool_letters.record(tool);
     }
 
     /// The brush `tool` paints with: whatever the options bar and the bracket
@@ -5496,16 +5507,15 @@ impl Editor {
                         action,
                         "select a layer in the Layers panel first",
                     )),
-                    Some(id) if d.document.layers.get(id).is_some_and(Layer::is_group) => {
-                        Err(ActionError::unavailable(
-                            action,
-                            "duplicating a group is not implemented yet",
-                        ))
-                    }
+                    // W13X-6: a group is copied with its subtree
+                    // (`layer_ops::duplicate_commands`).
                     Some(_) => Ok(()),
                 },
             },
 
+            // W13X-1: a nudge needs a document; what it moves (layers, the
+            // selected pixels, the outline) is decided when it runs.
+            Action::Nudge(_) => doc.map(|_| ()).ok_or_else(no_doc),
             Action::NextDocument | Action::PreviousDocument => {
                 if self.docs.len() < 2 {
                     Err(ActionError::unavailable(
@@ -5676,6 +5686,20 @@ impl Editor {
             }
             Action::NextDocument => self.act_step_document(1),
             Action::PreviousDocument => self.act_step_document(-1),
+            // W13X-1: the plain one-pixel nudge. The arrow keys reach it
+            // through the shell, which reads Shift and Alt off the chord and
+            // drives its own pointer's `nudge` (so a live gesture or text
+            // run refuses it); dispatched here it runs through a fresh one.
+            Action::Nudge(direction) => {
+                match crate::tool_input::ToolPointer::new().nudge(self, direction, false, false) {
+                    Ok(0) => Err(ActionError::unavailable(
+                        action,
+                        "the current tool has nothing to nudge",
+                    )),
+                    Ok(_) => Ok(Effect::DocumentEdited),
+                    Err(reason) => Err(ActionError::failed(action, reason)),
+                }
+            }
         }
     }
 
@@ -6298,74 +6322,19 @@ impl Editor {
         Ok(Effect::DocumentEdited)
     }
 
+    /// W13X-6: the Ctrl+Alt+J chord runs the same copy as Layer ▸
+    /// Duplicate Layer (`layer_ops::duplicate_layer`): seated directly above
+    /// its source, and a group copied with its whole subtree.
     fn act_duplicate_layer(&mut self) -> Result<Effect, ActionError> {
         let action = Action::DuplicateLayer;
-        let doc = self.active_mut().expect("`can` required a document");
-        let source_id = doc
-            .document
-            .active_layer()
-            .expect("`can` required an active layer");
-        let source = doc
-            .document
-            .layers
-            .get(source_id)
-            .expect("the active layer is in the tree")
-            .clone();
-
-        let mut copy = source.clone();
-        copy.id = LayerId::new();
-        copy.name = format!("{} copy", source.name);
-        // A duplicated mask needs its own identity, or both layers would edit
-        // one set of coverage tiles.
-        let mask_copy = copy.mask.as_mut().map(|m| {
-            let old = m.id;
-            m.id = MaskId::new();
-            (old, m.id)
-        });
-        let new_id = copy.id;
-
-        let mut commands = vec![Command::create_layer(copy)];
-        // Pixels are content-addressed, so "copying" them is copying hashes:
-        // the bytes are shared and the duplicate costs nothing on disk.
-        if let Some(map) = doc.document.layer_tiles(source_id) {
-            let edits: Vec<_> = map
-                .iter()
-                .map(|(coord, hash)| editor_core::TileEdit::set(coord, hash))
-                .collect();
-            if !edits.is_empty() {
-                commands.push(
-                    Command::paint_tiles(editor_core::PixelTarget::Layer(new_id), edits)
-                        .map_err(|e| ActionError::failed(action, e))?,
-                );
-            }
+        let depth = self.active().map_or(0, |d| d.history_depth());
+        let status = crate::layer_ops::duplicate_layer(self, None)
+            .map_err(|reason| ActionError::Failed { action, reason })?;
+        if self.active().map_or(0, |d| d.history_depth()) == depth {
+            let reason = self.status().unwrap_or("the copy was refused").to_string();
+            return Err(ActionError::Failed { action, reason });
         }
-        if let Some((old_mask, _)) = mask_copy {
-            if let Some(map) = doc
-                .document
-                .pixels
-                .tiles(editor_core::PixelKey::Mask(old_mask))
-            {
-                let edits: Vec<_> = map
-                    .iter()
-                    .map(|(coord, hash)| editor_core::TileEdit::set(coord, hash))
-                    .collect();
-                if !edits.is_empty() {
-                    commands.push(
-                        Command::paint_tiles(editor_core::PixelTarget::Mask(new_id), edits)
-                            .map_err(|e| ActionError::failed(action, e))?,
-                    );
-                }
-            }
-        }
-
-        doc.apply(Command::Transaction {
-            label: format!("Duplicate {}", source.name),
-            commands,
-        })
-        .map_err(|e| ActionError::failed(action, e))?;
-        doc.document
-            .set_active_layer(Some(new_id))
-            .expect("the duplicate was just created");
+        self.status = Some(status);
         self.touch();
         Ok(Effect::DocumentEdited)
     }

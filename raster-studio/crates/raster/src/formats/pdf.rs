@@ -27,8 +27,14 @@
 //! # Pages
 //!
 //! [`decode`] (the flat codec's road) answers the **first** page.
-//! [`render_pages`] renders up to [`MAX_PAGES`] of them, which is what
-//! `app-shell` opens as one artboard per page.
+//! [`render_pages`] renders up to [`MAX_PAGES`] of them at one pixel per
+//! point (File > Revert of a PDF opened before W13X-7 uses it).
+//!
+//! W13X-7: File > Open of a file of two or more pages asks first, as
+//! Photopea does: [`page_previews`] lists up to [`MAX_PAGES`] pages with a
+//! thumbnail each for the import dialog, and [`render_selected`] renders the
+//! pages it chose at the resolution it chose ([`MIN_DPI`]..=[`MAX_DPI`]
+//! dots per inch; [`DEFAULT_DPI`] is one pixel per point).
 //!
 //! # Untrusted input
 //!
@@ -85,14 +91,19 @@ fn load(bytes: &[u8]) -> Result<Pdf, CodecError> {
 }
 
 /// The pixel size page `page`'s render has, checked against `limits`.
-fn pixel_size(pdf: &Pdf, page: usize, limits: ImportLimits) -> Result<(u16, u16), CodecError> {
+fn pixel_size(
+    pdf: &Pdf,
+    page: usize,
+    scale: f32,
+    limits: ImportLimits,
+) -> Result<(u16, u16), CodecError> {
     let pages = pdf.pages();
     let page = pages
         .get(page)
         .ok_or_else(|| malformed(NAME, format!("there is no page {}", page + 1)))?;
     let (w, h) = page.render_dimensions();
     let side = |v: f32| -> Result<u32, CodecError> {
-        let v = (v * PIXELS_PER_POINT).floor();
+        let v = (v * scale).floor();
         if !v.is_finite() || v < 1.0 {
             return Err(malformed(NAME, "a page has no area"));
         }
@@ -116,8 +127,13 @@ fn pixel_size(pdf: &Pdf, page: usize, limits: ImportLimits) -> Result<(u16, u16)
     Ok((width as u16, height as u16))
 }
 
-fn render(pdf: &Pdf, index: usize, limits: ImportLimits) -> Result<DecodedSurface, CodecError> {
-    let (width, height) = pixel_size(pdf, index, limits)?;
+fn render(
+    pdf: &Pdf,
+    index: usize,
+    scale: f32,
+    limits: ImportLimits,
+) -> Result<DecodedSurface, CodecError> {
+    let (width, height) = pixel_size(pdf, index, scale, limits)?;
     let pages = pdf.pages();
     let page = &pages[index];
     let pixmap = guarded(|| {
@@ -125,8 +141,8 @@ fn render(pdf: &Pdf, index: usize, limits: ImportLimits) -> Result<DecodedSurfac
             page,
             &InterpreterSettings::default(),
             &RenderSettings {
-                x_scale: PIXELS_PER_POINT,
-                y_scale: PIXELS_PER_POINT,
+                x_scale: scale,
+                y_scale: scale,
                 width: Some(width),
                 height: Some(height),
             },
@@ -161,7 +177,7 @@ pub fn render_page(
     index: usize,
     limits: ImportLimits,
 ) -> Result<DecodedSurface, CodecError> {
-    guarded(|| render(&load(bytes)?, index, limits))
+    guarded(|| render(&load(bytes)?, index, PIXELS_PER_POINT, limits))
 }
 
 /// The pages [`render_pages`] rendered, and how many the file has.
@@ -187,12 +203,131 @@ pub fn render_pages(bytes: &[u8], limits: ImportLimits) -> Result<PdfPages, Code
         let mut held = 0u64;
         let mut pages = Vec::new();
         for index in 0..total.min(MAX_PAGES) {
-            let (w, h) = pixel_size(&pdf, index, limits)?;
+            let (w, h) = pixel_size(&pdf, index, PIXELS_PER_POINT, limits)?;
             held = held.saturating_add(u64::from(w) * u64::from(h) * 4);
             limits.check_alloc(held)?;
-            pages.push(render(&pdf, index, limits)?);
+            pages.push(render(&pdf, index, PIXELS_PER_POINT, limits)?);
         }
         Ok(PdfPages { pages, total })
+    })
+}
+
+// ------------------------------------------------- W13X-7: the import dialog
+
+/// The resolution a page opens at when nobody chose one: one pixel per
+/// point, 72 dots per inch.
+pub const DEFAULT_DPI: u32 = 72;
+/// The lowest resolution the import dialog offers.
+pub const MIN_DPI: u32 = 18;
+/// The highest resolution the import dialog offers.
+pub const MAX_DPI: u32 = 1200;
+
+/// Pixels per point at `dpi` dots per inch (a point is 1/72 inch).
+pub fn scale_for_dpi(dpi: u32) -> f32 {
+    dpi as f32 / 72.0
+}
+
+/// One page as the import dialog lists it: its size in points and a small
+/// rendering of it.
+#[derive(Debug)]
+pub struct PdfPagePreview {
+    /// The page's width in points, rotation applied.
+    pub width_pt: f32,
+    /// The page's height in points, rotation applied.
+    pub height_pt: f32,
+    /// The page rendered to fit a `max_side` square (see
+    /// [`page_previews`]).
+    pub thumbnail: DecodedSurface,
+}
+
+/// The pages [`page_previews`] listed, and how many the file has.
+#[derive(Debug)]
+pub struct PdfPreviews {
+    /// The first `min(total, MAX_PAGES)` pages, in order.
+    pub pages: Vec<PdfPagePreview>,
+    /// Every page the file has.
+    pub total: usize,
+}
+
+/// W13X-7: every page up to [`MAX_PAGES`] with its size in points and a
+/// thumbnail at most `max_side` pixels a side, for the import dialog.
+pub fn page_previews(
+    bytes: &[u8],
+    max_side: u32,
+    limits: ImportLimits,
+) -> Result<PdfPreviews, CodecError> {
+    guarded(|| {
+        let pdf = load(bytes)?;
+        let total = pdf.pages().len();
+        if total == 0 {
+            return Err(malformed(NAME, "the document has no pages"));
+        }
+        let max_side = max_side.max(1) as f32;
+        let mut pages = Vec::new();
+        for index in 0..total.min(MAX_PAGES) {
+            let (w, h) = pdf.pages()[index].render_dimensions();
+            let (longest, shortest) = (w.max(h), w.min(h));
+            if !shortest.is_finite() || shortest <= 0.0 || !longest.is_finite() {
+                return Err(malformed(NAME, "a page has no area"));
+            }
+            // Fitted to `max_side`, at least one pixel across the short
+            // side, and never larger than the page at one pixel per point.
+            let scale = (max_side / longest)
+                .max(1.001 / shortest)
+                .min(PIXELS_PER_POINT);
+            let thumbnail = render(&pdf, index, scale, limits)?;
+            pages.push(PdfPagePreview {
+                width_pt: w,
+                height_pt: h,
+                thumbnail,
+            });
+        }
+        Ok(PdfPreviews { pages, total })
+    })
+}
+
+/// W13X-7: the pages `indices` (from 0, in the order given) rendered at
+/// `dpi` dots per inch. Each page is checked against `limits` on its own,
+/// and all of them together against its allocation ceiling, before any is
+/// drawn; an index past the file, a repeated index or a `dpi` outside
+/// [`MIN_DPI`]..=[`MAX_DPI`] is refused.
+pub fn render_selected(
+    bytes: &[u8],
+    indices: &[usize],
+    dpi: u32,
+    limits: ImportLimits,
+) -> Result<Vec<DecodedSurface>, CodecError> {
+    if !(MIN_DPI..=MAX_DPI).contains(&dpi) {
+        return Err(CodecError::Unsupported(format!(
+            "a resolution of {dpi} dpi is outside {MIN_DPI}-{MAX_DPI} dpi"
+        )));
+    }
+    if indices.is_empty() {
+        return Err(malformed(NAME, "no page was chosen"));
+    }
+    let scale = scale_for_dpi(dpi);
+    guarded(|| {
+        let pdf = load(bytes)?;
+        let total = pdf.pages().len();
+        let mut held = 0u64;
+        for (n, &index) in indices.iter().enumerate() {
+            if index >= total {
+                return Err(malformed(NAME, format!("there is no page {}", index + 1)));
+            }
+            if indices[..n].contains(&index) {
+                return Err(malformed(
+                    NAME,
+                    format!("page {} was chosen twice", index + 1),
+                ));
+            }
+            let (w, h) = pixel_size(&pdf, index, scale, limits)?;
+            held = held.saturating_add(u64::from(w) * u64::from(h) * 4);
+            limits.check_alloc(held)?;
+        }
+        indices
+            .iter()
+            .map(|&index| render(&pdf, index, scale, limits))
+            .collect()
     })
 }
 
@@ -203,7 +338,7 @@ pub(super) fn probe(bytes: &[u8], limits: ImportLimits) -> Result<ImageInfo, Cod
         if pdf.pages().is_empty() {
             return Err(malformed(NAME, "the document has no pages"));
         }
-        let (w, h) = pixel_size(&pdf, 0, limits)?;
+        let (w, h) = pixel_size(&pdf, 0, PIXELS_PER_POINT, limits)?;
         Ok(info(u32::from(w), u32::from(h), ImportFormat::Pdf, false))
     })
 }
@@ -215,7 +350,7 @@ pub(super) fn decode(bytes: &[u8], limits: ImportLimits) -> Result<DecodedSurfac
         if pdf.pages().is_empty() {
             return Err(malformed(NAME, "the document has no pages"));
         }
-        render(&pdf, 0, limits)
+        render(&pdf, 0, PIXELS_PER_POINT, limits)
     })
 }
 
@@ -328,6 +463,72 @@ pub(crate) mod tests {
         let second = render_page(&pdf, 1, ImportLimits::default()).unwrap();
         assert_eq!((second.width, second.height), (20, 8));
         assert!(render_page(&pdf, 3, ImportLimits::default()).is_err());
+    }
+
+    #[test]
+    fn chosen_pages_render_at_the_chosen_resolution_and_previews_fit_their_box() {
+        let pdf = build_pdf(&[
+            (10, 10, "0 1 0 rg 0 0 10 10 re f"),
+            (20, 8, "0 0 1 rg 0 0 20 8 re f"),
+            (6, 6, "1 1 0 rg 0 0 6 6 re f"),
+        ]);
+        let limits = ImportLimits::default();
+        let two = render_selected(&pdf, &[0, 2], 144, limits).unwrap();
+        let sizes: Vec<_> = two.iter().map(|p| (p.width, p.height)).collect();
+        assert_eq!(sizes, vec![(20, 20), (12, 12)], "twice the size in points");
+        assert_eq!(px(&two[0], 19, 19), [0, 255, 0, 255]);
+        assert_eq!(px(&two[1], 11, 0), [255, 255, 0, 255]);
+        let low = render_selected(&pdf, &[1], 36, limits).unwrap();
+        assert_eq!((low[0].width, low[0].height), (10, 4));
+        // Refused: no page, a page past the file, a page twice, a resolution
+        // outside the dialog's range.
+        assert!(render_selected(&pdf, &[], 72, limits).is_err());
+        assert!(render_selected(&pdf, &[3], 72, limits).is_err());
+        assert!(render_selected(&pdf, &[1, 1], 72, limits).is_err());
+        assert!(render_selected(&pdf, &[0], MIN_DPI - 1, limits).is_err());
+        assert!(render_selected(&pdf, &[0], MAX_DPI + 1, limits).is_err());
+        // Too large for the limits: refused before any page is drawn.
+        let tight = ImportLimits {
+            max_alloc_bytes: 20 * 20 * 4 + 1,
+            ..limits
+        };
+        assert!(matches!(
+            render_selected(&pdf, &[0, 2], 144, tight),
+            Err(CodecError::LimitExceeded(_))
+        ));
+
+        let previews = page_previews(&pdf, 5, limits).unwrap();
+        assert_eq!(previews.total, 3);
+        let listed: Vec<_> = previews
+            .pages
+            .iter()
+            .map(|p| {
+                (
+                    p.width_pt,
+                    p.height_pt,
+                    p.thumbnail.width,
+                    p.thumbnail.height,
+                )
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            vec![(10.0, 10.0, 5, 5), (20.0, 8.0, 5, 2), (6.0, 6.0, 5, 5)]
+        );
+        assert_eq!(px(&previews.pages[2].thumbnail, 2, 2), [255, 255, 0, 255]);
+        // Never above one pixel per point, and a sliver keeps a pixel.
+        let big = page_previews(&pdf, 500, limits).unwrap();
+        assert_eq!(
+            (big.pages[1].thumbnail.width, big.pages[1].thumbnail.height),
+            (20, 8)
+        );
+        let sliver = build_pdf(&[(400, 1, "0 0 400 1 re f")]);
+        let p = page_previews(&sliver, 8, limits).unwrap();
+        assert!(p.pages[0].thumbnail.height >= 1);
+        for cut in (0..pdf.len()).step_by(11) {
+            let _ = page_previews(&pdf[..cut], 8, limits);
+            let _ = render_selected(&pdf[..cut], &[0, 1], 300, limits);
+        }
     }
 
     #[test]

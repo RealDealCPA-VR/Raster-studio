@@ -278,6 +278,10 @@ fn panel_group(
     tab_strip(w, ui, members, active);
     if w.panel_menu == Some(active) {
         move_controls(w, ui, active);
+        // W13X-4: the Channels panel's own menu rows.
+        if active == PanelId::Channels {
+            channels_menu(w, ui, doc, history);
+        }
     }
     let t = current_tokens(ui);
     // The rule under the group and the gap before it come off the fill, so
@@ -5073,6 +5077,8 @@ fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Histo
         }
     }
     saved_selection_rows(w, ui, doc);
+    spot_channel_rows(ui, doc);
+    new_spot_channel_dialog(w, ui, doc);
     if let Some((kind, visible)) = toggle {
         match kind {
             ChannelKind::Composite => {
@@ -5200,6 +5206,118 @@ fn saved_selection_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             w.mask_view = crate::MaskViewMode::Grayscale;
             w.emit(Intent::Action(crate::menu::MenuAction::EditAlphaChannel(
                 index,
+            )));
+        }
+    }
+}
+
+/// W13X-4: the Channels panel menu — Photopea's New Spot Channel… and
+/// Merge Channels… — drawn under the move controls the header's overflow
+/// button reveals.
+///
+/// New Spot Channel opens the panel's own dialog
+/// ([`crate::panels::channels::SpotChannelDialog`]); Merge Channels raises
+/// the same `MenuAction::MergeChannels` as Image ▸ Merge Channels…, whose
+/// application handler opens the merge window or says, in the status bar,
+/// why it cannot (the open-document count is the application's to know, so
+/// the row is not greyed on the workspace's guess).
+fn channels_menu(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &History) {
+    use crate::panels::channels::spot_ids;
+    let context = w.menu_context(doc, history);
+    let has_document = context.has_document;
+    let mut new_spot = false;
+    let mut merge = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = Space::Hair.pt();
+        for (key, label, row) in [
+            ("new-spot", "ui.docks.channels.menu.new.spot", &mut new_spot),
+            ("merge", "ui.docks.channels.menu.merge", &mut merge),
+        ] {
+            let response = super::labelled_button(
+                ui,
+                crate::strings::tr(label),
+                has_document,
+                spot_ids::menu_row(key),
+            );
+            let response = if has_document {
+                response
+            } else {
+                response.on_hover_text(crate::strings::tr("ui.docks.channels.menu.no.document"))
+            };
+            if response.clicked() {
+                *row = true;
+            }
+        }
+    });
+    hairline(ui);
+    if new_spot {
+        w.channels.spot_dialog = Some(crate::panels::channels::SpotChannelDialog::new(
+            editor_core::spot::next_spot_name(doc),
+        ));
+        w.panel_menu = None;
+    }
+    if merge {
+        w.emit(Intent::Action(crate::menu::MenuAction::MergeChannels));
+        w.panel_menu = None;
+    }
+}
+
+/// W13X-4: one row per spot channel under the alpha channels: its ink as a
+/// swatch, its name and its solidity.
+fn spot_channel_rows(ui: &mut Ui, doc: &Document) {
+    use crate::dialogs::controls::{from_byte, swatch_readonly};
+    for (index, channel) in doc.spot_channels.iter().enumerate() {
+        let row = row_layout(ui, |ui| {
+            let t = current_tokens(ui);
+            let height = t.metrics.list_row_height - Space::XSmall.pt();
+            let rgba = [
+                from_byte(channel.ink[0]),
+                from_byte(channel.ink[1]),
+                from_byte(channel.ink[2]),
+                from_byte(u8::MAX),
+            ];
+            swatch_readonly(
+                ui,
+                crate::panels::channels::spot_ids::spot_swatch(index),
+                rgba,
+                Vec2::new(height * 4.0 / 3.0, height),
+            );
+            ui.add_space(Space::XSmall.pt());
+            ui.label(body(ui, channel.name.clone()));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.label(hint(ui, format!("{}%", channel.solidity)));
+            });
+        });
+        row.response
+            .on_hover_text(crate::strings::tr("ui.docks.channels.spot.hint"));
+    }
+}
+
+/// W13X-4: draw the open New Spot Channel dialog; OK appends the channel as
+/// one undo step (`Command::SetSpotChannels`), covering the selection.
+fn new_spot_channel_dialog(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
+    use crate::dialogs::chrome::DialogOutcome;
+    let Some(dialog) = w.channels.spot_dialog.as_mut() else {
+        return;
+    };
+    match dialog.show(ui.ctx()) {
+        DialogOutcome::Open => {}
+        DialogOutcome::Cancelled => {
+            w.channels.spot_dialog = None;
+            ui.ctx().memory_mut(|m| {
+                m.surrender_focus(crate::panels::channels::spot_ids::keyboard_sink())
+            });
+        }
+        DialogOutcome::Confirmed(spec) => {
+            w.channels.spot_dialog = None;
+            ui.ctx().memory_mut(|m| {
+                m.surrender_focus(crate::panels::channels::spot_ids::keyboard_sink())
+            });
+            w.emit(Intent::Document(editor_core::spot::new_spot_channel(
+                doc,
+                &spec.name,
+                spec.ink,
+                spec.solidity,
             )));
         }
     }

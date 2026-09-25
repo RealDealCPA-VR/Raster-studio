@@ -14,11 +14,14 @@
 //!   compositor's output of the document) follows the scrub live;
 //! * one **row per top-level layer**, top of the stack first: a bar from the
 //!   layer's in point to its out point (drag either end handle to move it),
-//!   with the layer's opacity keys (upper diamonds) and position keys (lower
-//!   diamonds) on it — click a key to select it, drag it to move it;
-//! * **Opacity key / Position key** add a key at the playhead to the active
-//!   layer holding its current value, and the trash button deletes the
-//!   selected key.
+//!   with the layer's keys on it in four lanes, top to bottom: opacity,
+//!   position, scale, rotation — click a key to select it, drag it to move
+//!   it; a Hold key is drawn square, the others as diamonds;
+//! * **Opacity key / Position key / Scale key / Rotation key** add a key at
+//!   the playhead to the active layer holding its current value (scale and
+//!   rotation turn about the layer centre), the trash button deletes the
+//!   selected key, and **Linear / Ease In / Ease Out / Hold** set the
+//!   selected key's interpolation (W13X-9).
 //!
 //! Every edit is one document command (one undo step), landed once on the
 //! release of a drag, never per pointer move. Moving the playhead is not an
@@ -26,7 +29,8 @@
 //! [`Intent::SeekTimeline`], which is no history step and does not make the
 //! document dirty. Play advances the playhead at the timeline's frame rate
 //! and seeks the canvas to each frame; the preview well beside the transport
-//! draws each layer's thumbnail at its interpolated opacity and position.
+//! draws each layer's thumbnail at its interpolated opacity and transform
+//! (position, scale and rotation, as a textured quad).
 
 use design::{color32, current_tokens, egui_theme::rounding, ColorRole, Radius, Space};
 use editor_core::timeline::{self as model, KeyProperty};
@@ -46,6 +50,23 @@ const LENGTH: &str = "ui.animation.length";
 const KEY_OPACITY: &str = "ui.animation.key.opacity";
 const KEY_POSITION: &str = "ui.animation.key.position";
 const KEY_DELETE: &str = "ui.animation.key.delete";
+// W13X-9: scale / rotation keys and per-key interpolation.
+const KEY_SCALE: &str = "ui.animation.key.scale";
+const KEY_ROTATION: &str = "ui.animation.key.rotation";
+const INTERP_LINEAR: &str = "ui.animation.interp.linear";
+const INTERP_EASE_IN: &str = "ui.animation.interp.ease_in";
+const INTERP_EASE_OUT: &str = "ui.animation.interp.ease_out";
+const INTERP_HOLD: &str = "ui.animation.interp.hold";
+
+/// The catalogue key naming `how`.
+fn interp_label(how: model::Interpolation) -> &'static str {
+    match how {
+        model::Interpolation::Linear => INTERP_LINEAR,
+        model::Interpolation::EaseIn => INTERP_EASE_IN,
+        model::Interpolation::EaseOut => INTERP_EASE_OUT,
+        model::Interpolation::Hold => INTERP_HOLD,
+    }
+}
 const NO_LAYERS: &str = "ui.animation.no_layers";
 
 /// A drag in flight: what is being dragged and the time it is over. Held in
@@ -123,6 +144,16 @@ pub mod ids {
     }
     pub fn key_delete() -> egui::Id {
         egui::Id::new("raster-animation-key-delete")
+    }
+    pub fn key_scale() -> egui::Id {
+        egui::Id::new("raster-animation-key-scale")
+    }
+    pub fn key_rotation() -> egui::Id {
+        egui::Id::new("raster-animation-key-rotation")
+    }
+    /// The interpolation button for `how` (applies to the selected key).
+    pub fn interp(how: editor_core::timeline::Interpolation) -> egui::Id {
+        egui::Id::new(("raster-animation-interp", how))
     }
     pub fn preview() -> egui::Id {
         egui::Id::new("raster-animation-timeline-preview")
@@ -278,19 +309,50 @@ pub(super) fn timeline_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             }
         }
     });
-    ui.horizontal(|ui| {
+    // W13X-9: four key buttons wrap rather than widen the panel.
+    ui.horizontal_wrapped(|ui| {
         let can_key = active.is_some() && !view.playing;
         let opacity = ui.add_enabled(can_key, egui::Button::new(body(ui, tr(KEY_OPACITY))));
         crate::view::mark(ui, opacity.rect, ids::key_opacity());
         let position = ui.add_enabled(can_key, egui::Button::new(body(ui, tr(KEY_POSITION))));
         crate::view::mark(ui, position.rect, ids::key_position());
+        let scale = ui.add_enabled(can_key, egui::Button::new(body(ui, tr(KEY_SCALE))));
+        crate::view::mark(ui, scale.rect, ids::key_scale());
+        let rotation = ui.add_enabled(can_key, egui::Button::new(body(ui, tr(KEY_ROTATION))));
+        crate::view::mark(ui, rotation.rect, ids::key_rotation());
         for (response, property) in [
             (opacity, KeyProperty::Opacity),
             (position, KeyProperty::Position),
+            (scale, KeyProperty::Scale),
+            (rotation, KeyProperty::Rotation),
         ] {
             if response.clicked() {
                 if let Some(c) = active.and_then(|id| model::add_key(doc, id, property, playhead)) {
                     w.emit(Intent::Document(c));
+                }
+            }
+        }
+    });
+    // W13X-9: the selected key's interpolation, and the trash button. Always drawn (disabled with
+    // no key selected), so the rows below never jump when a key is picked.
+    let selected_interp = view.selected.and_then(|(layer, property, index)| {
+        tl.track(layer)
+            .and_then(|tr| tr.interpolation(property, index))
+            .map(|how| (layer, property, index, how))
+    });
+    ui.horizontal(|ui| {
+        for how in model::Interpolation::ALL {
+            let on = selected_interp.is_some_and(|s| s.3 == how);
+            let r = ui.add_enabled(
+                selected_interp.is_some() && !view.playing,
+                egui::SelectableLabel::new(on, body(ui, tr(interp_label(how)))),
+            );
+            crate::view::mark(ui, r.rect, ids::interp(how));
+            if r.clicked() {
+                if let Some((layer, property, index, _)) = selected_interp {
+                    if let Some(c) = model::set_interpolation(doc, layer, property, index, how) {
+                        w.emit(Intent::Document(c));
+                    }
                 }
             }
         }
@@ -467,21 +529,26 @@ pub(super) fn timeline_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             }
         }
 
-        // The keys: opacity above the middle, position below.
+        // The keys, in four lanes top to bottom: opacity, position, scale,
+        // rotation (W13X-9). Each hit box is no taller than its lane, so
+        // the lanes' keys never cover one another.
         let Some(track) = track else {
             continue;
         };
-        for (property, y) in [
-            (KeyProperty::Opacity, lane.top() + lane.height() * 0.3),
-            (KeyProperty::Position, lane.top() + lane.height() * 0.7),
-        ] {
+        let lanes = KeyProperty::ALL.len() as f32;
+        let lane_step = lane.height() / lanes;
+        for (slot, property) in KeyProperty::ALL.into_iter().enumerate() {
+            let y = lane.top() + lane_step * (slot as f32 + 0.5);
             for (index, key_ms) in track.key_times(property).into_iter().enumerate() {
                 let shown_ms = match view.drag {
                     Some(Drag::Key(l, p, i, at)) if l == *id && p == property && i == index => at,
                     _ => key_ms,
                 };
                 let centre = Pos2::new(x_at(shown_ms, lane, tl), y);
-                let hit = Rect::from_center_size(centre, Vec2::splat(key_r * 3.0));
+                let hit = Rect::from_center_size(
+                    centre,
+                    Vec2::new(key_r * 3.0, (key_r * 3.0).min(lane_step)),
+                );
                 let r = ui.interact(hit, ids::key(row, property, index), Sense::click_and_drag());
                 if r.clicked() || r.drag_started() {
                     view.selected = Some((*id, property, index));
@@ -504,19 +571,36 @@ pub(super) fn timeline_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
                     let selected = view.selected == Some((*id, property, index));
                     let fill = if selected {
                         ColorRole::SelectionStroke
-                    } else if property == KeyProperty::Opacity {
-                        ColorRole::Accent
                     } else {
-                        ColorRole::TextPrimary
+                        match property {
+                            KeyProperty::Opacity => ColorRole::Accent,
+                            KeyProperty::Position => ColorRole::TextPrimary,
+                            KeyProperty::Scale => ColorRole::Success,
+                            KeyProperty::Rotation => ColorRole::Warning,
+                        }
                     };
-                    let diamond = vec![
-                        centre + Vec2::new(0.0, -key_r),
-                        centre + Vec2::new(key_r, 0.0),
-                        centre + Vec2::new(0.0, key_r),
-                        centre + Vec2::new(-key_r, 0.0),
-                    ];
+                    // Half a lane at most, so neighbouring lanes' keys do
+                    // not overlap; a Hold key is a square.
+                    let kr = key_r.min(lane_step * 0.5);
+                    let hold =
+                        track.interpolation(property, index) == Some(model::Interpolation::Hold);
+                    let shape = if hold {
+                        vec![
+                            centre + Vec2::new(-kr, -kr),
+                            centre + Vec2::new(kr, -kr),
+                            centre + Vec2::new(kr, kr),
+                            centre + Vec2::new(-kr, kr),
+                        ]
+                    } else {
+                        vec![
+                            centre + Vec2::new(0.0, -kr),
+                            centre + Vec2::new(kr, 0.0),
+                            centre + Vec2::new(0.0, kr),
+                            centre + Vec2::new(-kr, 0.0),
+                        ]
+                    };
                     ui.painter().add(egui::Shape::convex_polygon(
-                        diamond,
+                        shape,
                         color32(t.palette.color(fill)),
                         egui::Stroke::new(
                             t.borders.hairline,
@@ -552,7 +636,11 @@ pub(super) fn timeline_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
 }
 
 /// The preview well at `playhead`: each visible top-level layer's thumbnail,
-/// bottom of the stack first, at its opacity and position at that time.
+/// bottom of the stack first, at its opacity and transform at that time.
+/// The thumbnail shows the layer as it stands now (canvas-sized), so it is
+/// drawn as a quad moved by the change from the layer's current transform
+/// to its transform at `playhead` (position, scale and rotation about the
+/// layer centre, [`model::transform_at`]).
 fn preview(w: &Workspace, ui: &mut Ui, doc: &Document, playhead: u32) {
     let t = current_tokens(ui);
     let height = t.metrics.control_height * 5.0;
@@ -579,19 +667,29 @@ fn preview(w: &Workspace, ui: &mut Ui, doc: &Document, playhead: u32) {
         let opacity = track
             .and_then(|tr| tr.opacity_at(playhead))
             .unwrap_or(layer.opacity);
-        let offset = track
-            .and_then(|tr| tr.position_at(playhead))
-            .map_or(Vec2::ZERO, |p| {
-                let d = p - layer.transform.translation;
-                Vec2::new(d.x, d.y) * scale
-            });
+        let change = model::transform_at(doc, *id, playhead)
+            .filter(|_| layer.transform.matrix2.determinant().abs() > f32::EPSILON)
+            .map_or(glam::Affine2::IDENTITY, |at| at * layer.transform.inverse());
         if let Some(tex) = w.layer_thumbs.get(id) {
-            painter.image(
-                tex.id(),
-                fit.translate(offset),
-                full,
-                crate::dialogs::controls::UNTINTED.gamma_multiply(opacity),
-            );
+            let tint = crate::dialogs::controls::UNTINTED.gamma_multiply(opacity);
+            let (cw, ch) = (doc.width() as f32, doc.height() as f32);
+            let mut mesh = egui::Mesh::with_texture(tex.id());
+            for (corner, uv) in [
+                (glam::Vec2::ZERO, full.left_top()),
+                (glam::Vec2::new(cw, 0.0), full.right_top()),
+                (glam::Vec2::new(cw, ch), full.right_bottom()),
+                (glam::Vec2::new(0.0, ch), full.left_bottom()),
+            ] {
+                let p = change.transform_point2(corner);
+                mesh.vertices.push(egui::epaint::Vertex {
+                    pos: fit.min + Vec2::new(p.x, p.y) * scale,
+                    uv,
+                    color: tint,
+                });
+            }
+            mesh.add_triangle(0, 1, 2);
+            mesh.add_triangle(0, 2, 3);
+            painter.add(egui::Shape::mesh(mesh));
         }
     }
     ui.painter().rect_stroke(
@@ -981,6 +1079,194 @@ mod tests {
         assert_eq!(live.apply(&intents), 1, "{intents:?}");
         assert!(live.doc.timeline.track(clip).unwrap().position.is_empty());
         assert_eq!(live.history.undo_depth(), 3, "add, move, delete");
+    }
+
+    /// `linear` turned about the 64 x 48 canvas centre, as a Free
+    /// Transform about the centre leaves the layer.
+    fn about_centre(linear: glam::Mat2) -> glam::Affine2 {
+        let c = glam::Vec2::new(32.0, 24.0);
+        glam::Affine2::from_mat2_translation(linear, c - linear * c)
+    }
+
+    /// Hold the ruler down at `at` and read the clip thumbnail's quad (its
+    /// four corners) from the preview well the frame after the press, while
+    /// the seek it raised has not landed: the well draws the playhead's
+    /// transform relative to the layer as it stands. Answers the quad and
+    /// every intent raised through the release.
+    fn held_quad(live: &mut Live, clip: LayerId, at: Pos2) -> (Vec<Pos2>, Vec<Intent>) {
+        let tex = live.w.layer_thumbs[&clip].id();
+        let mut intents = live
+            .frame(vec![egui::Event::PointerMoved(at), button(at, true)])
+            .0;
+        let (raised, out) = live.frame(Vec::new());
+        intents.extend(raised);
+        fn find(shape: &egui::Shape, tex: egui::TextureId) -> Option<Vec<Pos2>> {
+            match shape {
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, tex)),
+                egui::Shape::Mesh(m) if m.texture_id == tex => {
+                    Some(m.vertices.iter().map(|v| v.pos).collect())
+                }
+                _ => None,
+            }
+        }
+        let quad = out
+            .shapes
+            .iter()
+            .find_map(|c| find(&c.shape, tex))
+            .expect("the clip is painted in the well");
+        intents.extend(live.frame(vec![button(at, false)]).0);
+        (quad, intents)
+    }
+
+    /// W13X-9: Rotation key from the panel, keyed at 0 and 3000 ms (0 and
+    /// 90 degrees); the canvas layer and the preview's quad turn about the
+    /// centre as the playhead moves; picking the first key and pressing
+    /// Ease In / Hold (one command each) changes the value at the playhead,
+    /// and a Hold key is drawn square.
+    #[test]
+    fn rotation_keys_and_interpolation_from_the_panel_turn_the_layer_and_its_preview() {
+        let (mut doc, _, clip) = two_layers();
+        model::set_mode(&doc, true)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let mut live = Live::new(doc);
+        let intents = live.click(ids::key_rotation());
+        assert_eq!(live.apply(&intents), 1, "{intents:?}");
+        let axis = live.rect(ids::ruler());
+        let y = axis.center().y;
+        let intents = live.click_at(Pos2::new(axis.right() - 0.5, y));
+        live.apply(&intents);
+        assert_eq!(live.doc.timeline.current_ms, 3000);
+        live.doc.layers.get_mut(clip).unwrap().transform =
+            about_centre(glam::Mat2::from_angle(90f32.to_radians()));
+        let intents = live.click(ids::key_rotation());
+        assert_eq!(live.apply(&intents), 1, "{intents:?}");
+        let track = live.doc.timeline.track(clip).unwrap();
+        assert_eq!(track.key_times(KeyProperty::Rotation), vec![0, 3000]);
+        assert!((track.rotation[1].degrees - 90.0).abs() < 1e-3);
+
+        // Back to 0 ms (the layer unturned), then hold the ruler halfway:
+        // the preview's quad turns 45 degrees before the seek lands, and
+        // once it lands the canvas layer is at 45 degrees about the centre.
+        let start = Pos2::new(axis.left() + 0.5, y);
+        let intents = live.click_at(start);
+        live.apply(&intents);
+        let angle = |live: &Live| {
+            let m = live.doc.layers.get(clip).unwrap().transform;
+            let centre = glam::Vec2::new(32.0, 24.0);
+            assert!((m.transform_point2(centre) - centre).length() < 1e-3);
+            m.to_scale_angle_translation().1.to_degrees()
+        };
+        assert!(angle(&live).abs() < 1e-3, "{}", angle(&live));
+        let (quad, intents) = held_quad(&mut live, clip, axis.center());
+        let edge = quad[1] - quad[0];
+        assert!(
+            (edge.angle().to_degrees() - 45.0).abs() < 0.5,
+            "the top edge turned 45 degrees: {quad:?}"
+        );
+        live.apply(&intents);
+        assert_eq!(live.doc.timeline.current_ms, 1500);
+        assert!((angle(&live) - 45.0).abs() < 1e-3, "{}", angle(&live));
+
+        // Pick the first key; Ease In: a quarter of the way at halfway.
+        let intents = live.click(ids::key(0, KeyProperty::Rotation, 0));
+        assert_eq!(live.apply(&intents), 0, "a click selects");
+        let intents = live.click(ids::interp(model::Interpolation::EaseIn));
+        assert_eq!(live.apply(&intents), 1, "{intents:?}");
+        let track = live.doc.timeline.track(clip).unwrap();
+        assert_eq!(
+            track.interpolation(KeyProperty::Rotation, 0),
+            Some(model::Interpolation::EaseIn)
+        );
+        assert!((angle(&live) - 22.5).abs() < 1e-3, "{}", angle(&live));
+        let intents = live.click_at(start);
+        live.apply(&intents);
+        let (quad, intents) = held_quad(&mut live, clip, axis.center());
+        let edge = quad[1] - quad[0];
+        assert!((edge.angle().to_degrees() - 22.5).abs() < 0.5, "{quad:?}");
+        live.apply(&intents);
+
+        // Hold: the first key's value until the next key; drawn square.
+        let intents = live.click(ids::interp(model::Interpolation::Hold));
+        assert_eq!(live.apply(&intents), 1, "{intents:?}");
+        assert!(angle(&live).abs() < 1e-3, "{}", angle(&live));
+        let key = live.rect(ids::key(0, KeyProperty::Rotation, 0));
+        let (_, out) = live.frame(Vec::new());
+        let square = out.shapes.iter().any(|c| match &c.shape {
+            egui::Shape::Path(p) if p.points.len() == 4 && p.closed => {
+                let mid = p.points.iter().fold(Vec2::ZERO, |a, q| a + q.to_vec2()) / 4.0;
+                key.contains(mid.to_pos2())
+                    && (p.points[0].y - p.points[1].y).abs() < 1e-3
+                    && (p.points[0].x - p.points[1].x).abs() > 1.0
+            }
+            _ => false,
+        });
+        assert!(square, "the Hold key is drawn as a square");
+        assert_eq!(live.history.undo_depth(), 4, "two keys, two interpolations");
+
+        // The words are the catalogue's.
+        let texts: Vec<String> = out
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+                _ => None,
+            })
+            .collect();
+        for key in [
+            KEY_SCALE,
+            KEY_ROTATION,
+            INTERP_LINEAR,
+            INTERP_EASE_IN,
+            INTERP_EASE_OUT,
+            INTERP_HOLD,
+        ] {
+            let word = tr(key);
+            assert!(
+                !word.is_empty() && word != key,
+                "{key} has no catalogue row"
+            );
+            assert!(
+                texts.iter().any(|t| t == word),
+                "{word:?} not drawn: {texts:?}"
+            );
+        }
+    }
+
+    /// W13X-9: Scale key from the panel holds the layer's scale; a second
+    /// key at half size shrinks the canvas layer about its centre.
+    #[test]
+    fn scale_keys_from_the_panel_shrink_the_layer_about_its_centre() {
+        let (mut doc, _, clip) = two_layers();
+        model::set_mode(&doc, true)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let mut live = Live::new(doc);
+        let intents = live.click(ids::key_scale());
+        assert_eq!(live.apply(&intents), 1, "{intents:?}");
+        let axis = live.rect(ids::ruler());
+        let intents = live.click_at(Pos2::new(axis.right() - 0.5, axis.center().y));
+        live.apply(&intents);
+        live.doc.layers.get_mut(clip).unwrap().transform =
+            about_centre(glam::Mat2::from_diagonal(glam::Vec2::splat(0.5)));
+        let intents = live.click(ids::key_scale());
+        assert_eq!(live.apply(&intents), 1, "{intents:?}");
+        let intents = live.click_at(Pos2::new(axis.left() + 0.5, axis.center().y));
+        live.apply(&intents);
+        let (quad, intents) = held_quad(&mut live, clip, axis.center());
+        let well = live.rect(ids::preview());
+        let fit = super::super::fitted(well, 64, 48);
+        assert!(
+            ((quad[1].x - quad[0].x) - fit.width() * 0.75).abs() < 0.5,
+            "the preview quad is three quarters wide: {quad:?} vs {fit:?}"
+        );
+        live.apply(&intents);
+        let m = live.doc.layers.get(clip).unwrap().transform;
+        let centre = glam::Vec2::new(32.0, 24.0);
+        assert!((m.transform_point2(centre) - centre).length() < 1e-3);
+        assert!((m.matrix2.x_axis.x - 0.75).abs() < 1e-4, "{m:?}");
     }
 
     /// Dragging a bar's out handle sets the layer's out point, and past it

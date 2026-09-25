@@ -307,15 +307,18 @@ const LIMITS_OPT: OptionSpec = c(
     crate::stroke_options::Limits::CHOICES,
     1,
 );
-/// W13-H: the Background Eraser's Sampling starts on Once, not Photopea's
-/// Continuous: the route test `background_eraser_clears_only_the_colour_first_touched`
-/// pins that a stroke started on one colour keeps the other colour it
-/// crosses, which Continuous would erase. [`make`] starts it the same way.
+/// W13-H / W13X-6: the Background Eraser's Sampling starts on Continuous,
+/// as Photopea's does: every dab samples the colour under its own centre, so
+/// a stroke erases each colour it crosses (the route test
+/// `background_eraser_by_default_erases_every_colour_it_crosses`). Once, the
+/// colour first touched only, stays a choice
+/// (`background_eraser_on_once_clears_only_the_colour_first_touched`).
+/// [`make`] starts the tool the same way.
 const BG_SAMPLING_OPT: OptionSpec = c(
     crate::stroke_options::SAMPLING_KEY,
     "Sampling",
     crate::stroke_options::Sampling::CHOICES,
-    1,
+    0,
 );
 
 /// W9-D: the Sample choice the Clone Stamp, the healing brushes, Blur,
@@ -1805,12 +1808,9 @@ pub fn make(id: ToolId) -> Box<dyn Tool> {
                     tolerance: 30.0 / 255.0,
                 },
             );
-            // W13-H: the options bar's defaults; Sampling Once (see
-            // `BG_SAMPLING_OPT`), the rest Photopea's.
-            t.retouch = crate::stroke_options::RetouchOptions {
-                sampling: crate::stroke_options::Sampling::Once,
-                ..crate::stroke_options::RetouchOptions::photopea()
-            };
+            // W13-H / W13X-6: the options bar's defaults, all Photopea's
+            // (Sampling Continuous; see `BG_SAMPLING_OPT`).
+            t.retouch = crate::stroke_options::RetouchOptions::photopea();
             Box::new(t)
         }
         ToolId::MagicEraser => Box::new(MagicEraserTool::default()),

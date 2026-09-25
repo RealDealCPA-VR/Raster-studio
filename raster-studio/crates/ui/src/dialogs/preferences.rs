@@ -41,7 +41,10 @@ use crate::strings::{tr, Locale};
 pub mod keymap_editor;
 pub use keymap_editor::{KeyChange, KeyCommand, Keymap, KeymapError, Shortcut};
 
-/// Which appearance the app uses.
+/// Which appearance the app uses: the OS's, or one of the app's themes (its
+/// own Light and Dark, and five of Photopea's).
+///
+/// W13X-4: one variant per [`Theme`] after `System`, appended at the end.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum ThemeChoice {
     /// Follow the operating system.
@@ -49,27 +52,66 @@ pub enum ThemeChoice {
     System,
     Light,
     Dark,
+    LightGrey,
+    Blue,
+    DarkBlue,
+    Purple,
+    Black,
 }
 
 impl ThemeChoice {
-    /// All three, in menu order.
-    pub const ALL: &'static [ThemeChoice] = &[Self::System, Self::Light, Self::Dark];
+    /// Every choice, in menu order: System, then [`Theme::ALL`]'s order.
+    pub const ALL: &'static [ThemeChoice] = &[
+        Self::System,
+        Self::Light,
+        Self::Dark,
+        Self::LightGrey,
+        Self::Blue,
+        Self::DarkBlue,
+        Self::Purple,
+        Self::Black,
+    ];
 
-    /// Menu label.
+    /// Menu label: the theme's own name.
     pub const fn label(self) -> &'static str {
+        match self.theme() {
+            None => "System",
+            Some(theme) => theme.name(),
+        }
+    }
+
+    /// The fixed theme this choice names, or `None` for System.
+    pub const fn theme(self) -> Option<Theme> {
         match self {
-            Self::System => "System",
-            Self::Light => "Light",
-            Self::Dark => "Dark",
+            Self::System => None,
+            Self::Light => Some(Theme::Light),
+            Self::Dark => Some(Theme::Dark),
+            Self::LightGrey => Some(Theme::LightGrey),
+            Self::Blue => Some(Theme::Blue),
+            Self::DarkBlue => Some(Theme::DarkBlue),
+            Self::Purple => Some(Theme::Purple),
+            Self::Black => Some(Theme::Black),
+        }
+    }
+
+    /// The choice that pins `theme`.
+    pub const fn of(theme: Theme) -> Self {
+        match theme {
+            Theme::Light => Self::Light,
+            Theme::Dark => Self::Dark,
+            Theme::LightGrey => Self::LightGrey,
+            Theme::Blue => Self::Blue,
+            Theme::DarkBlue => Self::DarkBlue,
+            Theme::Purple => Self::Purple,
+            Theme::Black => Self::Black,
         }
     }
 
     /// The appearance to install, given what the system reports.
     pub const fn resolve(self, system: Theme) -> Theme {
-        match self {
-            Self::System => system,
-            Self::Light => Theme::Light,
-            Self::Dark => Theme::Dark,
+        match self.theme() {
+            None => system,
+            Some(theme) => theme,
         }
     }
 }
@@ -912,6 +954,16 @@ mod tests {
         assert_eq!(ThemeChoice::Dark.resolve(Theme::Light), Theme::Dark);
         assert_eq!(ThemeChoice::System.resolve(Theme::Light), Theme::Light);
         assert_eq!(ThemeChoice::System.resolve(Theme::Dark), Theme::Dark);
+        // W13X-4: the picker offers every theme, and each
+        // choice pins exactly its own theme whatever the OS says.
+        assert_eq!(ThemeChoice::ALL.len(), Theme::ALL.len() + 1);
+        for theme in Theme::ALL {
+            let choice = ThemeChoice::of(*theme);
+            assert!(ThemeChoice::ALL.contains(&choice), "{theme:?} not offered");
+            assert_eq!(choice.resolve(Theme::Light), *theme);
+            assert_eq!(choice.resolve(Theme::Dark), *theme);
+            assert_eq!(choice.label(), theme.name());
+        }
     }
 
     /// The dialog draws from [`PrefControl::ALL`]; this pins that the list is

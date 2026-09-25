@@ -165,6 +165,8 @@ impl StepKind {
             Command::SetTimeline { .. } => StepKind::LayerChanged,
             // W13-F: Assign Profile re-tags the whole document.
             Command::SetMetaColorSpace { .. } => StepKind::LayerChanged,
+            // W13X-4: New Spot Channel edits the document's channel list.
+            Command::SetSpotChannels { .. } => StepKind::LayerChanged,
         }
     }
 }

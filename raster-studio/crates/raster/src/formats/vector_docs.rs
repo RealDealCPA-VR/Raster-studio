@@ -4,10 +4,10 @@
 //! | Format | What opens | What does not |
 //! | --- | --- | --- |
 //! | EPS | the embedded TIFF preview of a DOS EPS; else its WMF preview (drawn by [`super::metafile`]); else an EPSI hex preview in the PostScript | the PostScript itself: no PostScript interpreter exists here, so an EPS with no preview is refused, saying so |
-//! | Paint.NET PDN | the flattened thumbnail PNG in the XML header (Paint.NET writes it at most 256 px a side) | the layers: their pixels follow a .NET `BinaryFormatter` object graph this build does not parse |
-//! | Sketch | `previews/preview.png`, the page preview Sketch saves | the vector document (`pages/*.json`) |
-//! | Adobe XD | the archive's `preview.png` (or `thumbnail.png`) | the vector artwork |
-//! | Figma FIG | a ZIP-packaged `.fig`'s `thumbnail.png` | a bare `fig-kiwi` canvas (Figma's own undocumented binary schema): **refused**, saying so |
+//! | Paint.NET PDN | here, the flattened thumbnail PNG in the XML header (Paint.NET writes it at most 256 px a side); File > Open reads the **layers** first through [`pdn::read_layers`] (W13X-7) and comes here only when they cannot be read | a layer layout [`pdn`] cannot follow (see its docs): the thumbnail opens and the caller says why |
+//! | Sketch | here, `previews/preview.png`, the page preview Sketch saves; File > Open reads the **layers** first through [`design_files`] (W13X-8) and comes here only when they cannot be read | nothing more on this flat route |
+//! | Adobe XD | here, the archive's `preview.png` (or `thumbnail.png`); File > Open reads the layers first ([`design_files`]) | nothing more on this flat route |
+//! | Figma FIG | here, a ZIP-packaged `.fig`'s `thumbnail.png`; File > Open reads the layers first ([`design_fig`]), a bare `fig-kiwi` canvas included | on this flat route a bare `fig-kiwi` canvas has no preview: **refused**, saying so |
 //!
 //! Every preview is decoded by the codec facade under the caller's
 //! [`ImportLimits`], and [`decode_described`] returns, beside the pixels, the
@@ -29,6 +29,13 @@ use super::{check_decode, malformed, metafile, rgba8_surface};
 use crate::codec::{
     decode_surface_bytes_as, CodecError, DecodedSurface, ImageInfo, ImportFormat, ImportLimits,
 };
+
+// W13X-8: Sketch, Adobe XD and Figma read as layers (File > Open's route);
+// this module keeps the flat preview for every other caller.
+#[path = "design_fig.rs"]
+pub mod design_fig;
+#[path = "design_files.rs"]
+pub mod design_files;
 
 const DOS_EPS: [u8; 4] = [0xC5, 0xD0, 0xD3, 0xC6];
 const ZIP_LOCAL: [u8; 4] = *b"PK\x03\x04";
@@ -366,6 +373,10 @@ fn epsi_preview(ps: &[u8], limits: ImportLimits) -> Result<Option<DecodedSurface
 
 // ---------------------------------------------------------------------- PDN
 
+/// W13X-7: the layers of a `.pdn` (the .NET object graph after the header).
+#[path = "pdn.rs"]
+pub mod pdn;
+
 fn decode_pdn(bytes: &[u8], limits: ImportLimits) -> Result<(DecodedSurface, String), CodecError> {
     const NAME: &str = "Paint.NET";
     if !looks_like_pdn(bytes) || bytes.len() < 7 {
@@ -392,8 +403,8 @@ fn decode_pdn(bytes: &[u8], limits: ImportLimits) -> Result<(DecodedSurface, Str
         })
         .ok_or_else(|| {
             CodecError::Unsupported(
-                "this Paint.NET file has no thumbnail, and its layers (a .NET BinaryFormatter \
-                 object graph) are not read by this build; save it as PNG or PSD from Paint.NET"
+                "this Paint.NET file has no thumbnail to fall back on; save it as PNG or PSD \
+                 from Paint.NET"
                     .into(),
             )
         })?;
@@ -410,10 +421,9 @@ fn decode_pdn(bytes: &[u8], limits: ImportLimits) -> Result<(DecodedSurface, Str
             )
         })
         .unwrap_or_default();
-    let note = format!(
-        "Paint.NET: this is the file's flattened thumbnail{dims}, not its layers (the layers \
-         are stored in a .NET BinaryFormatter object graph this build does not read)"
-    );
+    // W13X-7: File > Open reads the layers first (`pdn::read_layers`); the
+    // caller that lands here says why they could not be read.
+    let note = format!("Paint.NET: this is the file's flattened thumbnail{dims}, not its layers");
     Ok((surface, note))
 }
 
@@ -439,9 +449,10 @@ fn decode_zip_doc(
         _ => &["thumbnail.png"],
     };
     let (surface, entry) = zip_preview(bytes, candidates, limits, format)?;
+    // W13X-8: File > Open reads the layers ([`design_files`]); this flat
+    // route (thumbnails, Place, the codec facade) is the preview.
     let note = format!(
-        "{}: this is the file's embedded preview image ({entry}), not its editable vector \
-         artwork, which this build does not read",
+        "{}: this is the file's embedded preview image ({entry}), not its layers",
         format.name()
     );
     Ok((surface, note))
@@ -450,8 +461,9 @@ fn decode_zip_doc(
 /// The refusal a bare Figma canvas gets.
 pub fn fig_refusal() -> CodecError {
     CodecError::Unsupported(
-        "this Figma .fig file holds only Figma's own undocumented canvas format (fig-kiwi), \
-         which this build cannot draw; export the frames from Figma as PNG, SVG or PDF"
+        "this Figma .fig file is a bare fig-kiwi canvas (Figma's own binary format) with no \
+         preview image to show here; File > Open reads its layers, or export the frames from \
+         Figma as PNG, SVG or PDF"
             .into(),
     )
 }

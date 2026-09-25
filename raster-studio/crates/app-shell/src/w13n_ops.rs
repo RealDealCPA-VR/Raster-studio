@@ -539,9 +539,6 @@ fn composite_of(editor: &mut Editor, index: usize) -> Result<(u32, u32, Vec<u8>)
 // Merge Channels
 // ---------------------------------------------------------------------------
 
-/// Image ▸ Merge Channels…: the first three open grayscale documents of the
-/// first one's size become the red, green and blue channels of a new RGB
-/// document, in tab order.
 /// The open documents Merge Channels can take a channel from: the grayscale
 /// ones of the first grayscale document's size — at least three of them.
 fn merge_candidates(editor: &Editor) -> Result<Vec<usize>, String> {

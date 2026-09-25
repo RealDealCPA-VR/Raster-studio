@@ -116,6 +116,8 @@ pub mod error;
 pub mod fade;
 // W10-E: Export Color Lookup / PDF, File Info XMP, the W10-E dialog host.
 pub mod file_extras;
+// W13X-5: Flame follows the active path; Warp Text's Custom mesh handles.
+pub(crate) mod flame_route;
 pub mod hit_testing;
 pub mod import;
 pub mod interaction_geometry;
@@ -128,11 +130,14 @@ pub mod placement;
 pub mod prefs;
 pub mod presenter;
 pub mod recent;
+pub(crate) mod warp_custom;
 // W13-K: File > Script (Photoshop-DOM JavaScript on an embedded engine).
 pub mod script;
 pub mod session;
 pub mod shell;
 pub mod slices_export;
+// W13X-4: spot channels in and out of .psd.
+pub(crate) mod spot_channel;
 // W13-L: the video timeline rendered: frames at time t, MP4 export.
 pub mod timeline;
 pub mod tool_input;
@@ -171,6 +176,12 @@ use std::path::PathBuf;
 /// whatever files were named on the command line.
 pub fn launch(files: Vec<PathBuf>, shot: Option<PathBuf>) -> Result<(), ShellError> {
     if shot.is_some() {
+        // W13X-4: `RASTER_SHOT_THEME=<theme key>` captures in that theme.
+        if let Ok(key) = std::env::var(prefs::SHOT_THEME_ENV) {
+            if !prefs::set_shot_theme(&key) {
+                tracing::warn!("{}={key:?} names no theme", prefs::SHOT_THEME_ENV);
+            }
+        }
         if let Ok(spec) = std::env::var(SHOT_VIEW_ENV) {
             let _ = SHOT_VIEW.set(parse_view_flags(&spec));
         }

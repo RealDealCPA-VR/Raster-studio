@@ -439,6 +439,10 @@ pub struct CanvasPresenter {
     proof: ProofView,
     /// `true` when [`CanvasPresenter::proof`] changed since the last upload.
     proof_dirty: bool,
+    /// W13X-2: the document profile -> sRGB display transform last used,
+    /// rebuilt (and the whole canvas re-sent) when the profile moves, as
+    /// Edit > Assign Profile does without dirtying a tile.
+    display: Option<DisplayTransform>,
 }
 
 /// W7-D: the soft-proof display transform (View > Proof Colors and View >
@@ -480,6 +484,112 @@ impl ProofView {
                 px[..3].copy_from_slice(&self.warning);
             } else if self.proof_colors {
                 px[..3].copy_from_slice(&proofed);
+            }
+        }
+    }
+}
+
+/// W13X-2: display colour management. The composite comes back encoded in
+/// the document's own profile (`Canvas::to_rgba8(meta.color_space)`), and
+/// the texture the canvas samples is sRGB, so every buffer on its way there
+/// is converted from the document's profile to sRGB (relative colorimetric,
+/// out-of-gamut colours clipped), as Photopea and Photoshop show a tagged
+/// document. The document's numbers are never touched: Edit > Assign
+/// Profile changes what the screen shows, and Edit > Convert to Profile
+/// keeps it (to the 8-bit rounding of the new numbers). A profile this
+/// engine cannot transform is shown unconverted (see [`DisplayTransform::new`]).
+///
+/// Every supported space decodes as per-channel curve then 3x3 matrix, so
+/// the linear-sRGB result is the sum of three per-channel tables (less the
+/// black the other two channels each add), and the sRGB encode is one
+/// 65536-entry table: the transform is lookups and adds per pixel.
+pub(crate) struct DisplayTransform {
+    space: color::ColorSpace,
+    tables: Option<Box<DisplayTables>>,
+}
+
+struct DisplayTables {
+    /// `to_linear(space, (c, 0, 0))`, `(0, c, 0)` and `(0, 0, c)` for each code.
+    channel: [[[f32; 3]; 256]; 3],
+    /// `to_linear(space, (0, 0, 0))`, counted once too often by each of two
+    /// channel tables.
+    black: [f32; 3],
+}
+
+/// Linear light in `[0, 1]` (sampled at 65536 steps) to its sRGB code.
+fn srgb_encode_table() -> &'static [u8] {
+    static TABLE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        (0..=u16::MAX)
+            .map(|i| {
+                let lin = f32::from(i) / f32::from(u16::MAX);
+                let enc = color::from_linear(&color::ColorSpace::Srgb, [lin; 3])[0];
+                (enc.clamp(0.0, 1.0) * 255.0).round() as u8
+            })
+            .collect()
+    })
+}
+
+impl DisplayTransform {
+    /// The transform from `space` to the sRGB the texture holds; the
+    /// identity (no tables, no work) for an sRGB document, and for a profile
+    /// this engine cannot transform (an ICC profile that is not a
+    /// matrix-shaper: LUT, Lab-PCS, gray, or bytes that do not parse). There
+    /// `color::to_linear` would fall back to identity and the tables would
+    /// treat the encoded numbers as linear light, washing the canvas out;
+    /// the numbers are shown as they are instead.
+    pub(crate) fn new(space: &color::ColorSpace) -> Self {
+        let managed = *space != color::ColorSpace::Srgb && space.is_transform_supported();
+        let tables = managed.then(|| {
+            let mut channel = [[[0.0f32; 3]; 256]; 3];
+            for (c, table) in channel.iter_mut().enumerate() {
+                for (code, out) in table.iter_mut().enumerate() {
+                    let mut rgb = [0.0f32; 3];
+                    rgb[c] = code as f32 / 255.0;
+                    *out = color::to_linear(space, rgb);
+                }
+            }
+            Box::new(DisplayTables {
+                channel,
+                black: color::to_linear(space, [0.0; 3]),
+            })
+        });
+        Self {
+            space: space.clone(),
+            tables,
+        }
+    }
+
+    /// The profile this transform decodes.
+    pub(crate) fn space(&self) -> &color::ColorSpace {
+        &self.space
+    }
+
+    /// Convert a straight RGBA8 buffer encoded in [`Self::space`] to sRGB,
+    /// in place. Alpha is kept; a fully transparent pixel is left alone.
+    pub(crate) fn apply(&self, rgba8: &mut [u8]) {
+        let Some(t) = &self.tables else {
+            return;
+        };
+        let encode = srgb_encode_table();
+        let last = f32::from(u16::MAX);
+        for px in rgba8.as_chunks_mut::<4>().0 {
+            if px[3] == 0 {
+                continue;
+            }
+            let (r, g, b) = (
+                t.channel[0][usize::from(px[0])],
+                t.channel[1][usize::from(px[1])],
+                t.channel[2][usize::from(px[2])],
+            );
+            for k in 0..3 {
+                let lin = r[k] + g[k] + b[k] - 2.0 * t.black[k];
+                let lin = if lin.is_finite() {
+                    lin.clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                px[k] = encode[(lin * last).round() as usize];
             }
         }
     }
@@ -706,6 +816,7 @@ impl CanvasPresenter {
         if std::mem::take(&mut self.mask_dirty)
             | std::mem::take(&mut self.mask_view_dirty)
             | std::mem::take(&mut self.proof_dirty)
+            | self.follow_display_space(doc)
         {
             // A channel toggle or a mask-view change alters every pixel and
             // dirties no tile.
@@ -831,6 +942,17 @@ impl CanvasPresenter {
         Ok(out)
     }
 
+    /// W13X-2: bring [`Self::display`] in step with the document's profile.
+    /// Returns `true` when it moved, so every pixel must be sent again.
+    pub(crate) fn follow_display_space(&mut self, doc: &OpenDocument) -> bool {
+        let space = &doc.document.meta.color_space;
+        if self.display.as_ref().is_some_and(|d| d.space() == space) {
+            return false;
+        }
+        self.display = Some(DisplayTransform::new(space));
+        true
+    }
+
     /// Composite a region and hide the channels the user turned off.
     ///
     /// One function so no upload path can forget: the whole-canvas rebuild, the
@@ -841,6 +963,13 @@ impl CanvasPresenter {
         rect: PixelRect,
     ) -> Result<Vec<u8>, DocumentError> {
         let mut rgba = doc.composite(rect)?;
+        // W13X-2: the document's profile to the sRGB texture first, so every
+        // view pass after it reads the colours the screen shows.
+        let space = &doc.document.meta.color_space;
+        match &self.display {
+            Some(display) if display.space() == space => display.apply(&mut rgba),
+            _ => DisplayTransform::new(space).apply(&mut rgba),
+        }
         // W7-D: the soft proof reads the composite's own colours, so it runs
         // before the channel mask zeroes any of them.
         self.proof.apply(&mut rgba);

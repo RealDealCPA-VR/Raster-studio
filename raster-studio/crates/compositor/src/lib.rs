@@ -115,6 +115,8 @@ pub mod error;
 pub mod shape;
 pub mod smart;
 pub mod source;
+/// W13X-4: spot channels laid over the composite as ink.
+mod spot;
 pub mod text;
 /// W9-G: vector-mask path coverage, and the path geometry the application
 /// uses to place and convert vector masks.

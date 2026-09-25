@@ -226,6 +226,72 @@ mod tests {
         assert_eq!(render_at(&open.document, &open.tiles, 700).unwrap()[3], 0);
     }
 
+    /// W13X-9: scale and rotation keys (about the layer centre) change the
+    /// composited frame: the solid red layer covers the canvas corner at
+    /// 0 ms, and at 1000 ms (half size, a quarter turn) the corner is
+    /// empty while the centre is still red. With the first rotation and
+    /// scale keys on Hold, the corner stays covered until the next key.
+    #[test]
+    fn scale_and_rotation_keys_change_the_rendered_frame() {
+        use editor_core::timeline::{Interpolation, RotationKey, ScaleKey};
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = red_document(dir.path());
+        let id = only_layer(&ed);
+        let c = timeline::set_mode(&ed.active().unwrap().document, true).unwrap();
+        ed.apply_command(c);
+        let mut t = ed.active().unwrap().document.timeline.clone();
+        // Two seconds, so the layer's bar (0..2000) still shows at 1000 ms.
+        t.duration_ms = 2000;
+        let track = t.track_mut(id);
+        let key = |t_ms, s| ScaleKey {
+            t_ms,
+            sx: s,
+            sy: s,
+            interp: Interpolation::Linear,
+        };
+        track.scale = vec![key(0, 1.0), key(1000, 0.5)];
+        let turn = |t_ms, degrees| RotationKey {
+            t_ms,
+            degrees,
+            interp: Interpolation::Linear,
+        };
+        track.rotation = vec![turn(0, 0.0), turn(1000, 90.0)];
+        let c = timeline::set_timeline(&ed.active().unwrap().document, "Keys", t).unwrap();
+        ed.apply_command(c);
+
+        let pixel = |ed: &Editor, t_ms, x: u32, y: u32| {
+            let open = ed.active().unwrap();
+            let rgba = render_at(&open.document, &open.tiles, t_ms).unwrap();
+            let i = ((y * W + x) * 4) as usize;
+            [rgba[i], rgba[i + 3]]
+        };
+        assert_eq!(pixel(&ed, 0, 0, 0), [255, 255], "unturned at 0 ms");
+        assert_eq!(pixel(&ed, 1000, 0, 0)[1], 0, "the corner is empty");
+        assert_eq!(pixel(&ed, 1000, 16, 12), [255, 255], "the centre stays");
+        // Half size and turned 90 degrees about (16, 12): the 32 x 24 box
+        // becomes 12 wide by 16 tall, so x 10..22 and y 4..20.
+        assert_eq!(pixel(&ed, 1000, 11, 12)[1], 255);
+        assert_eq!(pixel(&ed, 1000, 8, 12)[1], 0);
+        assert_eq!(pixel(&ed, 1000, 16, 5)[1], 255);
+        assert_eq!(pixel(&ed, 1000, 16, 2)[1], 0);
+        assert_eq!(pixel(&ed, 500, 0, 0)[1], 0, "moving by 500 ms");
+
+        // Hold on the first keys: the frame at 500 ms is the frame at 0.
+        for property in [KeyProperty::Scale, KeyProperty::Rotation] {
+            let c = timeline::set_interpolation(
+                &ed.active().unwrap().document,
+                id,
+                property,
+                0,
+                Interpolation::Hold,
+            )
+            .unwrap();
+            ed.apply_command(c);
+        }
+        assert_eq!(pixel(&ed, 500, 0, 0), [255, 255], "held");
+        assert_eq!(pixel(&ed, 1000, 0, 0)[1], 0, "then the next key");
+    }
+
     fn export_mp4(ed: &mut Editor, out: &Path) -> mp4::Mp4Info {
         std::fs::create_dir_all(out).unwrap();
         let job = ui::dialogs::ExportJob {

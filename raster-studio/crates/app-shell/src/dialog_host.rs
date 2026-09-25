@@ -439,6 +439,14 @@ pub enum ActiveDialog {
     /// Wavelet Decompose... Each confirmation is parked by
     /// `crate::menu_bridge::menu_w13f` for its own menu arm.
     W13f(Box<crate::menu_bridge::menu_w13f::W13fDialog>),
+    /// W13X-3: Layer > Layer Style > Scale Effects... Its confirmed percent
+    /// rides out as the `LayerExtra(ScaleEffects(percent))` pick; its
+    /// Preview is rendered by `refresh_preview`.
+    ScaleEffects(Box<ui::dialogs::scale_effects::ScaleEffectsDialog>),
+    /// W13X-7: File > Open of a multi-page PDF / AI: pages, resolution and
+    /// mode. Driven by `PdfImportRequest::drive`, which parks the answer for
+    /// the open route and sends the path back through `open_recent`.
+    PdfImport(Box<crate::editor::open_any::w13x7::PdfImportRequest>),
 }
 
 impl ActiveDialog {
@@ -510,7 +518,11 @@ impl ActiveDialog {
             | Self::ShortcutSheet(_)
             | Self::CommandSearch(_)
             // W13-F: driven by `menu_w13f::W13fDialog::drive`.
-            | Self::W13f(_) => DialogOutcome::Open,
+            | Self::W13f(_)
+            // W13X-3: driven by `DialogHost::ui` (it confirms to a pick).
+            | Self::ScaleEffects(_)
+            // W13X-7: driven by `PdfImportRequest::drive`.
+            | Self::PdfImport(_) => DialogOutcome::Open,
         }
     }
 
@@ -543,6 +555,8 @@ impl ActiveDialog {
                 | Self::ShortcutSheet(_)
                 | Self::CommandSearch(_)
                 | Self::W13f(_)
+                | Self::ScaleEffects(_)
+                | Self::PdfImport(_)
         )
     }
 }
@@ -1006,6 +1020,18 @@ impl DialogHost {
             // W10-E: Batch / Convert Formats, Export Color Lookup / PDF,
             // File Info (the XMP editor), Variables, Vectorize Bitmap; `None`
             // falls through to the arm, which says why.
+            // W13X-3: Layer > Layer Style > Scale Effects... asks for the
+            // percent. With no active layer the pick falls through to the
+            // arm, which says why.
+            ui::menu::MenuAction::LayerExtra(ui::menu::LayerExtraOp::ScaleEffects(_)) => {
+                match editor.active().and_then(|d| d.document.active_layer()) {
+                    Some(_) => {
+                        self.open(ActiveDialog::ScaleEffects(Box::default()));
+                        true
+                    }
+                    None => false,
+                }
+            }
             // W13-F: Convert to Profile, Reduce Colors, Wavelet Decompose;
             // `None` (no document) falls through to the arm, which says why.
             action if crate::menu_bridge::menu_w13f::opens_dialog(action) => {
@@ -1313,6 +1339,28 @@ impl DialogHost {
         }
     }
 
+    /// W13X-3: the open Scale Effects dialog, for host-path tests.
+    #[cfg(test)]
+    pub(crate) fn active_scale_effects_for_test(
+        &mut self,
+    ) -> &mut ui::dialogs::scale_effects::ScaleEffectsDialog {
+        match self.active_for_test() {
+            ActiveDialog::ScaleEffects(dialog) => dialog,
+            other => panic!("the active dialog is {other:?}, not Scale Effects"),
+        }
+    }
+
+    /// W13X-7: the open PDF import dialog, for host-path tests.
+    #[cfg(test)]
+    pub(crate) fn active_pdf_import_for_test(
+        &mut self,
+    ) -> &mut ui::dialogs::pdf_import::PdfImportDialog {
+        match self.active_for_test() {
+            ActiveDialog::PdfImport(request) => &mut request.dialog,
+            other => panic!("the active dialog is {other:?}, not the PDF import"),
+        }
+    }
+
     /// W10-G: the open Edit-gap dialog, for host-path tests.
     #[cfg(test)]
     pub(crate) fn active_edit_gap_for_test(&mut self) -> &mut crate::edit_gaps::GapDialog {
@@ -1502,6 +1550,13 @@ impl DialogHost {
     /// that has the editor — composites once. The dialog's own encode counter
     /// shows the swap: one re-encode, then a steady frame encodes nothing.
     pub fn refresh_preview(&mut self, editor: &crate::Editor) {
+        // W13X-7: a multi-page PDF an open route parked asks its question
+        // now, unless another dialog is up (it then waits for that one).
+        if self.active.is_none() {
+            if let Some(request) = crate::editor::open_any::w13x7::take_pending() {
+                self.open(ActiveDialog::PdfImport(Box::new(request)));
+            }
+        }
         // W11-G: the palette's command goes the road a menu click goes: the
         // dialog it opens, or the pick the bridge answers.
         if let Some(action) = self.command_to_run.take() {
@@ -1512,6 +1567,20 @@ impl DialogHost {
                     None => tracing::warn!("{}: the palette found no route", action.label()),
                 }
             }
+        }
+        // W13X-3: the Scale Effects preview at the dialog's percent.
+        if let Some(ActiveDialog::ScaleEffects(dialog)) = self.active.as_mut() {
+            if let Some(percent) = dialog.preview_wanted() {
+                match crate::menu_bridge::layer_ops_w13::scale_effects_preview(
+                    editor,
+                    percent,
+                    crate::menu_bridge::layer_ops_w13::SCALE_EFFECTS_PREVIEW_SIDE,
+                ) {
+                    Ok((rgba, w, h)) => dialog.set_preview_image(percent, rgba, w, h),
+                    Err(e) => tracing::warn!("scale effects preview failed: {e}"),
+                }
+            }
+            return;
         }
         if self.preview_seeded {
             return;
@@ -1882,10 +1951,32 @@ impl DialogHost {
             }
             return;
         }
+        // W13X-7: File > Open's PDF import dialog.
+        if let ActiveDialog::PdfImport(request) = active {
+            if request.drive(ctx, out) {
+                self.active = None;
+            }
+            return;
+        }
         // W13-F: and Convert to Profile, Reduce Colors, Wavelet Decompose.
         if let ActiveDialog::W13f(dialog) = active {
             if dialog.drive(ctx, out) {
                 self.active = None;
+            }
+            return;
+        }
+        // W13X-3: Scale Effects confirms to the pick at its percent, which
+        // `menu_bridge::perform` lands as one undo step.
+        if let ActiveDialog::ScaleEffects(dialog) = active {
+            match dialog.show(ctx) {
+                DialogOutcome::Open => {}
+                DialogOutcome::Cancelled => self.active = None,
+                DialogOutcome::Confirmed(percent) => {
+                    out.menu.push(ui::menu::MenuAction::LayerExtra(
+                        ui::menu::LayerExtraOp::ScaleEffects(percent),
+                    ));
+                    self.active = None;
+                }
             }
             return;
         }
@@ -2322,10 +2413,22 @@ fn filter_dialog_for(editor: &crate::Editor, id: ui::menu::FilterId) -> Option<A
     // W7-E: a Layers-panel double-click on a smart filter re-opens its dialog
     // at the parameters it stored (and arms the confirm to replace it).
     let stored = crate::menu_bridge::arm_smart_filter_edit(editor, id);
+    // W13X-5: Flame previews along the path it will burn: a re-edited smart
+    // filter's stored one, else the current path. With neither, no dialog:
+    // the click falls through to the bridge, which answers Photopea's
+    // "Make a path first".
+    let flame_path = if crate::flame_route::is_flame(id) {
+        Some(crate::flame_route::decode_dialog(&stored).or_else(crate::flame_route::active_path)?)
+    } else {
+        None
+    };
     let source = crate::menu_bridge::filter_dialog_source(editor, id)?;
     let mut dialog = FilterDialog::new(spec, source);
     for (key, value) in stored {
         dialog.set_param(&key, value);
+    }
+    if let Some(path) = flame_path {
+        dialog.set_path(path);
     }
     Some(ActiveDialog::Filter(Box::new(dialog)))
 }

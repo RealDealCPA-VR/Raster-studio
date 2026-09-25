@@ -1,7 +1,9 @@
 //! W13-G: the last Layer-menu gaps from the confirming parity audit
 //! ([`ui::menu::LayerExtraOp`]).
 //!
-//! * Layer Style ▸ Scale Effects ▸ n% ([`scale_effects`]) and Create Layers
+//! * Layer Style ▸ Scale Effects… ([`scale_effects`], at the percent the
+//!   dialog host's `ScaleEffects` dialog confirms, 1–1000%, with
+//!   [`scale_effects_preview`] rendering its Preview) and Create Layers
 //!   ([`create_layers`]).
 //! * New ▸ Artboard from Layers ([`artboard_from_layers`]).
 //! * Layer Mask ▸ From Transparency ([`mask_from_transparency`]).
@@ -219,7 +221,7 @@ pub(crate) fn scaled_effects(fx: &LayerEffects, k: f32) -> LayerEffects {
     out
 }
 
-/// Layer ▸ Layer Style ▸ Scale Effects ▸ `percent`%. One undo step.
+/// Layer ▸ Layer Style ▸ Scale Effects… at `percent`%. One undo step.
 pub(crate) fn scale_effects(editor: &mut Editor, percent: u16) -> Result<String, String> {
     let (id, layer) = active_layer(editor)?;
     if layer.effects.is_empty() {
@@ -246,6 +248,41 @@ pub(crate) fn scale_effects(editor: &mut Editor, percent: u16) -> Result<String,
         return Err("Scale Effects was refused".to_string());
     }
     Ok(format!("Scaled {}'s effects to {percent}%", layer.name))
+}
+
+/// The longest side of the Scale Effects dialog's preview image.
+pub(crate) const SCALE_EFFECTS_PREVIEW_SIDE: u32 = 320;
+
+/// W13X-3: the Scale Effects dialog's Preview — the document composited
+/// with the active layer's style scaled to `percent`%, nearest-downscaled so
+/// its longest side is at most `max_side`. Straight RGBA8, width, height.
+/// Reads the document; changes nothing.
+pub(crate) fn scale_effects_preview(
+    editor: &Editor,
+    percent: u16,
+    max_side: u32,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    let (id, layer) = active_layer(editor)?;
+    let doc = editor.active().ok_or("No document is open")?;
+    let mut work = doc.document.clone();
+    if let Some(l) = work.layers.get_mut(id) {
+        l.effects = scaled_effects(&layer.effects, f32::from(percent) / 100.0);
+    }
+    let rgba = render(&work, &doc.tiles)?.to_rgba8(&work.meta.color_space);
+    let (w, h) = (work.width(), work.height());
+    let step = w.max(h).div_ceil(max_side.max(1)).max(1);
+    if step == 1 {
+        return Ok((rgba, w, h));
+    }
+    let (sw, sh) = (w.div_ceil(step), h.div_ceil(step));
+    let mut out = Vec::with_capacity((sw * sh * 4) as usize);
+    for y in 0..sh {
+        for x in 0..sw {
+            let i = (((y * step) * w + x * step) * 4) as usize;
+            out.extend_from_slice(&rgba[i..i + 4]);
+        }
+    }
+    Ok((out, sw, sh))
 }
 
 // ---------------------------------------------------------------------------

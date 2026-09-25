@@ -121,6 +121,8 @@ fn file_open_of_a_multi_page_pdf_makes_one_artboard_per_page() {
     let mut ed = editor(dir.path(), ScriptedDialogs::new().opening(&pdf));
     ed.dispatch(Action::Open).unwrap();
     ed.poll_imports();
+    // W13X-7: a multi-page PDF asks first; take its opening answer.
+    crate::editor::open_any::w13x7::accept_import_defaults_for_test(&mut ed);
     assert_eq!(ed.documents().len(), 1, "one document");
     let boards = boards(&ed);
     let rects: Vec<_> = boards
@@ -319,6 +321,8 @@ fn revert_of_a_multi_page_pdf_restores_the_artboards() {
     let pdf = write(dir.path(), "brochure.pdf", &three_pages());
     let mut ed = editor(dir.path(), ScriptedDialogs::new());
     ed.open_any(&pdf).unwrap();
+    // W13X-7: a multi-page PDF asks first; take its opening answer.
+    crate::editor::open_any::w13x7::accept_import_defaults_for_test(&mut ed);
     let saved = shown(&ed);
     let before = boards(&ed);
     // An edit: delete the first artboard group.

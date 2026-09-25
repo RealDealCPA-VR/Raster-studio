@@ -1282,6 +1282,9 @@ impl ToolPointer {
     /// nothing, which is why the context it is given is never drained.
     pub fn cancel(&mut self, editor: &mut Editor) -> bool {
         let had = self.router.is_gesture_active() || self.is_tool_active();
+        // W13X-5: an abandoned mesh-handle drag puts the text back.
+        let had = crate::warp_custom::is_dragging() || had;
+        crate::warp_custom::cancel(editor);
         // W8-D: Escape also calls off a released stroke whose heavy finish
         // is still synthesising on the worker; nothing of it lands.
         let had = crate::menu_bridge::content_aware_job::cancel_deferred_strokes(editor) || had;
@@ -1581,6 +1584,11 @@ impl ToolPointer {
     /// the caret agrees with rendering after transform and zoom by
     /// construction. `None` without a live session.
     pub fn text_overlay_geometry(&mut self, editor: &Editor) -> Vec<TextOverlaySegment> {
+        // W13X-5: with no text session live, a Custom warp's mesh while its
+        // layer is in warp mode (empty otherwise).
+        if !self.is_text_editing() {
+            return crate::warp_custom::overlay(editor, editor.effective_tool());
+        }
         let Some((_, tool)) = self.current.as_mut() else {
             return Vec::new();
         };
@@ -2556,6 +2564,13 @@ impl ToolPointer {
             // panic if the router ever widens.
             _ => effective,
         };
+        // W13X-5: a Move press on a Custom warp's mesh handle drags the
+        // handle, not the layer, until the release (`warp_custom`).
+        if let Some(steps) = crate::warp_custom::route(editor, id, routed.phase, routed.event.pos) {
+            out.steps = steps;
+            out.preview_tiles = 1;
+            return out;
+        }
         // At the press, and only there: the brush the options bar and the
         // `[`/`]` keys have been moving *for this tool* is what the stroke is
         // drawn with. Read per tool, because the brush is part of what a tool
@@ -9028,8 +9043,9 @@ mod tests {
             (
                 ToolId::BackgroundEraser,
                 &[
-                    // Continuous: not the Background Eraser's Once default.
-                    (so::SAMPLING_KEY, V::Choice(0)),
+                    // Once: not the Background Eraser's Continuous default
+                    // (W13X-6).
+                    (so::SAMPLING_KEY, V::Choice(1)),
                     (so::LIMITS_KEY, V::Choice(0)),
                     (so::PROTECT_FOREGROUND_KEY, V::Bool(true)),
                 ],

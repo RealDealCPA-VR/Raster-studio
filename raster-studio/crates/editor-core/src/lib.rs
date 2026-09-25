@@ -38,6 +38,8 @@ pub mod history;
 pub mod pixels;
 pub mod selection;
 pub mod slices;
+// W13X-4: Channels ▸ New Spot Channel's record and command.
+pub mod spot;
 // W13-L: the video timeline record and its commands.
 pub mod timeline;
 

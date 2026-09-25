@@ -4,7 +4,10 @@
 //!
 //! * **Assign Profile ▸ …** re-tags the document with
 //!   [`Command::SetMetaColorSpace`], one undo step; no pixel number
-//!   changes, so the picture looks different.
+//!   changes, so the picture looks different: the canvas is colour-managed
+//!   ([`crate::presenter::DisplayTransform`] converts the document's profile
+//!   to the sRGB texture on every upload, as Photopea and Photoshop show a
+//!   tagged document), and the new tag re-sends the whole canvas.
 //! * **Convert to Profile…** asks for the destination, the rendering intent
 //!   and black point compensation ([`ui::dialogs::w13f::ConvertProfileDialog`],
 //!   parked here by [`W13fDialog::drive`]), then rewrites every pixel layer's
@@ -17,6 +20,11 @@
 //!   ([`color::icc::absolute_colorimetric`]); black point compensation maps
 //!   the source profile's black onto the destination's in linear light, and
 //!   is off under Absolute, as in Photoshop. Colours outside the target clip.
+//!   Colours the target holds therefore look the same on the canvas after as
+//!   before, to the 8-bit rounding of the new numbers (Adobe RGB to sRGB
+//!   within 2 codes; to a wider profile, more on saturated colours where
+//!   one destination code spans several sRGB codes). A profile the engine
+//!   cannot transform (not a matrix-shaper) gets no display conversion.
 //! * **Reduce Colors…** asks for a palette source, a count and a dither
 //!   ([`ui::dialogs::w13f::ReduceColorsDialog`]) and maps the active layer
 //!   onto that palette (`color::quantize`), one undo step.
@@ -28,7 +36,13 @@
 //!   the compositor's own arithmetic ([`decompose`]) until the stack
 //!   recomposites to the source code for code.
 //! * **Pattern Preview** is a view flag: [`paint_pattern_preview`] draws the
-//!   document's composite repeated around the canvas, under the extras.
+//!   document's composite repeated around the canvas, under the extras,
+//!   through the same display transform (the document's profile to sRGB),
+//!   so while no later presenter pass is on, each copy holds the canvas
+//!   texture's own bytes and a seam shows only where the pattern has one.
+//!   The presenter's later passes (View > Proof Colors, a hidden channel
+//!   eye, a mask view) are not applied to the copies, so with any of them
+//!   on the canvas differs from its copies and a false seam can show.
 //! * **Clear Slices** / **Slices from Guides** replace the slice set through
 //!   `slices_export`, which keeps it in history.
 //!
@@ -1073,8 +1087,20 @@ pub(crate) const PATTERN_PREVIEW_MAX_PX: u32 = 2048;
 const PATTERN_PREVIEW_REACH: i64 = 12;
 
 /// What the cached picture was built from: the document, its content
-/// revision and its size.
-type PreviewKey = (crate::doc::DocumentId, u64, u32, u32);
+/// revision, its size and (a hash of) the profile the display transform
+/// decoded.
+type PreviewKey = (crate::doc::DocumentId, u64, u32, u32, u64);
+
+/// A hash of `space`: its kind, and an ICC profile's content hash.
+fn space_key(space: &ColorSpace) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    std::mem::discriminant(space).hash(&mut h);
+    if let ColorSpace::IccProfile { asset_hash, .. } = space {
+        asset_hash.hash(&mut h);
+    }
+    h.finish()
+}
 
 fn preview_id() -> egui::Id {
     egui::Id::new("raster-w13f-pattern-preview")
@@ -1089,9 +1115,15 @@ pub(crate) fn pattern_preview_image(
 }
 
 /// The texture the pattern copies draw with, (re)built when the document's
-/// content or size moved: its composite, sampled to at most
-/// [`PATTERN_PREVIEW_MAX_PX`] on its long edge and written as sRGB (the
-/// document's own profile decoded), so the copies show what the canvas does.
+/// content, size or profile moved: its composite, through the presenter's
+/// own display transform ([`crate::presenter::DisplayTransform`], the
+/// document's profile to sRGB), so each copy holds the bytes the canvas
+/// texture holds while no later presenter pass is on; then sampled to at
+/// most [`PATTERN_PREVIEW_MAX_PX`] on its long edge. Only the display step
+/// is applied: the presenter's proof, channel-mask and mask-view passes
+/// (`CanvasPresenter::composite_masked`, after the display step) are not,
+/// so with View > Proof Colors, a hidden channel eye or a mask view on the
+/// copies differ from the canvas.
 fn pattern_texture(
     ctx: &egui::Context,
     editor: &mut Editor,
@@ -1103,35 +1135,31 @@ fn pattern_texture(
     if w == 0 || h == 0 {
         return None;
     }
-    let key: PreviewKey = (doc.id(), revision, w, h);
+    let key: PreviewKey = (
+        doc.id(),
+        revision,
+        w,
+        h,
+        space_key(&doc.document.meta.color_space),
+    );
     let held: Option<(PreviewKey, egui::TextureHandle)> = ctx.data(|d| d.get_temp(preview_id()));
     if let Some((k, texture)) = held {
         if k == key {
             return Some((texture, w, h));
         }
     }
-    let rgba = doc.composite(rect).ok()?;
-    let space = doc.document.meta.color_space.clone();
+    let mut rgba = doc.composite(rect).ok()?;
+    crate::presenter::DisplayTransform::new(&doc.document.meta.color_space).apply(&mut rgba);
     let step = w.max(h).div_ceil(PATTERN_PREVIEW_MAX_PX).max(1);
     let (ow, oh) = (w.div_ceil(step), h.div_ceil(step));
-    let shown = SpaceTransform::new(&space).ok();
-    let srgb = SpaceTransform::Builtin(ColorSpace::Srgb);
-    let mut cache: HashMap<[u8; 3], [u8; 3]> = HashMap::new();
     let mut pixels = Vec::with_capacity((ow * oh) as usize);
     for oy in 0..oh {
         for ox in 0..ow {
             let (x, y) = ((ox * step).min(w - 1), (oy * step).min(h - 1));
             let at = ((y * w + x) * 4) as usize;
             let px = &rgba[at..at + 4];
-            let mut rgb = [px[0], px[1], px[2]];
-            if let (Some(from), false) = (&shown, space == ColorSpace::Srgb) {
-                rgb = *cache.entry(rgb).or_insert_with(|| {
-                    clip(srgb.encode(from.decode(rgb.map(|c| f32::from(c) / 255.0))))
-                        .map(|v| (v * 255.0).round() as u8)
-                });
-            }
             pixels.push(egui::Color32::from_rgba_unmultiplied(
-                rgb[0], rgb[1], rgb[2], px[3],
+                px[0], px[1], px[2], px[3],
             ));
         }
     }

@@ -200,6 +200,16 @@ pub fn is_temporary_hand_key(logical: &winit::keyboard::Key) -> bool {
     matches!(logical, winit::keyboard::Key::Named(NamedKey::Space))
 }
 
+/// W13X-1: the four arrow keys, whose held repeats keep nudging.
+pub fn is_nudge_key(logical: &winit::keyboard::Key) -> bool {
+    matches!(
+        logical,
+        winit::keyboard::Key::Named(
+            NamedKey::ArrowLeft | NamedKey::ArrowRight | NamedKey::ArrowUp | NamedKey::ArrowDown
+        )
+    )
+}
+
 /// W11-F: the tool a held modifier lends while `tool` is selected, the
 /// Photoshop/Photopea everyday gestures:
 ///
@@ -368,7 +378,8 @@ pub fn route_key(
     }
     // A held key repeats. Only the temporary hand wants the repeats — it is
     // idempotent and they are what keep it engaged.
-    if repeat && !is_temporary_hand_key(logical) {
+    // W13X-1: and the arrows, whose held repeats keep nudging (Photopea).
+    if repeat && !is_temporary_hand_key(logical) && !is_nudge_key(logical) {
         return KeyOutcome::Ignore;
     }
     match chord_from_key(logical, mods) {
@@ -487,6 +498,11 @@ mod w13m_tests;
 #[cfg(test)]
 #[path = "shell_w13l_tests.rs"]
 mod w13l_tests;
+
+// W13X-1: the arrow keys nudge, driven through `on_key`.
+#[cfg(test)]
+#[path = "shell_nudge_tests.rs"]
+mod nudge_tests;
 
 /// Held modifiers as the tools read them.
 ///
@@ -1082,8 +1098,10 @@ impl Shell {
         let choice = self.editor.preferences().theme;
         let scale = self.editor.preferences().ui_scale;
         let Some(state) = &mut self.state else { return };
-        let resolved = choice.resolve(system_theme(&state.window));
-        if state.theme != resolved {
+        // W13X-4: any of Photopea's themes, the moment the preference moves.
+        if let Some(resolved) =
+            crate::prefs::theme_to_install(choice, system_theme(&state.window), state.theme)
+        {
             crate::chrome::install_theme(&state.egui_ctx, resolved);
             // The area around the image is a themed surface like any other.
             state.canvas.set_backdrop(backdrop_srgb(resolved));
@@ -2269,6 +2287,21 @@ impl Shell {
                     Some(Resolved::App(Action::SelectTool(key))) if chord.shift => {
                         if self.editor.select_tool_letter(key, true).is_some() {
                             self.repaint_at = Some(Instant::now());
+                        }
+                    }
+                    // W13X-1: an arrow nudges through the shell's own pointer
+                    // (a live gesture or text run refuses it): Shift is ten
+                    // pixels, Alt moves a copy — made on the press only, a
+                    // held key's repeats move the copy it made.
+                    Some(Resolved::App(Action::Nudge(direction))) => {
+                        let copy = chord.alt && !repeat;
+                        match self
+                            .pointer
+                            .nudge(&mut self.editor, direction, chord.shift, copy)
+                        {
+                            Ok(0) => {}
+                            Ok(_) => self.repaint_at = Some(Instant::now()),
+                            Err(reason) => self.editor.set_status(reason),
                         }
                     }
                     Some(Resolved::App(action)) => self.perform(action),

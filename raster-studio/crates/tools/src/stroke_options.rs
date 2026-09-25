@@ -978,24 +978,25 @@ mod tests {
     }
 
     #[test]
-    fn the_made_background_eraser_samples_once_as_its_options_bar_declares() {
-        // The options bar's declared default and the made tool agree: Once.
+    fn the_made_background_eraser_samples_continuously_as_its_options_bar_declares() {
+        // W13X-6: the options bar's declared default and the made tool
+        // agree, and both are Photopea's: Continuous.
         let spec = registry::info(ToolId::BackgroundEraser)
             .and_then(|i| i.options.iter().find(|o| o.key == SAMPLING_KEY))
             .expect("the Background Eraser declares Sampling");
         assert!(
             matches!(
                 spec.kind,
-                crate::registry::OptionKind::Choice { default: 1, .. }
+                crate::registry::OptionKind::Choice { default: 0, .. }
             ),
-            "the declared Sampling default is Once: {:?}",
+            "the declared Sampling default is Continuous: {:?}",
             spec.kind
         );
-        // With no Sampling set, a stroke started on the blue keeps the
-        // green stripe it crosses (Continuous would erase it).
+        // With no Sampling set, a stroke started on the blue erases the
+        // green stripe it crosses too (Once would keep it).
         let made = striped_stroke(ToolId::BackgroundEraser, &[], WHITE_F);
         assert_eq!(made.px(32, 12)[3], 0, "the blue first touched is erased");
-        assert_eq!(made.px(32, 31), GREEN, "the stripe it crosses is kept");
+        assert_eq!(made.px(32, 31)[3], 0, "the stripe it crosses is erased");
         // Photopea's other defaults stand: Contiguous is on.
         let bar = barred_click(ToolId::BackgroundEraser, GREEN, &[]);
         assert_eq!(

@@ -415,3 +415,131 @@ fn a_saved_documents_journal_records_the_run_once() {
         new[0]
     );
 }
+
+/// W13X-6: what each Open and Export picker was opened with, shared with the
+/// test after the double is boxed into the editor. The answers are
+/// [`ScriptedDialogs`]'s (every queue empty, so each picker cancels).
+#[derive(Default)]
+struct Seen {
+    exports: Vec<crate::dialogs::ExportPickerRequest>,
+    opens: Vec<Option<String>>,
+}
+
+struct SeeingDialogs {
+    inner: ScriptedDialogs,
+    seen: std::rc::Rc<std::cell::RefCell<Seen>>,
+}
+
+impl crate::dialogs::FileDialogs for SeeingDialogs {
+    fn pick_open_file(&mut self) -> Option<std::path::PathBuf> {
+        let answer = self.inner.pick_open_file();
+        let suggestion = self.inner.open_suggestions.last().cloned().flatten();
+        self.seen.borrow_mut().opens.push(suggestion);
+        answer
+    }
+    fn pick_place_file(&mut self) -> Option<std::path::PathBuf> {
+        self.inner.pick_place_file()
+    }
+    fn pick_replace_file(&mut self) -> Option<std::path::PathBuf> {
+        self.inner.pick_replace_file()
+    }
+    fn pick_open_project(&mut self) -> Option<std::path::PathBuf> {
+        self.inner.pick_open_project()
+    }
+    fn pick_save_path(&mut self, suggested: &Path) -> Option<std::path::PathBuf> {
+        self.inner.pick_save_path(suggested)
+    }
+    fn pick_export_path(&mut self, suggested: &Path) -> Option<std::path::PathBuf> {
+        let answer = self.inner.pick_export_path(suggested);
+        let request = self.inner.export_requests.last().cloned();
+        self.seen.borrow_mut().exports.extend(request);
+        answer
+    }
+    fn pick_export_folder(&mut self) -> Option<std::path::PathBuf> {
+        self.inner.pick_export_folder()
+    }
+    fn confirm_close(&mut self, document: &str) -> crate::dialogs::CloseChoice {
+        self.inner.confirm_close(document)
+    }
+    fn confirm_recover(&mut self, document: &str) -> bool {
+        self.inner.confirm_recover(document)
+    }
+    fn report_error(&mut self, title: &str, message: &str) {
+        self.inner.report_error(title, message)
+    }
+    fn report_notice(&mut self, title: &str, message: &str) {
+        self.inner.report_notice(title, message)
+    }
+}
+
+/// W13X-6: `saveAs(file)` and `app.open(file)` open their platform picker
+/// with the script's file name in the file-name box (the export picker in
+/// the document's own folder; only the name's last component is used), run
+/// from the Script window. A suggestion reaches exactly one picker: the
+/// user's next File > Open starts empty.
+#[test]
+fn a_scripts_file_names_are_suggested_to_the_open_and_export_pickers() {
+    let dir = tempfile::tempdir().unwrap();
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Seen::default()));
+    let mut ed = Editor::with_state(
+        AppPaths::rooted(dir.path().join("config")),
+        Preferences::default(),
+        RecentFiles::new(),
+        Box::new(SeeingDialogs {
+            inner: ScriptedDialogs::new(),
+            seen: seen.clone(),
+        }),
+    );
+    ed.new_document_with(
+        16,
+        16,
+        "Doc",
+        crate::import::BlankBackground::Solid {
+            rgba8: [255, 255, 255, 255],
+            depth: raster::BitDepth::Eight,
+        },
+    )
+    .unwrap();
+    let export_at = ed.active().unwrap().suggested_export_path();
+
+    let said = run_through_the_window(
+        &mut ed,
+        r#"
+var doc = app.activeDocument;
+doc.saveAs(new File("C:/somewhere/else/poster.jpg"));
+doc.saveAs("banner");
+app.open(new File("/elsewhere/photo.png"));
+"#,
+    );
+    assert!(said.iter().all(Result::is_ok), "{said:?}");
+
+    let record = seen.borrow();
+    let names: Vec<_> = record.exports.iter().map(|r| r.suggested.clone()).collect();
+    assert_eq!(
+        names,
+        vec![
+            export_at.with_file_name("poster.jpg"),
+            export_at
+                .with_file_name("banner")
+                .with_extension(export_at.extension().unwrap()),
+        ],
+        "the export picker did not open with the script's names"
+    );
+    assert_eq!(record.opens, vec![Some("photo.png".to_string())]);
+    drop(record);
+
+    // The user's own File > Open and Export afterwards are not prefilled.
+    let _ = ed.dispatch(Action::Open);
+    let _ = ed.dispatch(Action::Export);
+    let record = seen.borrow();
+    assert_eq!(
+        record.opens.last(),
+        Some(&None),
+        "Open kept a script's name"
+    );
+    assert_eq!(
+        record.exports.last().map(|r| r.suggested.clone()),
+        Some(export_at),
+        "Export kept a script's name"
+    );
+}

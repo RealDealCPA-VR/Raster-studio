@@ -299,93 +299,146 @@ pub fn duplicate_layer(editor: &mut Editor, name: Option<String>) -> Result<Stri
 /// copy of `source_id` named `name` (or "<name> copy"), its pixels, masks and
 /// colour label, seated directly above the source. Answers the commands, the
 /// copy's id, the status sentence and the transaction label.
+///
+/// W13X-6: a group is copied WITH its whole subtree, as Photopea's Duplicate
+/// Layer and Alt+drag do: the copy is a new group holding a copy of every
+/// child (each keeping its own name, pixels, masks and label), in the same
+/// order, nested groups included. Before this a group's copy named its
+/// source's children, which the tree refuses (a child has one parent).
 pub(crate) fn duplicate_commands(
     doc: &OpenDocument,
     source_id: LayerId,
     name: Option<String>,
 ) -> Result<(Vec<Command>, LayerId, String, String), String> {
-    {
-        let source = doc
-            .document
-            .layers
-            .get(source_id)
-            .ok_or("The active layer is not in the tree")?;
-        let mut copy = source.clone();
-        copy.id = LayerId::new();
-        copy.name =
-            name.unwrap_or_else(|| ui::dialogs::DuplicateLayerDialog::suggested_name(&source.name));
-        // A duplicated mask needs its own identity, or both layers would
-        // edit one set of coverage tiles.
-        let old_mask = copy.mask.as_mut().map(|m| {
-            let old = m.id;
-            m.id = layer_model::MaskId::new();
-            old
+    let source = doc
+        .document
+        .layers
+        .get(source_id)
+        .ok_or("The active layer is not in the tree")?;
+    let copy_name =
+        name.unwrap_or_else(|| ui::dialogs::DuplicateLayerDialog::suggested_name(&source.name));
+    let status = format!("Duplicated {} as {}", source.name, copy_name);
+    let label = format!("Duplicate {}", source.name);
+    let mut commands = Vec::new();
+    let mut labels = Vec::new();
+    // `create_layer` lands at the top of the root; the move seats the copy
+    // directly above its source, in the source's own group.
+    let new_id = copy_node_commands(
+        doc,
+        source_id,
+        copy_name,
+        doc.document.layers.parent_of(source_id),
+        doc.document.layers.index_in_parent(source_id).unwrap_or(0),
+        &mut commands,
+        &mut labels,
+    )?;
+    // W11-E: every copy wears its source's colour label, as in Photoshop;
+    // one extras write carries them all, so no label overwrites another.
+    if !labels.is_empty() {
+        let mut extras = doc.document.extras.clone();
+        for (id, color) in labels {
+            extras.set_color_label(id, color);
+        }
+        commands.push(Command::SetDocumentExtras {
+            extras: Box::new(extras),
         });
-        // W10-I: and so does a smart object's filter mask.
-        let filter_mask =
-            crate::menu_bridge::layer_extras::rekey_filter_mask(&mut copy, &doc.document);
-        let new_id = copy.id;
-        let status = format!("Duplicated {} as {}", source.name, copy.name);
-        let mut commands = vec![Command::create_layer(copy)];
-        if let Some(edits) = filter_mask.filter(|e| !e.is_empty()) {
+    }
+    Ok((commands, new_id, status, label))
+}
+
+/// W13X-6: one node of a Duplicate Layer copy — the layer (a group arriving
+/// empty, as the tree requires), its pixels, its masks, the move that seats
+/// it at `index` in `parent` — then, for a group, every child copied into it
+/// in order. Colour labels are collected into `labels` for one extras write.
+fn copy_node_commands(
+    doc: &OpenDocument,
+    source_id: LayerId,
+    name: String,
+    parent: Option<LayerId>,
+    index: usize,
+    commands: &mut Vec<Command>,
+    labels: &mut Vec<(LayerId, layer_model::ColorLabel)>,
+) -> Result<LayerId, String> {
+    let source = doc
+        .document
+        .layers
+        .get(source_id)
+        .ok_or("The active layer is not in the tree")?;
+    let children = source.children().to_vec();
+    let mut copy = source.clone();
+    copy.id = LayerId::new();
+    copy.name = name;
+    if let layer_model::LayerKind::Group(group) = &mut copy.kind {
+        group.children.clear();
+    }
+    // A duplicated mask needs its own identity, or both layers would
+    // edit one set of coverage tiles.
+    let old_mask = copy.mask.as_mut().map(|m| {
+        let old = m.id;
+        m.id = layer_model::MaskId::new();
+        old
+    });
+    // W10-I: and so does a smart object's filter mask.
+    let filter_mask = crate::menu_bridge::layer_extras::rekey_filter_mask(&mut copy, &doc.document);
+    let new_id = copy.id;
+    commands.push(Command::create_layer(copy));
+    if let Some(edits) = filter_mask.filter(|e| !e.is_empty()) {
+        commands.push(
+            Command::paint_tiles(editor_core::pixels::PixelTarget::FilterMask(new_id), edits)
+                .map_err(|e| e.to_string())?,
+        );
+    }
+    if let Some(map) = doc.document.layer_tiles(source_id) {
+        let edits: Vec<_> = map
+            .iter()
+            .map(|(coord, hash)| editor_core::pixels::TileEdit::set(coord, hash))
+            .collect();
+        if !edits.is_empty() {
             commands.push(
-                Command::paint_tiles(editor_core::pixels::PixelTarget::FilterMask(new_id), edits)
+                Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(new_id), edits)
                     .map_err(|e| e.to_string())?,
             );
         }
-        if let Some(map) = doc.document.layer_tiles(source_id) {
+    }
+    if let Some(old_mask) = old_mask {
+        if let Some(map) = doc
+            .document
+            .pixels
+            .tiles(editor_core::PixelKey::Mask(old_mask))
+        {
             let edits: Vec<_> = map
                 .iter()
                 .map(|(coord, hash)| editor_core::pixels::TileEdit::set(coord, hash))
                 .collect();
             if !edits.is_empty() {
                 commands.push(
-                    Command::paint_tiles(editor_core::pixels::PixelTarget::Layer(new_id), edits)
+                    Command::paint_tiles(editor_core::pixels::PixelTarget::Mask(new_id), edits)
                         .map_err(|e| e.to_string())?,
                 );
             }
         }
-        if let Some(old_mask) = old_mask {
-            if let Some(map) = doc
-                .document
-                .pixels
-                .tiles(editor_core::PixelKey::Mask(old_mask))
-            {
-                let edits: Vec<_> = map
-                    .iter()
-                    .map(|(coord, hash)| editor_core::pixels::TileEdit::set(coord, hash))
-                    .collect();
-                if !edits.is_empty() {
-                    commands.push(
-                        Command::paint_tiles(editor_core::pixels::PixelTarget::Mask(new_id), edits)
-                            .map_err(|e| e.to_string())?,
-                    );
-                }
-            }
-        }
-        // `create_layer` lands at the top of the root; the move seats the
-        // copy directly above its source, in the source's own group.
-        commands.push(Command::MoveLayer {
-            layer_id: new_id,
-            parent: doc.document.layers.parent_of(source_id),
-            index: doc.document.layers.index_in_parent(source_id).unwrap_or(0),
-        });
-        // W11-E: the copy wears its source's colour label, as in Photoshop.
-        let color = doc.document.extras.color_label(source_id);
-        if color != layer_model::ColorLabel::NoColor {
-            let mut extras = doc.document.extras.clone();
-            extras.set_color_label(new_id, color);
-            commands.push(Command::SetDocumentExtras {
-                extras: Box::new(extras),
-            });
-        }
-        Ok((
-            commands,
-            new_id,
-            status,
-            format!("Duplicate {}", source.name),
-        ))
     }
+    commands.push(Command::MoveLayer {
+        layer_id: new_id,
+        parent,
+        index,
+    });
+    let color = doc.document.extras.color_label(source_id);
+    if color != layer_model::ColorLabel::NoColor {
+        labels.push((new_id, color));
+    }
+    // The children, each at its own index inside the new group; they keep
+    // their names (only the copied root is renamed).
+    for (i, child) in children.into_iter().enumerate() {
+        let child_name = doc
+            .document
+            .layers
+            .get(child)
+            .map(|l| l.name.clone())
+            .ok_or("A child of the group is not in the tree")?;
+        copy_node_commands(doc, child, child_name, Some(new_id), i, commands, labels)?;
+    }
+    Ok(new_id)
 }
 
 /// The rectangle Image ▸ Trim… keeps, as `(x, y, width, height)`, judged
