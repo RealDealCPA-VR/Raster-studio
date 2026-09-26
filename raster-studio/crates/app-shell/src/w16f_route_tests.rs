@@ -363,3 +363,120 @@ fn slice_select_arrows_nudge_the_picked_slice_one_step_each() {
         &[raster::PixelRect::new(9, 18, 16, 16)]
     );
 }
+
+#[test]
+fn ctrl_alt_shift_dragging_a_corner_is_perspective() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut editor = editor(dir.path());
+    editor.set_tool(ToolId::FreeTransform);
+    let mut pointer = ToolPointer::new();
+    let all = Modifiers {
+        shift: true,
+        alt: true,
+        ctrl: true,
+    };
+    // The top-left corner, pulled 8 px out to the left.
+    drag(
+        &mut pointer,
+        &mut editor,
+        &[(0.0, 0.0), (-8.0, 0.0)],
+        all,
+        &[],
+    );
+    let corners = live_corners(&mut pointer);
+    assert_eq!(corners[0], Vec2::new(-8.0, 0.0));
+    assert_eq!(corners[1], Vec2::new(72.0, 0.0), "its edge-mate splays");
+    assert_eq!(corners[2], Vec2::new(64.0, 64.0), "the bottom stays");
+    assert_eq!(corners[3], Vec2::new(0.0, 64.0), "the bottom stays");
+}
+
+#[test]
+fn direct_selection_shift_clicks_two_knots_and_a_drag_moves_both() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut editor = editor(dir.path());
+    let id = add_shape(&mut editor, "M10 10 L50 10 L50 50 L10 50 Z");
+    editor.set_layer_selection(vec![id], Some(id));
+    editor.set_tool(ToolId::DirectSelection);
+    let mut pointer = ToolPointer::new();
+    assert_eq!(
+        drag(
+            &mut pointer,
+            &mut editor,
+            &[(10.0, 10.0)],
+            Modifiers::NONE,
+            &[]
+        ),
+        0,
+        "a click only selects"
+    );
+    drag(
+        &mut pointer,
+        &mut editor,
+        &[(50.0, 10.0)],
+        Modifiers::shift(),
+        &[],
+    );
+    // Drag the second knot down 6: both selected knots go.
+    let steps = drag(
+        &mut pointer,
+        &mut editor,
+        &[(50.0, 10.0), (50.0, 13.0), (50.0, 16.0)],
+        Modifiers::NONE,
+        &[],
+    );
+    assert_eq!(steps, 1, "one step");
+    assert_eq!(
+        vector::anchors::anchor_points(&path_of(&editor, id)),
+        vec![
+            vector::Point::new(10.0, 16.0),
+            vector::Point::new(50.0, 16.0),
+            vector::Point::new(50.0, 50.0),
+            vector::Point::new(10.0, 50.0),
+        ]
+    );
+    // And Shift+Down: ten more for both, one step.
+    assert_eq!(
+        pointer.nudge(&mut editor, NudgeDirection::Down, true, false),
+        Ok(1)
+    );
+    let pts = vector::anchors::anchor_points(&path_of(&editor, id));
+    assert_eq!(pts[0], vector::Point::new(10.0, 26.0));
+    assert_eq!(pts[1], vector::Point::new(50.0, 26.0));
+    assert_eq!(pts[2], vector::Point::new(50.0, 50.0));
+}
+
+#[test]
+fn double_clicking_a_smooth_knot_through_the_pointer_collapses_its_handles() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut editor = editor(dir.path());
+    // The knot at (30, 10) is smooth: handles (-10, 0) and (10, 0).
+    let id = add_shape(
+        &mut editor,
+        "M10 30 C10 20 20 10 30 10 C40 10 50 20 50 30 Z",
+    );
+    editor.set_layer_selection(vec![id], Some(id));
+    editor.set_tool(ToolId::DirectSelection);
+    let mut pointer = ToolPointer::new();
+    let knot = |editor: &Editor| vector::anchors::from_path(&path_of(editor, id))[0].anchors[1];
+    assert!(knot(&editor).is_smooth());
+    let first = drag(
+        &mut pointer,
+        &mut editor,
+        &[(30.0, 10.0)],
+        Modifiers::NONE,
+        &[],
+    );
+    assert_eq!(first, 0, "one click only selects");
+    let second = drag(
+        &mut pointer,
+        &mut editor,
+        &[(30.0, 10.0)],
+        Modifiers::NONE,
+        &[],
+    );
+    assert_eq!(second, 1, "the double-click is one step");
+    let a = knot(&editor);
+    assert_eq!(a.pos, vector::Point::new(30.0, 10.0));
+    assert_eq!(a.handle_in, vector::Point::ZERO);
+    assert_eq!(a.handle_out, vector::Point::ZERO);
+}

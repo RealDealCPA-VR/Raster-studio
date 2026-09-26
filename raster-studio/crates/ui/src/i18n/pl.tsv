@@ -41,7 +41,7 @@ Add Media	Dodaj multimedia
 Add Noise…	Dodaj szum…
 Add a layer mask	Dodaj maskę warstwy
 Add a smart filter mask	Dodaj maskę inteligentnego filtra
-Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read	Dodaj plik wideo (MP4: H.264 lub AV1) jako warstwę wideo w miejscu głowicy; dźwięk nie jest wczytywany
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Umieść plik obrazu lub wideo (Plik > Umieść osadzony); wideo staje się warstwą wideo w miejscu głowicy odtwarzania
 Add an adjustment layer	Dodaj warstwę dopasowania
 Add another instance of this effect	Dodaj kolejne wystąpienie tego efektu
 Add current colour	Dodaj bieżący kolor
@@ -51,6 +51,7 @@ Add or remove room around the image. Pixels are not resampled.	Dodaj lub usuń m
 Add shortcut	Dodaj skrót
 Add to Selection	Dodaj do zaznaczenia
 Adds one guide at a document coordinate, in pixels.	Dodaje jedną linię pomocniczą we współrzędnej dokumentu, w pikselach.
+Adjustment	Dopasowanie
 Adjustments	Dopasowania
 Advanced	Zaawansowane
 Again	Ponownie
@@ -539,6 +540,7 @@ File name	Nazwa pliku
 Files that fail are listed in batch-errors.txt in the destination.	Pliki, których nie udało się przetworzyć, są wymienione w batch-errors.txt w miejscu docelowym.
 Fill	Wypełnienie
 Fill Filter Mask	Wypełnij maskę filtra
+Fill Layer	Warstwa wypełnienia
 Fill Mask	Wypełnij maskę
 Fill Screen	Wypełnij ekran
 Fill in File Info, or open a file that has EXIF, to embed metadata	Uzupełnij informacje o pliku lub otwórz plik z EXIF, aby osadzić metadane
@@ -553,6 +555,7 @@ Find Edges	Znajdź krawędzie
 First line	Pierwszy wiersz
 Fish	Ryba
 Fisheye	Rybie oko
+Fit The Area	Dopasuj do obszaru
 Fit on Screen	Dopasuj do ekranu
 Fit the whole image in the window	Dopasuj cały obraz do okna
 Fixed height	Stała wysokość
@@ -712,6 +715,7 @@ Layer	Warstwa
 Layer Comps	Kompozycje warstw
 Layer Edges	Krawędzie warstwy
 Layer Mask	Maska warstwy
+Layer Properties	Właściwości warstwy
 Layer Style	Styl warstwy
 Layer knocks out drop shadow	Warstwa wycina cień
 Layer via Copy	Warstwa przez kopiowanie
@@ -768,6 +772,7 @@ Lock all	Zablokuj wszystko
 Lock pixels	Zablokuj piksele
 Lock position	Zablokuj położenie
 Lock transparent pixels	Zablokuj przezroczyste piksele
+Long-tap as a right click	Długie dotknięcie jako prawy klik
 Lookup table	Tablica wyszukiwania
 Luminance	Luminancja
 Luminance of the preview source; the markers are the black and white points.	Luminancja źródła podglądu; znaczniki to punkty czerni i bieli.
@@ -787,6 +792,7 @@ Maps the active layer onto a palette as one undo step; the document stays RGB.	M
 Margins	Marginesy
 Mark this state so you can come back to it	Oznacz ten stan, aby móc do niego wrócić
 Mask	Maska
+Mask Properties	Właściwości maski
 Mask source	Źródło maski
 Match Color	Dopasuj kolor
 Match Color…	Dopasuj kolor…
@@ -847,6 +853,7 @@ New Adjustment Layer	Nowa warstwa dopasowania
 New Channel	Nowy kanał
 New Document	Nowy dokument
 New Fill Layer	Nowa warstwa wypełnienia
+New Folder	Nowy folder
 New Guide	Nowa linia pomocnicza
 New Guide Layout	Nowy układ linii pomocniczych
 New Guide Layout…	Nowy układ linii pomocniczych…
@@ -860,7 +867,9 @@ New Snapshot	Nowa migawka
 New Spot Channel	Nowy kanał koloru dodatkowego
 New Spot Channel…	Nowy kanał koloru dodatkowego…
 New Style Preset	Nowe ustawienie stylu
+New Video Group	Nowa grupa wideo
 New channel	Nowy kanał
+New folder	Nowy folder
 New group	Nowa grupa
 New layer	Nowa warstwa
 New layer comp	Nowa kompozycja warstw
@@ -961,6 +970,7 @@ Open a document to see its properties	Otwórz dokument, aby zobaczyć jego wła�
 Open another document, or add another pixel layer, to match its colours.	Otwórz inny dokument lub dodaj kolejną warstwę pikseli, aby dopasować jej kolory.
 Open as	Otwórz jako
 Open editor…	Otwórz edytor…
+Open or close the folder	Otwórz lub zamknij folder
 Open the Adjustments panel	Otwórz panel Dopasowania
 Open…	Otwórz…
 Operation	Działanie
@@ -1029,6 +1039,7 @@ Pinch…	Szczypanie…
 Pixel Grid	Siatka pikseli
 Pixel dimensions	Wymiary w pikselach
 Pixel mask	Maska pikselowa
+Pixel to Pixel	Piksel do piksela
 Pixelate	Pikslowanie
 Pixels	Piksele
 Place Embedded…	Umieść osadzony…
@@ -1239,6 +1250,7 @@ Select a layer to see its properties	Zaznacz warstwę, aby zobaczyć jej właśc
 Select a layer: a click on a style applies it to the active layer.	Zaznacz warstwę: kliknięcie stylu stosuje go do aktywnej warstwy.
 Select a path first	Najpierw zaznacz ścieżkę
 Select a text layer, or type into one: a click inserts the glyph at the caret.	Zaznacz warstwę tekstową lub pisz w niej: kliknięcie wstawia glif w miejscu kursora.
+Select a text layer to edit its type	Zaznacz warstwę tekstową, aby edytować jej tekst
 Select every pixel near one colour	Zaznacz każdy piksel zbliżony do jednego koloru
 Selection	Zaznaczenie
 Selection Edges	Krawędzie zaznaczenia
@@ -1262,6 +1274,7 @@ Shadows/Highlights…	Cienie/Podświetlenia…
 Shape	Kształt
 Shape Dynamics	Dynamika kształtu
 Shape Mosaic…	Mozaika kształtów…
+Shape Properties	Właściwości kształtu
 Sharpen	Wyostrz
 Sharpen Edges	Wyostrz krawędzie
 Sharpen More	Wyostrz bardziej
@@ -1364,6 +1377,7 @@ TGA…	TGA…
 TIF…	TIF…
 Templates	Szablony
 Text	Tekst
+Text Properties	Właściwości tekstu
 Text overflows the box	Tekst wychodzi poza ramkę
 Text replacement	Zastępowanie tekstu
 Texture Dilation…	Rozszerzanie tekstury…
@@ -1373,7 +1387,6 @@ The CSV ends inside a quoted field	CSV kończy się wewnątrz pola w cudzysłowi
 The CSV has a header but no data sets	CSV ma nagłówek, ale nie ma zbiorów danych
 The CSV is empty	CSV jest pusty
 The CSV names a variable that is not defined:	CSV wymienia zmienną, która nie jest zdefiniowana:
-The active layer has no layer style to save	Aktywna warstwa nie ma stylu warstwy do zapisania
 The active layer is not in the document	Aktywnej warstwy nie ma w dokumencie
 The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	Aktywny obiekt inteligentny pokazuje po kolei każdy obraz z folderu źródłowego; każdy wynik jest eksportowany jako PNG do folderu docelowego.
 The amount must be within	Wartość musi mieścić się w zakresie
@@ -1477,6 +1490,7 @@ Transform Layer	Przekształć warstwę
 Transform Selection	Przekształć zaznaczenie
 Transparency	Przezroczystość
 Transparent Pixels	Przezroczyste piksele
+Trim	Przytnij
 Trim Away	Przytnij
 Trim…	Przytnij…
 Tritone	Trzytonowy

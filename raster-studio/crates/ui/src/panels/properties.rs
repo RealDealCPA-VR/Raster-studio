@@ -100,8 +100,14 @@ impl PropertiesSubject {
         }
     }
 
-    /// The panel's heading.
+    /// The panel's heading, in the interface language (W16-N; the English
+    /// sources are listed for the language-table gate in `i18n/sources.rs`).
     pub fn title(&self) -> &'static str {
+        crate::strings::tr_en(self.english_title())
+    }
+
+    /// W16-N: the English heading, the source the language tables translate.
+    pub const fn english_title(&self) -> &'static str {
         match self {
             PropertiesSubject::Nothing => "Properties",
             PropertiesSubject::Layer(_) => "Layer Properties",
@@ -1694,6 +1700,40 @@ mod tests {
             assert!(!s.title().is_empty(), "{s:?}");
         }
         drop(doc);
+    }
+
+    /// W16-N: every heading is gated by the language tables and drawn in
+    /// the interface language.
+    #[test]
+    fn every_heading_is_a_gated_source_and_speaks_the_interface_language() {
+        let (_doc, id) = doc_with(LayerKind::Raster(Default::default()));
+        let sources = crate::strings::catalogue_sources();
+        for s in [
+            PropertiesSubject::Nothing,
+            PropertiesSubject::Layer(id),
+            PropertiesSubject::Mask(id),
+            PropertiesSubject::Adjustment {
+                layer: id,
+                id: None,
+            },
+            PropertiesSubject::Text(id),
+            PropertiesSubject::Shape(id),
+            PropertiesSubject::SmartObject(id),
+            PropertiesSubject::Fill(id),
+        ] {
+            let english = s.english_title();
+            assert_eq!(s.title(), english, "English is the source");
+            assert!(
+                sources.iter().any(|x| x == english),
+                "{english:?} is not in the language tables' sources"
+            );
+            crate::strings::with_locale(crate::strings::Locale::De, || {
+                assert_ne!(s.title(), english, "{english:?} stays English in German");
+            });
+        }
+        crate::strings::with_locale(crate::strings::Locale::De, || {
+            assert_eq!(PropertiesSubject::Layer(id).title(), "Ebeneneigenschaften");
+        });
     }
 
     // ---- mask properties --------------------------------------------------

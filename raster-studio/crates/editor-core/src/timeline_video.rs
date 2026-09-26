@@ -33,6 +33,7 @@
 use layer_model::LayerId;
 use serde::{Deserialize, Serialize};
 
+use crate::command::Command;
 use crate::document::Document;
 use crate::pixels::{PixelKey, TileDelta, TileEdit, TileMap};
 
@@ -55,7 +56,10 @@ pub struct VideoClip {
     /// Every frame's duration, in milliseconds (the media's own timing).
     pub durations_ms: Vec<u32>,
     /// The tiles of every decoded frame, in the document's tile store; empty
-    /// until the frames are decoded (not saved: see the module docs).
+    /// until the frames are decoded (not saved: see the module docs). W16-M:
+    /// frames decode on demand, a window at a time, so an entry may be an
+    /// empty map (not decoded yet: a video frame is opaque, never empty);
+    /// see [`VideoClip::frame_loaded`].
     #[serde(skip)]
     pub frames: Vec<TileMap>,
 }
@@ -68,9 +72,23 @@ impl VideoClip {
             .fold(0u32, |sum, d| sum.saturating_add(*d))
     }
 
-    /// Whether the decoded frames are here (one tile map per frame).
+    /// Whether every decoded frame is here (one tile map per frame).
     pub fn frames_loaded(&self) -> bool {
-        !self.frames.is_empty() && self.frames.len() == self.durations_ms.len()
+        !self.frames.is_empty()
+            && self.frames.len() == self.durations_ms.len()
+            && self.frames.iter().all(|f| !f.is_empty())
+    }
+
+    /// W16-M: whether frame `index` is decoded (its tiles are here).
+    pub fn frame_loaded(&self, index: usize) -> bool {
+        index < self.durations_ms.len() && self.frames.get(index).is_some_and(|f| !f.is_empty())
+    }
+
+    /// W16-M: how many frames are decoded.
+    pub fn loaded_frames(&self) -> usize {
+        (0..self.durations_ms.len())
+            .filter(|i| self.frame_loaded(*i))
+            .count()
     }
 
     /// The index of the frame showing at timeline time `t_ms`: the media is
@@ -92,16 +110,20 @@ impl VideoClip {
     }
 }
 
-/// For every video layer with its frames loaded, the tile delta that turns
-/// its pixels into the frame at `t_ms`; layers already showing it, and
-/// layers that left the tree, are skipped.
+/// For every video layer whose frame at `t_ms` is decoded, the tile delta
+/// that turns its pixels into that frame; layers already showing it, layers
+/// whose frame there is not decoded yet (W16-M: decoded on demand) and
+/// layers that left the tree are skipped.
 pub(super) fn frame_deltas(doc: &Document, t_ms: u32) -> Vec<(LayerId, TileDelta)> {
     let mut out = Vec::new();
     for clip in &doc.timeline.videos {
-        if !clip.frames_loaded() || doc.layers.get(clip.layer).is_none() {
+        if doc.layers.get(clip.layer).is_none() {
             continue;
         }
-        let Some(want) = clip.frame_at(t_ms).and_then(|i| clip.frames.get(i)) else {
+        let Some(index) = clip.frame_at(t_ms).filter(|i| clip.frame_loaded(*i)) else {
+            continue;
+        };
+        let Some(want) = clip.frames.get(index) else {
             continue;
         };
         let empty = TileMap::default();
@@ -137,6 +159,78 @@ pub(super) fn put_frames(doc: &mut Document, deltas: Vec<(LayerId, TileDelta)>) 
     for (layer, delta) in deltas {
         doc.pixels.apply(PixelKey::Layer(layer), &delta);
     }
+}
+
+/// W16-M: a video group's line (photopea.com/learn/video, "Video Folders
+/// (Groups)": the layers inside one are placed into a single horizontal
+/// line): its direct children as `(layer, in_ms, out_ms)`, each child's bar
+/// (the whole timeline without a track), in time order. Empty when `group`
+/// is not a video group of `doc`.
+pub fn video_group_line(doc: &Document, group: LayerId) -> Vec<(LayerId, u32, u32)> {
+    if !doc.timeline.video_groups.contains(&group) {
+        return Vec::new();
+    }
+    let Some(layer) = doc.layers.get(group) else {
+        return Vec::new();
+    };
+    let mut line: Vec<(LayerId, u32, u32)> = layer
+        .children()
+        .iter()
+        .map(|id| match doc.timeline.track(*id) {
+            Some(t) => (*id, t.in_ms, t.out_ms),
+            None => (*id, 0, doc.timeline.duration_ms),
+        })
+        .collect();
+    line.sort_by_key(|(_, start, end)| (*start, *end));
+    line
+}
+
+/// W16-M: the timeline's "New Video Group" for `layer`: a new group named
+/// "Video Group N" (N one more than the document's video groups) put where
+/// `layer` is, with `layer` inside it, recorded as a video group, its bar
+/// spanning its line, Timeline mode on. One undo step, "New Video Group".
+/// `None` when `layer` is not in the document or is a video group already.
+pub fn new_video_group(doc: &Document, layer: LayerId) -> Option<Command> {
+    doc.layers.get(layer)?;
+    if doc.timeline.video_groups.contains(&layer) {
+        return None;
+    }
+    let name = format!("Video Group {}", doc.timeline.video_groups.len() + 1);
+    let parent = doc.layers.parent_of(layer);
+    let group = layer_model::Layer::group(&name);
+    let gid = group.id;
+    let mut probe = doc.clone();
+    let create = Command::create_layer(group);
+    create.apply(&mut probe).ok()?;
+    let place = Command::MoveLayer {
+        layer_id: gid,
+        parent,
+        index: probe.layers.index_in_parent(layer)?,
+    };
+    place.apply(&mut probe).ok()?;
+    let into = Command::MoveLayer {
+        layer_id: layer,
+        parent: Some(gid),
+        index: 0,
+    };
+    into.apply(&mut probe).ok()?;
+    let mut t = probe.timeline.clone();
+    t.enabled = true;
+    t.video_groups.push(gid);
+    probe.timeline.video_groups.push(gid);
+    let line = video_group_line(&probe, gid);
+    let start = line.iter().map(|l| l.1).min().unwrap_or(0);
+    let end = line.iter().map(|l| l.2).max().unwrap_or(t.duration_ms);
+    let track = t.track_mut(gid);
+    track.in_ms = start;
+    track.out_ms = end;
+    probe.timeline.video_groups.pop();
+    let label = "New Video Group";
+    let edit = super::set_timeline(&probe, label, t)?;
+    Some(Command::Transaction {
+        label: label.to_string(),
+        commands: vec![create, place, into, edit],
+    })
 }
 
 #[cfg(test)]
@@ -239,6 +333,53 @@ mod tests {
         assert_eq!(shown(&doc, id), shown(&before, id), "undo puts it back");
     }
 
+    /// New Video Group puts the layer inside a new group where the layer
+    /// was, records the group as a video group whose bar spans its line,
+    /// in one undo step; the saved timeline keeps it, and an older one
+    /// without the key reads back with none.
+    #[test]
+    fn new_video_group_wraps_the_layer_in_one_undo_step() {
+        let (mut doc, id) = video_doc();
+        let other = doc.layers.push_root(Layer::raster("still")).unwrap();
+        let c = set_in_out(&doc, id, 1000, 1600).unwrap();
+        c.apply(&mut doc).unwrap();
+        let before = doc.clone();
+        let index = doc.layers.index_in_parent(id).unwrap();
+        let c = new_video_group(&doc, id).unwrap();
+        let inverse = c.apply(&mut doc).unwrap();
+        let gid = doc.layers.parent_of(id).expect("the layer is in a group");
+        let group = doc.layers.get(gid).unwrap();
+        assert_eq!(group.name, "Video Group 1");
+        assert_eq!(group.children(), &[id]);
+        assert_eq!(doc.layers.parent_of(gid), None);
+        assert_eq!(
+            doc.layers.index_in_parent(gid),
+            Some(index),
+            "where the layer was"
+        );
+        assert!(doc.layers.get(other).is_some());
+        assert_eq!(doc.timeline.video_groups, vec![gid]);
+        assert_eq!(video_group_line(&doc, gid), vec![(id, 1000, 1600)]);
+        let bar = doc.timeline.track(gid).unwrap();
+        assert_eq!(
+            (bar.in_ms, bar.out_ms),
+            (1000, 1600),
+            "the bar spans the line"
+        );
+        assert!(new_video_group(&doc, gid).is_none());
+        assert!(
+            video_group_line(&doc, other).is_empty(),
+            "not a video group"
+        );
+        let json = serde_json::to_string(&doc.timeline).unwrap();
+        let back: super::super::DocumentTimeline = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.video_groups, vec![gid]);
+        inverse.apply(&mut doc).unwrap();
+        assert_eq!(doc.timeline, before.timeline);
+        assert_eq!(doc.layers.parent_of(id), None);
+        assert!(doc.layers.get(gid).is_none(), "undo removes the group");
+    }
+
     /// The saved record keeps the clip but not the frames' tiles, and a
     /// document from before video layers (no `videos` key) still loads.
     #[test]
@@ -254,9 +395,30 @@ mod tests {
         let old: super::super::DocumentTimeline =
             serde_json::from_str(r#"{"enabled":true,"duration_ms":3000,"fps":30}"#).unwrap();
         assert!(old.videos.is_empty());
+        assert!(old.video_groups.is_empty());
         // A clip with no frames loaded leaves the layer alone.
         let mut unloaded = doc.clone();
         unloaded.timeline.videos[0].frames.clear();
         assert!(frame_deltas(&unloaded, 1400).is_empty());
+    }
+
+    /// W16-M: a clip decoded only in part (frames on demand) shows the
+    /// frames it has and leaves the layer alone where the frame at `t` is
+    /// not decoded yet.
+    #[test]
+    fn a_partly_decoded_clip_shows_the_frames_it_has() {
+        let (mut doc, id) = video_doc();
+        doc.timeline.videos[0].frames[1] = TileMap::default();
+        let clip = &doc.timeline.videos[0];
+        assert!(!clip.frames_loaded());
+        assert!(clip.frame_loaded(0) && !clip.frame_loaded(1) && clip.frame_loaded(2));
+        assert!(!clip.frame_loaded(3));
+        assert_eq!(clip.loaded_frames(), 2);
+        let third = clip.frames[2].get(TileCoord::new(0, 0, 0));
+        assert_eq!(shown(&document_at(&doc, 1400), id), third);
+        assert!(
+            frame_deltas(&doc, 1150).is_empty(),
+            "frame 2 is not decoded"
+        );
     }
 }

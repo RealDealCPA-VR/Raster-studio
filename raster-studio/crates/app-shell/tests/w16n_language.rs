@@ -1,4 +1,5 @@
-//! W16-N: Window > Language and Window > Glass Menus, through the real route.
+//! W16-N: Window > Language and Window > Appearance > Glass Menus, through
+//! the real route.
 //!
 //! The drawn chrome (`Chrome::ui`, the menu bar `menu_bridge::draw` paints)
 //! is clicked the way a user clicks it: the Window menu's title, then the
@@ -238,9 +239,10 @@ fn window_language_switches_the_drawn_menu_bar_and_glass_menus_turn_the_menus_tr
         "an open menu is drawn on the overlay fill"
     );
     assert!(!fills.contains(&glass), "no glass while Glass Menus is off");
-    // Window > Glass Menus (Glasmenüs in German) turns it on and stores it.
+    // Window > Appearance > Glass Menus (Erscheinungsbild > Glasmenüs in
+    // German) turns it on and stores it.
     assert!(
-        window.pick(&mut editor, &["Glasmenüs"]),
+        window.pick(&mut editor, &["Erscheinungsbild", "Glasmenüs"]),
         "the Glass Menus row produced no preferences"
     );
     assert!(editor.preferences().glass_menus, "Glass Menus is stored");
@@ -261,7 +263,7 @@ fn window_language_switches_the_drawn_menu_bar_and_glass_menus_turn_the_menus_tr
             modifiers: egui::Modifiers::default(),
         }],
     );
-    window.pick(&mut editor, &["Fenster", "Glasmenüs"]);
+    window.pick(&mut editor, &["Fenster", "Erscheinungsbild", "Glasmenüs"]);
     assert!(
         !editor.preferences().glass_menus,
         "Glass Menus toggles back off"

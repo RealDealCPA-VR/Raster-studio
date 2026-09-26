@@ -87,10 +87,24 @@ pub enum OptionsItem {
     ByLayer,
     /// Thumbnails by Document (a radio).
     ByDocument,
+    /// "Filter": show the kind-filter / search row (a check).
+    Filter,
+    /// "Blending Options": show the blend-mode / opacity row (a check).
+    BlendingOptions,
+    /// "Lock": show the lock / fill row (a check).
+    Lock,
+    /// "Long-tap as a right click" (a check).
+    LongTap,
 }
 
 impl OptionsItem {
-    pub const ALL: [OptionsItem; 5] = [
+    /// Photopea's order (`hP` panel menu): the three row toggles, a rule,
+    /// the long-tap toggle, a rule, then the copy and thumbnail rows.
+    pub const ALL: [OptionsItem; 9] = [
+        OptionsItem::Filter,
+        OptionsItem::BlendingOptions,
+        OptionsItem::Lock,
+        OptionsItem::LongTap,
         OptionsItem::AddCopy,
         OptionsItem::Smaller,
         OptionsItem::Larger,
@@ -105,7 +119,17 @@ impl OptionsItem {
             OptionsItem::ByLayer => state.thumbs_by_layer,
             OptionsItem::ByDocument => !state.thumbs_by_layer,
             OptionsItem::Smaller | OptionsItem::Larger => false,
+            OptionsItem::Filter => !state.hide_filter_row,
+            OptionsItem::BlendingOptions => !state.hide_blend_row,
+            OptionsItem::Lock => !state.hide_lock_row,
+            OptionsItem::LongTap => state.long_tap_menu,
         }
+    }
+
+    /// Whether Photopea rules a line under the row ("Lock ---sep",
+    /// "Long-tap as a right click ---sep").
+    pub fn separator_after(self) -> bool {
+        matches!(self, OptionsItem::Lock | OptionsItem::LongTap)
     }
 
     /// Whether the row does anything in `state`.
@@ -126,6 +150,17 @@ impl OptionsItem {
             OptionsItem::Larger => state.thumb_scale = state.thumb_scale.larger(),
             OptionsItem::ByLayer => state.thumbs_by_layer = true,
             OptionsItem::ByDocument => state.thumbs_by_layer = false,
+            OptionsItem::Filter => {
+                state.hide_filter_row = !state.hide_filter_row;
+                if state.hide_filter_row {
+                    // A hidden filter must not keep narrowing the rows.
+                    state.filter = None;
+                    state.search.clear();
+                }
+            }
+            OptionsItem::BlendingOptions => state.hide_blend_row = !state.hide_blend_row,
+            OptionsItem::Lock => state.hide_lock_row = !state.hide_lock_row,
+            OptionsItem::LongTap => state.long_tap_menu = !state.long_tap_menu,
         }
         let changed = state.panel_options() != before;
         if changed {
@@ -141,6 +176,10 @@ pub struct PanelOptions {
     pub thumb_scale: ThumbScale,
     pub thumbs_by_layer: bool,
     pub add_copy: bool,
+    pub filter_row: bool,
+    pub blend_row: bool,
+    pub lock_row: bool,
+    pub long_tap: bool,
 }
 
 impl ThumbScale {
@@ -477,6 +516,10 @@ impl LayersState {
             thumb_scale: self.thumb_scale,
             thumbs_by_layer: self.thumbs_by_layer,
             add_copy: !self.plain_copy_names,
+            filter_row: !self.hide_filter_row,
+            blend_row: !self.hide_blend_row,
+            lock_row: !self.hide_lock_row,
+            long_tap: self.long_tap_menu,
         }
     }
 
@@ -485,6 +528,10 @@ impl LayersState {
         self.thumb_scale = options.thumb_scale;
         self.thumbs_by_layer = options.thumbs_by_layer;
         self.plain_copy_names = !options.add_copy;
+        self.hide_filter_row = !options.filter_row;
+        self.hide_blend_row = !options.blend_row;
+        self.hide_lock_row = !options.lock_row;
+        self.long_tap_menu = options.long_tap;
     }
 
     /// How many times the user changed a panel option this session: `0`

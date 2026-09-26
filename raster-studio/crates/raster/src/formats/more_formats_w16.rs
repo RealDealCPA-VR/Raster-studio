@@ -12,7 +12,7 @@
 //! | Valve `.vtf` | the largest mip of frame 0, face 0: RGBA / ABGR / ARGB / BGRA / BGRX 8888, RGB / BGR 888 (and blue-screen), RGB / BGR 565, BGRX / BGRA 5551, BGRA 4444, I8, IA88, A8, UV88, UVWQ8888, DXT1 / DXT3 / DXT5, RGBA16161616 (16-bit) and RGBA16161616F | [`vtf`] |
 //! | FITS | the primary (or first image) HDU, BITPIX 8 / 16 / 32 / 64 / -32 / -64 with BSCALE / BZERO / BLANK, the first plane (or three planes as RGB), stretched linearly min..max to 16 bits, flipped so FITS's bottom row is at the bottom | [`fits`] |
 //! | DICOM | the first frame, explicit / implicit VR little endian or RLE Lossless, MONOCHROME1 / 2 (8-16 bit, rescale slope / intercept, the file's window centre / width, else min..max) and 8-bit RGB / YBR_FULL; JPEG-family transfer syntaxes refused by name | [`dicom`] |
-//! | AutoCAD DXF (ASCII) | LINE, LWPOLYLINE (with bulges), POLYLINE / VERTEX, CIRCLE, ARC, ELLIPSE, SPLINE (B-spline sampled), POINT, TEXT / MTEXT, drawn through `resvg`; binary DXF refused by name | [`dxf`] |
+//! | AutoCAD DXF (ASCII) | LINE, LWPOLYLINE (with bulges), POLYLINE / VERTEX, CIRCLE, ARC, ELLIPSE, SPLINE (B-spline sampled), POINT, TEXT / MTEXT, drawn through `resvg`, and as vector layers ([`dxf::layers`], what File > Open opens); binary DXF refused by name | [`dxf`] |
 //! | CorelDRAW `.cdr` | the embedded thumbnail (a zipped X4+ file's `metadata/thumbnails/thumbnail.bmp` or `previews/thumbnail.png`; a RIFF file's `DISP` bitmap) | [`foreign`] |
 //! | InDesign `.indd` | the JPEG thumbnail in its XMP packet | [`foreign`] |
 //! | Affinity Photo, PaintTool SAI | **refused by name**, saying why | [`foreign`] |

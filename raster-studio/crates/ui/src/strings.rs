@@ -520,11 +520,13 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.w16.menu.export.asl", &[(Locale::En, "Export as .ASL…")]),
     ("ui.w16.menu.nothing.selected", &[(Locale::En, "Click an item in the panel first")]),
     ("ui.w16.menu.library.empty", &[(Locale::En, "The list is empty")]),
-    ("ui.w16.menu.styles.no.style", &[(Locale::En, "The active layer has no layer style to save")]),
     ("ui.w16.menu.rename", &[(Locale::En, "Name Change")]),
     ("ui.w16.menu.delete", &[(Locale::En, "Delete")]),
     ("ui.w16.menu.tiles.list", &[(Locale::En, "Tiles/List")]),
     ("ui.w16.menu.define.new", &[(Locale::En, "Define New")]),
+    ("ui.w16.menu.new.folder", &[(Locale::En, "New Folder")]),
+    ("ui.w16.swatches.new.folder", &[(Locale::En, "New folder")]),
+    ("ui.w16.swatches.folder.toggle", &[(Locale::En, "Open or close the folder")]),
     ("ui.w16.history.no.document", &[(Locale::En, "Open a document first")]),
     ("ui.w16.history.nothing.to.clear", &[(Locale::En, "There is no history to clear")]),
     ("ui.w16.history.clear", &[(Locale::En, "Clear History")]),
@@ -541,6 +543,14 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.w16.vector.mask.enable", &[(Locale::En, "Enable Vector Mask")]),
     ("ui.w16.vector.mask.delete", &[(Locale::En, "Delete Vector Mask")]),
     ("ui.w16.navigator.angle", &[(Locale::En, "Angle")]),
+    // W16-K: the Zoom, Rotate View and Crop options-bar captions, Photopea's words.
+    ("ui.w16k.bar.pixel_to_pixel", &[(Locale::En, "Pixel to Pixel")]),
+    ("ui.w16k.bar.fit_the_area", &[(Locale::En, "Fit The Area")]),
+    ("ui.w16k.bar.reset", &[(Locale::En, "Reset")]),
+    ("ui.w16k.crop_by.all_layers", &[(Locale::En, "All Layers")]),
+    ("ui.w16k.crop_by.current_layer", &[(Locale::En, "Current Layer")]),
+    ("ui.w16k.crop_by.trim", &[(Locale::En, "Trim")]),
+    ("ui.w16k.crop_by.selection", &[(Locale::En, "Selection")]),
     ("ui.w16.navigator.degrees", &[(Locale::En, "\u{b0}")]),
     ("ui.w16.comps.last.state", &[(Locale::En, "Last Document State")]),
     ("ui.w16.comps.last.state.none", &[(Locale::En, "Kept when a comp is first applied")]),
@@ -990,8 +1000,9 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.animation.no_layers", &[(Locale::En, "No layers yet: each top-level layer gets a bar on the timeline.")]),
     // W16-M: the timeline's Add Media and video rows.
     ("ui.animation.add_media", &[(Locale::En, "Add Media")]),
-    ("ui.animation.add_media.tip", &[(Locale::En, "Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read")]),
+    ("ui.animation.add_media.tip", &[(Locale::En, "Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead")]),
     ("ui.animation.video.frames", &[(Locale::En, " frames")]),
+    ("ui.animation.new_video_group", &[(Locale::En, "New Video Group")]),
     ("ui.export_as.timeline.frames", &[(Locale::En, "{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time")]),
     ("ui.docks.layers.search", &[(Locale::En, "Search layers by name")]),
     ("ui.docks.layers.search.placeholder", &[(Locale::En, "Search layers")]),
@@ -1009,6 +1020,10 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.docks.layers.options.thumb.size", &[(Locale::En, "Thumbnail Size")]),
     ("ui.docks.layers.options.by.layer", &[(Locale::En, "Thumbnails by Layer")]),
     ("ui.docks.layers.options.by.document", &[(Locale::En, "Thumbnails by Document")]),
+    ("ui.docks.layers.options.filter", &[(Locale::En, "Filter")]),
+    ("ui.docks.layers.options.blending", &[(Locale::En, "Blending Options")]),
+    ("ui.docks.layers.options.lock", &[(Locale::En, "Lock")]),
+    ("ui.docks.layers.options.long.tap", &[(Locale::En, "Long-tap as a right click")]),
     ("ui.docks.character.kerning", &[(Locale::En, "Pair kerning")]),
     ("ui.docks.character.kerning.tip", &[(Locale::En, "Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.")]),
     ("ui.docks.character.kerning.amount", &[(Locale::En, "Amount")]),
@@ -1524,11 +1539,13 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.w16.menu.export.asl",
     "ui.w16.menu.nothing.selected",
     "ui.w16.menu.library.empty",
-    "ui.w16.menu.styles.no.style",
     "ui.w16.menu.rename",
     "ui.w16.menu.delete",
     "ui.w16.menu.tiles.list",
     "ui.w16.menu.define.new",
+    "ui.w16.menu.new.folder",
+    "ui.w16.swatches.new.folder",
+    "ui.w16.swatches.folder.toggle",
     "ui.w16.history.no.document",
     "ui.w16.history.nothing.to.clear",
     "ui.w16.history.clear",
@@ -1546,6 +1563,14 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.w16.vector.mask.delete",
     "ui.w16.navigator.angle",
     "ui.w16.navigator.degrees",
+    // W16-K.
+    "ui.w16k.bar.pixel_to_pixel",
+    "ui.w16k.bar.fit_the_area",
+    "ui.w16k.bar.reset",
+    "ui.w16k.crop_by.all_layers",
+    "ui.w16k.crop_by.current_layer",
+    "ui.w16k.crop_by.trim",
+    "ui.w16k.crop_by.selection",
     "ui.w16.comps.last.state",
     "ui.w16.comps.last.state.none",
     "ui.w16.comps.flag.visibility",
@@ -2160,6 +2185,7 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.animation.add_media",
     "ui.animation.add_media.tip",
     "ui.animation.video.frames",
+    "ui.animation.new_video_group",
     "ui.export_as.timeline.frames",
     "ui.docks.layers.search",
     "ui.docks.layers.search.placeholder",
@@ -2177,6 +2203,10 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.docks.layers.options.thumb.size",
     "ui.docks.layers.options.by.layer",
     "ui.docks.layers.options.by.document",
+    "ui.docks.layers.options.filter",
+    "ui.docks.layers.options.blending",
+    "ui.docks.layers.options.lock",
+    "ui.docks.layers.options.long.tap",
     "ui.docks.character.kerning",
     "ui.docks.character.kerning.tip",
     "ui.docks.character.kerning.amount",
@@ -2660,7 +2690,38 @@ mod tests {
                 .map(|l| l.display_name().to_string())
                 .collect();
             assert_eq!(offered, names, "every language, each in its own name");
-            assert!(window.actions().contains(&MenuAction::ToggleGlassMenus));
+            // Glass Menus closes the themes list below a separator, as it
+            // closes Photopea's More > Themes.
+            let appearance = window
+                .entries
+                .iter()
+                .find_map(|e| match e {
+                    Entry::Submenu { label, entries } if *label == "Erscheinungsbild" => {
+                        Some(entries.clone())
+                    }
+                    _ => None,
+                })
+                .expect("Window has an Appearance submenu");
+            assert!(
+                matches!(
+                    appearance.as_slice(),
+                    [
+                        ..,
+                        Entry::Separator,
+                        Entry::Item(MenuAction::ToggleGlassMenus)
+                    ]
+                ),
+                "Appearance ends with a separator and Glass Menus: {appearance:?}"
+            );
+            assert_eq!(
+                window
+                    .actions()
+                    .iter()
+                    .filter(|a| **a == MenuAction::ToggleGlassMenus)
+                    .count(),
+                1,
+                "Glass Menus is offered once"
+            );
             assert_eq!(
                 MenuAction::ToggleGlassMenus.label_in(&ctx),
                 "Glasmen\u{00FC}s"

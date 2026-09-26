@@ -258,7 +258,7 @@ impl Editor {
         path: &Path,
         history_depth: usize,
     ) -> Result<Option<(OpenDocument, usize, usize)>, String> {
-        // W16-I: an SVG, EPS or one-page PDF / AI that reads as layers comes
+        // W16-I: an SVG, EPS or one-page `.ai` / `.pdf` that reads as layers comes
         // back (File > Revert) as its layers.
         if let Some(doc) = Self::open_vector_layered(id, path, history_depth) {
             return Ok(Some((doc, 1, 1)));
@@ -292,9 +292,10 @@ impl Editor {
         &mut self,
         path: &Path,
     ) -> Option<Result<Effect, ActionError>> {
-        // W16-I: an SVG, EPS or one-page PDF / AI opens as its layers; when
-        // they cannot be read, an EPS / PDF opens below as one picture and
-        // the status line says why.
+        // W16-I: an SVG, EPS or one-page `.ai` / `.pdf` opens as its layers
+        // (the W16-K dialog took any `.pdf` whose page cannot be kept live);
+        // when they cannot be read, an EPS / `.ai` opens below as one
+        // picture and the status line says why.
         let no_layers = match self.open_vector_document(path) {
             vector_w16::VectorOpen::Done(result) => return Some(result),
             vector_w16::VectorOpen::NoLayers(why) => Some(why),
@@ -361,6 +362,6 @@ impl Editor {
 #[path = "editor_open_pages_tests.rs"]
 mod tests;
 
-/// W16-I: SVG, EPS and one-page PDF / AI opened as layers.
+/// W16-I: SVG, EPS and one-page `.ai` / `.pdf` opened as layers.
 #[path = "import_vector_w16.rs"]
 pub(crate) mod vector_w16;

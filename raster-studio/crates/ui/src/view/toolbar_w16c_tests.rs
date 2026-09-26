@@ -218,3 +218,32 @@ fn the_commit_check_shows_only_while_an_edit_is_pending_and_confirms_it() {
     let crop_id = super::super::ids::tool_option(ToolId::Crop, COMMIT_KEY);
     assert_eq!(crop.click(crop_id), vec![Intent::ConfirmTool]);
 }
+
+/// Round 2: the Blur / Sharpen Strength is Photopea's 1-100 % (its
+/// `strn` option), not the tool's raw radius or amount. The Sharpen's
+/// default 1x of 4x reads 25%, and typing 100 stores the top, 4x.
+#[test]
+fn blur_and_sharpen_strength_are_percentages_on_the_bar() {
+    let tool = ToolId::Sharpen;
+    let mut bar = Bar::new(tool);
+    bar.frame(Vec::new());
+    let (_, texts) = bar.frame_with_text(Vec::new());
+    assert!(
+        texts.iter().any(|t| t == "25%"),
+        "the Sharpen's Strength reads 25%: {texts:?}"
+    );
+    let intents = bar.type_into(super::super::ids::tool_option(tool, "amount"), "100");
+    let stored = last_float(&intents, "amount").expect("typing 100 wrote the Strength");
+    assert!((stored - 4.0).abs() < 1e-4, "100% stored {stored}, not 4");
+
+    let tool = ToolId::Blur;
+    let mut bar = Bar::new(tool);
+    let intents = bar.type_into(super::super::ids::tool_option(tool, "radius"), "50");
+    let stored = last_float(&intents, "radius").expect("typing 50 wrote the Strength");
+    assert!(
+        (stored - 32.0).abs() < 1e-3,
+        "50% stored {stored}, not 32 px"
+    );
+    let (_, texts) = bar.frame_with_text(Vec::new());
+    assert!(texts.iter().any(|t| t == "50%"), "{texts:?}");
+}

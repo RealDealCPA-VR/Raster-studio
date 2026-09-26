@@ -183,6 +183,29 @@ fn an_indexed_file_opens_through_its_palette_and_transparent_index() {
     assert_eq!(opaque.header.channels, 3);
 }
 
+/// An Indexed composite with a channel past the index: that channel is the
+/// transparency (the header counts it as alpha), not an opaque alpha plus a
+/// stray extra channel; with a transparent index as well, both apply.
+#[test]
+fn an_indexed_composites_second_channel_is_its_transparency() {
+    for (transparent, want_alpha) in [(None, [255u8, 0, 128]), (Some(2), [255, 0, 0])] {
+        let mut file = indexed_file(transparent);
+        file.header.channels = 2;
+        file.merged
+            .as_mut()
+            .unwrap()
+            .channels
+            .push(vec![255, 0, 128]);
+        let mut file = read(&write(&file).unwrap()).unwrap();
+        to_working_rgb(&mut file, &science()).unwrap();
+        assert_eq!(file.header.channels, 4, "{transparent:?}: RGB + alpha");
+        let rgba = file.merged.as_ref().unwrap().to_rgba8(3, 1).unwrap();
+        let alpha: Vec<u8> = rgba.chunks(4).map(|p| p[3]).collect();
+        assert_eq!(alpha, want_alpha, "{transparent:?}");
+        assert_eq!(&rgba[..3], &[200, 100, 50]);
+    }
+}
+
 #[test]
 fn a_palette_that_is_not_768_bytes_is_a_malformed_file() {
     let bytes = write(&indexed_file(None)).unwrap();

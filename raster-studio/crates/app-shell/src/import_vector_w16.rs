@@ -1,6 +1,11 @@
-//! W16-I: File > Open of an SVG, an EPS or a one-page PDF / PDF-compatible
-//! AI opens its **layers**, as Photopea does: groups as groups, vector
-//! shapes as shape layers, text as text layers and images as raster layers.
+//! W16-I: File > Open of an SVG, an EPS, a one-page PDF-compatible `.ai`
+//! or a one-page `.pdf` whose page reads as live layers opens its
+//! **layers**, as Photopea does: groups as groups, vector shapes as shape
+//! layers, text as text layers and images as raster layers. Any other
+//! `.pdf` (two or more pages, or a page with an image, a clip, a shading)
+//! goes through the W16-K import dialog (`editor_open_w13x7`, which asks
+//! `pdf::layers` first and leaves a live one-page `.pdf` to this route),
+//! which renders its pages.
 //!
 //! A child module of `editor_open_pages` (declared there with `#[path]`);
 //! [`Editor::open_w13d_document`] asks [`Editor::open_vector_document`]
@@ -17,20 +22,38 @@
 //! shape and text mapping, on the canvas the file names (the SVG's size, the
 //! EPS bounding box, the PDF page).
 //!
+//! # Gradient fills
+//!
+//! A shape the reader keeps with a live gradient ([`VectorLayers::gradients`]:
+//! a padded linear gradient, or a padded radial one that is circular with its
+//! focal point at its centre) opens with a **gradient fill** (Properties >
+//! Fill > Gradient, [`ShapeFillPaint::Gradient`]): the file's stops, and the
+//! ramp's direction, length and centre re-expressed against the shape's filled
+//! bounds the way the compositor fits a shape gradient ([`apply_gradients`]).
+//!
 //! # Flattening, reported
 //!
 //! An element that cannot be a live layer opens as a raster layer and the
 //! "<format> import report" says how many and why. When the layers cannot
-//! be read at all (a PDF page with an image, a clip, a shading; an EPS the
-//! interpreter cannot draw; a PDF of two or more pages, which the PDF
-//! import dialog opens as page artboards), the file opens as one picture,
-//! as before, and the status line says why its layers were not read.
+//! be read at all (an `.ai` page with an image, a clip, a shading; an EPS
+//! the interpreter cannot draw; an `.ai` of two or more pages, which the
+//! PDF import dialog opens as page artboards), the file opens as one
+//! picture, as before, and the status line says why its layers were not
+//! read. A `.pdf` whose page cannot be read as layers never gets here:
+//! the import dialog takes it.
 
 use std::io::Read;
 use std::path::Path;
 
+use layer_model::{
+    Gradient, GradientStop, GradientStyle, LayerId, LayerKind, ShapeFillPaint, ShapeFillRule,
+    ShapeGradientFill, ShapeLayer,
+};
 use raster::codec::formats::{pdf, postscript};
-use raster::codec::svg_import::{self, layers::VectorLayers};
+use raster::codec::svg_import::{
+    self,
+    layers::{GradientGeometry, ShapeGradient, VectorLayers},
+};
 use raster::{ImportFormat, ImportLimits};
 
 use super::super::super::{Action, ActionError, DocumentId, Editor, Effect, OpenDocument};
@@ -96,18 +119,131 @@ pub fn read_vector(
     }
 }
 
-/// `layers` as a document titled `title`, on the canvas the file names.
+/// `layers` as a document titled `title`, on the canvas the file names,
+/// with the reader's live gradient fills on their shapes.
 pub fn document_from_vector(
     layers: &VectorLayers,
     title: &str,
     history_depth: usize,
 ) -> Result<DesignImport, String> {
-    document_from_design_on(
+    let mut import = document_from_design_on(
         &layers.design,
         Some((layers.width, layers.height)),
         title,
         history_depth,
-    )
+    )?;
+    apply_gradients(&mut import, layers);
+    Ok(import)
+}
+
+/// `g` as the editor's shape gradient on `shape`, fitted as the compositor
+/// fits one: centred on the shape's filled bounds (in the layer's own
+/// pixels), `scale` times the longer half-side long, moved by `offset_px`.
+/// `None` when the shape fills nothing.
+pub fn shape_gradient_fill(shape: &ShapeLayer, g: &ShapeGradient) -> Option<ShapeGradientFill> {
+    let path = vector::parse_svg(&shape.path_svg).ok()?;
+    let rule = match shape.fill_rule {
+        ShapeFillRule::NonZero => vector::FillRule::NonZero,
+        ShapeFillRule::EvenOdd => vector::FillRule::EvenOdd,
+    };
+    let mask = vector::fill(&path, &vector::FillOptions::with_rule(rule)).ok()?;
+    let (w, h) = (f64::from(mask.width()), f64::from(mask.height()));
+    let side = w.max(h);
+    if side <= 0.0 {
+        return None;
+    }
+    let o = mask.origin();
+    let fit = (f64::from(o.x) + w * 0.5, f64::from(o.y) + h * 0.5);
+    let (style, angle, length, centre) = match g.geometry {
+        GradientGeometry::Linear { from, to } => {
+            let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+            // The compositor's ramp runs along (cos a, -sin a): image y
+            // grows downward.
+            (
+                GradientStyle::Linear,
+                (-dy).atan2(dx).to_degrees(),
+                dx.hypot(dy),
+                ((from.0 + to.0) * 0.5, (from.1 + to.1) * 0.5),
+            )
+        }
+        GradientGeometry::Radial { centre, radius } => {
+            (GradientStyle::Radial, 0.0, 2.0 * radius, centre)
+        }
+    };
+    let stop = |(position, color): &(f32, [f32; 4])| GradientStop {
+        position: *position,
+        color: *color,
+        midpoint: 0.5,
+    };
+    Some(ShapeGradientFill {
+        gradient: Gradient {
+            stops: g.stops.iter().map(stop).collect(),
+            ..Gradient::default()
+        },
+        style,
+        angle_deg: angle as f32,
+        scale: (length / side) as f32,
+        offset_px: [(centre.0 - fit.0) as f32, (centre.1 - fit.1) as f32],
+        ..ShapeGradientFill::default()
+    })
+}
+
+/// Every layer of `import` in [`DesignDocument::walk`] order: pre-order,
+/// bottom first (the tree lists children top first).
+///
+/// [`DesignDocument::walk`]: raster::codec::formats::vector_docs::design_files::DesignDocument::walk
+fn paint_order(import: &DesignImport) -> Vec<LayerId> {
+    fn visit(tree: &layer_model::LayerTree, ids: &[LayerId], out: &mut Vec<LayerId>) {
+        for id in ids.iter().rev() {
+            out.push(*id);
+            if let Some(LayerKind::Group(g)) = tree.get(*id).map(|l| &l.kind) {
+                visit(tree, &g.children, out);
+            }
+        }
+    }
+    let tree = &import.imported.document.layers;
+    let mut out = Vec::new();
+    visit(tree, tree.root(), &mut out);
+    out
+}
+
+/// Put the reader's live gradients on their shape layers (see the module
+/// docs). A gradient whose shape cannot be matched keeps the first stop's
+/// colour and is named in the import notes.
+pub fn apply_gradients(import: &mut DesignImport, layers: &VectorLayers) {
+    if layers.gradients.is_empty() {
+        return;
+    }
+    let order = paint_order(import);
+    let walk = layers.design.walk();
+    let mut missed = 0usize;
+    for (index, gradient) in &layers.gradients {
+        let (Some(id), Some(node)) = (order.get(*index), walk.get(*index)) else {
+            missed += 1;
+            continue;
+        };
+        let tree = &mut import.imported.document.layers;
+        let Some(layer) = tree.get_mut(*id).filter(|l| l.name == node.name) else {
+            missed += 1;
+            continue;
+        };
+        let LayerKind::Shape(shape) = &mut layer.kind else {
+            missed += 1;
+            continue;
+        };
+        match shape_gradient_fill(shape, gradient) {
+            Some(fill) => shape.fill_paint = ShapeFillPaint::Gradient(fill),
+            None => missed += 1,
+        }
+    }
+    if missed > 0 {
+        import.notes.push(format!(
+            "{missed} gradient fill{} opened as {} first colour",
+            if missed == 1 { "" } else { "s" },
+            if missed == 1 { "its" } else { "their" }
+        ));
+    }
+    import.imported.document.mark_saved();
 }
 
 /// What [`Editor::open_vector_document`] did.
@@ -146,7 +282,7 @@ fn as_open_document(id: DocumentId, path: &Path, import: DesignImport) -> OpenDo
 }
 
 impl Editor {
-    /// W16-I: File > Revert of an SVG, EPS or one-page PDF rebuilds its
+    /// W16-I: File > Revert of an SVG, EPS or one-page `.ai` / `.pdf` rebuilds its
     /// layers; `None` for any other file, or one whose layers cannot be
     /// read (it reverts to a picture, as it opened).
     pub(crate) fn open_vector_layered(
@@ -160,8 +296,9 @@ impl Editor {
             .map(|import| as_open_document(id, path, import))
     }
 
-    /// W16-I: open `path` as layers when it is an SVG, EPS or one-page PDF
-    /// (see the module docs).
+    /// W16-I: open `path` as layers when it is an SVG, EPS or one-page
+    /// `.ai` / `.pdf` (see the module docs; a `.pdf` the import dialog
+    /// takes never reaches this).
     pub(crate) fn open_vector_document(&mut self, path: &Path) -> VectorOpen {
         let Some(format) = vector_format(path) else {
             return VectorOpen::NotOurs;
@@ -313,6 +450,89 @@ mod tests {
         assert!(status.contains("its layers"), "{status}");
     }
 
+    /// Pixel `(x, y)` of the active document's composite, as RGBA8.
+    fn pixel(editor: &mut Editor, x: u32, y: u32) -> [u8; 4] {
+        let doc = editor.active_mut().unwrap();
+        let (w, h) = (doc.document.width(), doc.document.height());
+        let rgba = doc.composite(raster::PixelRect::new(0, 0, w, h)).unwrap();
+        let at = (y * w + x) as usize * 4;
+        [rgba[at], rgba[at + 1], rgba[at + 2], rgba[at + 3]]
+    }
+
+    #[test]
+    fn file_open_of_an_svg_with_gradient_fills_opens_live_gradient_shapes() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs>
+    <linearGradient id="h" x2="0.5"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient>
+    <linearGradient id="v" x2="0" y2="1"><stop offset="0" stop-color="#000000"/><stop offset="1" stop-color="#ffffff"/></linearGradient>
+    <radialGradient id="r"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#000000"/></radialGradient>
+  </defs>
+  <rect id="across" x="0" y="0" width="100" height="40" fill="url(#h)"/>
+  <rect id="down" x="0" y="50" width="40" height="50" fill="url(#v)"/>
+  <circle id="glow" cx="150" cy="50" r="40" fill="url(#r)"/>
+</svg>"##;
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "ramps.svg", svg.as_bytes());
+        let mut editor = editor(dir.path(), ScriptedDialogs::new().opening(&path));
+        editor.dispatch(Action::Open).unwrap();
+        editor.poll_imports();
+        assert_eq!(
+            layer_kinds(&editor),
+            vec!["glow:shape", "down:shape", "across:shape"]
+        );
+        // Each shape carries a live gradient fill (Properties > Fill >
+        // Gradient), not a flat colour and not pixels.
+        let doc = editor.active().unwrap();
+        let styles: Vec<_> = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter_map(|id| match &doc.document.layers.get(id)?.kind {
+                LayerKind::Shape(s) => match &s.fill_paint {
+                    layer_model::ShapeFillPaint::Gradient(g) => Some(g.style),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            styles,
+            vec![
+                layer_model::GradientStyle::Radial,
+                layer_model::GradientStyle::Linear,
+                layer_model::GradientStyle::Linear
+            ]
+        );
+        // And they draw where the file draws them: red on the left of the
+        // horizontal ramp, blue on its right; black at the top of the
+        // vertical one, white at its bottom; white at the radial centre,
+        // dark near its rim.
+        // The horizontal ramp covers the rect's left half (x2 = 50%): past
+        // it the end colour pads. (The ramp blends in linear light, so a
+        // channel leaving an end rises quickly: near an end the far channel
+        // is well under half, not zero.)
+        let left = pixel(&mut editor, 0, 20);
+        let right = pixel(&mut editor, 70, 20);
+        assert!(left[0] > 240 && left[2] < 60, "{left:?}");
+        assert!(right[2] > 250 && right[0] < 5, "{right:?}");
+        // At x = 25 the two ends meet: the ramp's length (half the shape,
+        // scale 50%) and its centre (moved off the shape's centre) carried
+        // over.
+        let mid = pixel(&mut editor, 25, 20);
+        assert!(
+            (175..=200).contains(&mid[0]) && (175..=200).contains(&mid[2]),
+            "{mid:?}"
+        );
+        let top = pixel(&mut editor, 20, 50);
+        let bottom = pixel(&mut editor, 20, 99);
+        assert!(top[0] < 60 && bottom[0] > 240, "{top:?} {bottom:?}");
+        let centre = pixel(&mut editor, 150, 50);
+        let rim = pixel(&mut editor, 150, 89);
+        assert!(centre[0] > 240 && rim[0] < 80, "{centre:?} {rim:?}");
+        assert_eq!(centre[3], 255);
+    }
+
     #[test]
     fn file_open_of_an_eps_with_two_fills_opens_two_shape_layers() {
         let eps = "%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 100 50\n%%EndComments\n1 0 0 setrgbcolor 10 10 30 20 rectfill\n0 0 1 setrgbcolor newpath 60 10 moveto 90 10 lineto 75 40 lineto closepath fill\n%%EOF\n";
@@ -327,7 +547,8 @@ mod tests {
         assert_eq!((doc.document.width(), doc.document.height()), (100, 50));
     }
 
-    /// A one-page PDF whose resources name Helvetica as `/F1`.
+    /// A one-page PDF (the body of a PDF-compatible `.ai`) whose resources
+    /// name Helvetica as `/F1`.
     fn one_page_pdf(w: u32, h: u32, content: &str) -> Vec<u8> {
         let objects = [
             "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
@@ -391,14 +612,12 @@ startxref
         pdf
     }
 
+    /// A red rectangle and the word "Hi" in Helvetica.
+    const PATHS_AND_TEXT: &str = "1 0 0 rg 10 10 30 20 re f BT /F1 12 Tf 20 60 Td (Hi) Tj ET";
+
     #[test]
-    fn file_open_of_a_one_page_pdf_opens_its_paths_and_text_as_layers() {
-        let pdf = one_page_pdf(
-            100,
-            80,
-            "1 0 0 rg 10 10 30 20 re f
-BT /F1 12 Tf 20 60 Td (Hi) Tj ET",
-        );
+    fn file_open_of_a_one_page_ai_opens_its_paths_and_text_as_layers() {
+        let pdf = one_page_pdf(100, 80, PATHS_AND_TEXT);
         let dir = tempfile::tempdir().unwrap();
         let path = write(dir.path(), "page.ai", &pdf);
         let mut editor = editor(dir.path(), ScriptedDialogs::new().opening(&path));
@@ -411,8 +630,53 @@ BT /F1 12 Tf 20 60 Td (Hi) Tj ET",
         assert_eq!(layer_kinds(&editor), vec!["Hi:text", "Shape:shape"]);
     }
 
+    /// The same page named `.pdf` opens as the same layers (W16-K's dialog
+    /// route leaves a one-page `.pdf` whose page reads as live layers to
+    /// this one), and File > Revert reads them back. Opened through
+    /// `open_paths`, the drop / command-line route, which runs on this
+    /// thread.
     #[test]
-    fn a_pdf_page_with_an_image_opens_as_a_picture_and_says_why() {
+    fn file_open_of_a_one_page_pdf_of_paths_and_text_opens_as_layers() {
+        let pdf = one_page_pdf(100, 80, PATHS_AND_TEXT);
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "page.pdf", &pdf);
+        while crate::editor::open_any::w13x7::take_pending().is_some() {}
+        let mut editor = editor(dir.path(), ScriptedDialogs::new());
+        editor.open_paths(std::slice::from_ref(&path));
+        assert!(
+            crate::editor::open_any::w13x7::take_pending().is_none(),
+            "no import dialog"
+        );
+        assert_eq!(layer_kinds(&editor), vec!["Hi:text", "Shape:shape"]);
+        let reverted = editor.revert_active();
+        assert!(reverted.is_ok(), "{reverted:?}");
+        assert_eq!(layer_kinds(&editor), vec!["Hi:text", "Shape:shape"]);
+    }
+
+    /// A one-page `.pdf` whose page cannot be kept live (an image on it) is
+    /// not read as layers: it asks the W16-K import dialog, which renders
+    /// the page, and nothing opens until the dialog is answered.
+    #[test]
+    fn file_open_of_a_one_page_pdf_asks_the_import_dialog_not_the_layer_reader() {
+        let pdf = one_page_pdf(40, 30, "q 40 0 0 30 0 0 cm /Im1 Do Q 1 0 0 rg 0 0 5 5 re f");
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "image.pdf", &pdf);
+        while crate::editor::open_any::w13x7::take_pending().is_some() {}
+        let mut editor = editor(dir.path(), ScriptedDialogs::new());
+        let opened = editor.open_paths(std::slice::from_ref(&path));
+        assert!(opened.is_empty(), "nothing opens before the dialog answers");
+        assert!(
+            editor.active().is_none(),
+            "no layers open before the dialog"
+        );
+        assert!(
+            crate::editor::open_any::w13x7::take_pending().is_some(),
+            "the .pdf asks the import dialog"
+        );
+    }
+
+    #[test]
+    fn a_one_page_ai_with_an_image_opens_as_a_picture_and_says_why() {
         let dir = tempfile::tempdir().unwrap();
         let path = write(
             dir.path(),

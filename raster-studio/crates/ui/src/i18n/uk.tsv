@@ -41,7 +41,7 @@ Add Media	Додати медіафайл
 Add Noise…	Додати шум…
 Add a layer mask	Додати шар-маску
 Add a smart filter mask	Додати маску смарт-фільтра
-Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read	Додати відеофайл (MP4: H.264 або AV1) як відеошар у позиції відтворення; звук не читається
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Помістити файл зображення або відео (Файл > Помістити вбудований); відео стає відеошаром у позиції вказівника відтворення
 Add an adjustment layer	Додати коригувальний шар
 Add another instance of this effect	Додати ще один екземпляр цього ефекту
 Add current colour	Додати поточний колір
@@ -51,6 +51,7 @@ Add or remove room around the image. Pixels are not resampled.	Додає або
 Add shortcut	Додати сполучення клавіш
 Add to Selection	Додати до виділення
 Adds one guide at a document coordinate, in pixels.	Додає одну напрямну в координаті документа, у пікселях.
+Adjustment	Корекція
 Adjustments	Корекція
 Advanced	Додатково
 Again	Повторити
@@ -539,6 +540,7 @@ File name	Ім'я файлу
 Files that fail are listed in batch-errors.txt in the destination.	Файли з помилками перелічено в batch-errors.txt у теці призначення.
 Fill	Заливка
 Fill Filter Mask	Залити маску фільтра
+Fill Layer	Шар-заливка
 Fill Mask	Залити маску
 Fill Screen	Заповнити екран
 Fill in File Info, or open a file that has EXIF, to embed metadata	Заповніть відомості про файл або відкрийте файл з EXIF, щоб вбудувати метадані
@@ -553,6 +555,7 @@ Find Edges	Виділення країв
 First line	Перший рядок
 Fish	Риба
 Fisheye	Риб'яче око
+Fit The Area	Вписати в область
 Fit on Screen	Показати на весь екран
 Fit the whole image in the window	Вписати все зображення у вікно
 Fixed height	Фіксована висота
@@ -712,6 +715,7 @@ Layer	Шар
 Layer Comps	Композиції шарів
 Layer Edges	Краї шару
 Layer Mask	Шар-маска
+Layer Properties	Властивості шару
 Layer Style	Стиль шару
 Layer knocks out drop shadow	Шар вибиває тінь
 Layer via Copy	Скопіювати на новий шар
@@ -768,6 +772,7 @@ Lock all	Закріпити все
 Lock pixels	Закріпити пікселі
 Lock position	Закріпити положення
 Lock transparent pixels	Закріпити прозорі пікселі
+Long-tap as a right click	Довге натискання як правий клік
 Lookup table	Таблиця пошуку
 Luminance	Яскравість
 Luminance of the preview source; the markers are the black and white points.	Яскравість джерела попереднього перегляду; маркери — точки чорного й білого.
@@ -787,6 +792,7 @@ Maps the active layer onto a palette as one undo step; the document stays RGB.	�
 Margins	Поля
 Mark this state so you can come back to it	Позначити цей стан, щоб до нього повернутися
 Mask	Маска
+Mask Properties	Властивості маски
 Mask source	Джерело маски
 Match Color	Підібрати колір
 Match Color…	Підібрати колір…
@@ -847,6 +853,7 @@ New Adjustment Layer	Новий коригувальний шар
 New Channel	Новий канал
 New Document	Новий документ
 New Fill Layer	Новий шар-заливка
+New Folder	Нова тека
 New Guide	Нова напрямна
 New Guide Layout	Новий макет напрямних
 New Guide Layout…	Новий макет напрямних…
@@ -860,7 +867,9 @@ New Snapshot	Новий знімок
 New Spot Channel	Новий канал плашкового кольору
 New Spot Channel…	Новий канал плашкового кольору…
 New Style Preset	Новий набір стилів
+New Video Group	Нова група відео
 New channel	Новий канал
+New folder	Нова тека
 New group	Нова група
 New layer	Новий шар
 New layer comp	Нова композиція шарів
@@ -961,6 +970,7 @@ Open a document to see its properties	Відкрийте документ, що�
 Open another document, or add another pixel layer, to match its colours.	Відкрийте інший документ або додайте ще один піксельний шар, щоб підібрати його кольори.
 Open as	Відкрити як
 Open editor…	Відкрити редактор…
+Open or close the folder	Відкрити або закрити теку
 Open the Adjustments panel	Відкрити панель «Корекція»
 Open…	Відкрити…
 Operation	Операція
@@ -1029,6 +1039,7 @@ Pinch…	Щипок…
 Pixel Grid	Піксельна сітка
 Pixel dimensions	Розміри в пікселях
 Pixel mask	Піксельна маска
+Pixel to Pixel	Піксель до пікселя
 Pixelate	Оформлення
 Pixels	Пікселі
 Place Embedded…	Розмістити вбудовані…
@@ -1239,6 +1250,7 @@ Select a layer to see its properties	Виберіть шар, щоб побач�
 Select a layer: a click on a style applies it to the active layer.	Виберіть шар: клацання стилю застосовує його до активного шару.
 Select a path first	Спершу виберіть контур
 Select a text layer, or type into one: a click inserts the glyph at the caret.	Виберіть текстовий шар або друкуйте в ньому: клацання вставляє гліф у позицію курсора.
+Select a text layer to edit its type	Виберіть текстовий шар, щоб змінити його текст
 Select every pixel near one colour	Виділити всі пікселі, близькі до одного кольору
 Selection	Виділення
 Selection Edges	Краї виділення
@@ -1262,6 +1274,7 @@ Shadows/Highlights…	Тіні/Світлі тони…
 Shape	Фігура
 Shape Dynamics	Динаміка форми
 Shape Mosaic…	Мозаїка з фігур…
+Shape Properties	Властивості фігури
 Sharpen	Різкість
 Sharpen Edges	Різкість на краях
 Sharpen More	Посилена різкість
@@ -1364,6 +1377,7 @@ TGA…	TGA…
 TIF…	TIF…
 Templates	Шаблони
 Text	Текст
+Text Properties	Властивості тексту
 Text overflows the box	Текст не вміщується в рамку
 Text replacement	Заміна тексту
 Texture Dilation…	Розширення текстури…
@@ -1373,7 +1387,6 @@ The CSV ends inside a quoted field	CSV закінчується всередин
 The CSV has a header but no data sets	У CSV є заголовок, але немає наборів даних
 The CSV is empty	CSV порожній
 The CSV names a variable that is not defined:	У CSV згадано невизначену змінну:
-The active layer has no layer style to save	Активний шар не має стилю шару для збереження
 The active layer is not in the document	Активного шару немає в документі
 The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	Активний смарт-об'єкт по черзі показує кожне зображення з вихідної теки; кожен результат експортується в PNG у теку призначення.
 The amount must be within	Значення має бути в межах
@@ -1477,6 +1490,7 @@ Transform Layer	Трансформувати шар
 Transform Selection	Трансформувати виділення
 Transparency	Прозорість
 Transparent Pixels	Прозорі пікселі
+Trim	Тримінг
 Trim Away	Обрізати
 Trim…	Тримінг…
 Tritone	Тріотон

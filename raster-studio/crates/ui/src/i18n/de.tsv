@@ -41,7 +41,7 @@ Add Media	Medien hinzufügen
 Add Noise…	Rauschen hinzufügen…
 Add a layer mask	Ebenenmaske hinzufügen
 Add a smart filter mask	Smartfilter-Maske hinzufügen
-Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read	Eine Videodatei (MP4: H.264 oder AV1) als Videoebene an der Abspielposition hinzufügen; Audio wird nicht gelesen
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Eine Bild- oder Videodatei platzieren (Datei > Eingebettet platzieren); ein Video wird zu einer Videoebene an der Abspielposition
 Add an adjustment layer	Einstellungsebene hinzufügen
 Add another instance of this effect	Eine weitere Instanz dieses Effekts hinzufügen
 Add current colour	Aktuelle Farbe hinzufügen
@@ -51,6 +51,7 @@ Add or remove room around the image. Pixels are not resampled.	Raum um das Bild 
 Add shortcut	Tastaturbefehl hinzufügen
 Add to Selection	Der Auswahl hinzufügen
 Adds one guide at a document coordinate, in pixels.	Fügt eine Hilfslinie an einer Dokumentkoordinate in Pixeln hinzu.
+Adjustment	Korrektur
 Adjustments	Korrekturen
 Advanced	Erweitert
 Again	Erneut
@@ -539,6 +540,7 @@ File name	Dateiname
 Files that fail are listed in batch-errors.txt in the destination.	Fehlgeschlagene Dateien werden im Ziel in batch-errors.txt aufgeführt.
 Fill	Füllung
 Fill Filter Mask	Filtermaske füllen
+Fill Layer	Füllebene
 Fill Mask	Maske füllen
 Fill Screen	Bildschirm füllen
 Fill in File Info, or open a file that has EXIF, to embed metadata	Füllen Sie die Dateiinformationen aus oder öffnen Sie eine Datei mit EXIF, um Metadaten einzubetten
@@ -553,6 +555,7 @@ Find Edges	Konturen finden
 First line	Erste Zeile
 Fish	Fisch
 Fisheye	Fischauge
+Fit The Area	Bereich einpassen
 Fit on Screen	Ganzes Bild
 Fit the whole image in the window	Das ganze Bild in das Fenster einpassen
 Fixed height	Feste Höhe
@@ -712,6 +715,7 @@ Layer	Ebene
 Layer Comps	Ebenenkompositionen
 Layer Edges	Ebenenkanten
 Layer Mask	Ebenenmaske
+Layer Properties	Ebeneneigenschaften
 Layer Style	Ebenenstil
 Layer knocks out drop shadow	Ebene spart Schlagschatten aus
 Layer via Copy	Ebene durch Kopie
@@ -768,6 +772,7 @@ Lock all	Alles fixieren
 Lock pixels	Pixel fixieren
 Lock position	Position fixieren
 Lock transparent pixels	Transparente Pixel fixieren
+Long-tap as a right click	Langes Tippen als Rechtsklick
 Lookup table	Lookup-Tabelle
 Luminance	Luminanz
 Luminance of the preview source; the markers are the black and white points.	Luminanz der Vorschauquelle; die Marker sind Schwarz- und Weißpunkt.
@@ -787,6 +792,7 @@ Maps the active layer onto a palette as one undo step; the document stays RGB.	B
 Margins	Ränder
 Mark this state so you can come back to it	Diesen Zustand markieren, um später zu ihm zurückzukehren
 Mask	Maske
+Mask Properties	Maskeneigenschaften
 Mask source	Maskenquelle
 Match Color	Gleiche Farbe
 Match Color…	Gleiche Farbe…
@@ -847,6 +853,7 @@ New Adjustment Layer	Neue Einstellungsebene
 New Channel	Neuer Kanal
 New Document	Neues Dokument
 New Fill Layer	Neue Füllebene
+New Folder	Neuer Ordner
 New Guide	Neue Hilfslinie
 New Guide Layout	Neues Hilfslinienlayout
 New Guide Layout…	Neues Hilfslinienlayout…
@@ -860,7 +867,9 @@ New Snapshot	Neuer Schnappschuss
 New Spot Channel	Neuer Volltonfarbkanal
 New Spot Channel…	Neuer Volltonfarbkanal…
 New Style Preset	Neue Stilvorgabe
+New Video Group	Neue Videogruppe
 New channel	Neuer Kanal
+New folder	Neuer Ordner
 New group	Neue Gruppe
 New layer	Neue Ebene
 New layer comp	Neue Ebenenkomposition
@@ -961,6 +970,7 @@ Open a document to see its properties	Öffnen Sie ein Dokument, um seine Eigensc
 Open another document, or add another pixel layer, to match its colours.	Öffnen Sie ein weiteres Dokument oder fügen Sie eine weitere Pixelebene hinzu, um deren Farben anzugleichen.
 Open as	Öffnen als
 Open editor…	Editor öffnen…
+Open or close the folder	Ordner öffnen oder schließen
 Open the Adjustments panel	Korrekturen-Bedienfeld öffnen
 Open…	Öffnen…
 Operation	Vorgang
@@ -1029,6 +1039,7 @@ Pinch…	Zusammenziehen…
 Pixel Grid	Pixelraster
 Pixel dimensions	Pixelmaße
 Pixel mask	Pixelmaske
+Pixel to Pixel	Pixel zu Pixel
 Pixelate	Vergröberungsfilter
 Pixels	Pixel
 Place Embedded…	Eingebettet platzieren…
@@ -1239,6 +1250,7 @@ Select a layer to see its properties	Wählen Sie eine Ebene aus, um ihre Eigensc
 Select a layer: a click on a style applies it to the active layer.	Wählen Sie eine Ebene aus: Ein Klick auf einen Stil wendet ihn auf die aktive Ebene an.
 Select a path first	Wählen Sie zuerst einen Pfad aus
 Select a text layer, or type into one: a click inserts the glyph at the caret.	Wählen Sie eine Textebene aus oder tippen Sie in eine: Ein Klick fügt die Glyphe an der Einfügemarke ein.
+Select a text layer to edit its type	Wählen Sie eine Textebene aus, um ihren Text zu bearbeiten
 Select every pixel near one colour	Jedes Pixel nahe einer Farbe auswählen
 Selection	Auswahl
 Selection Edges	Auswahlkanten
@@ -1262,6 +1274,7 @@ Shadows/Highlights…	Tiefen/Lichter…
 Shape	Form
 Shape Dynamics	Formeigenschaften
 Shape Mosaic…	Formmosaik…
+Shape Properties	Formeigenschaften
 Sharpen	Scharfzeichnen
 Sharpen Edges	Konturen scharfzeichnen
 Sharpen More	Stärker scharfzeichnen
@@ -1364,6 +1377,7 @@ TGA…	TGA…
 TIF…	TIF…
 Templates	Vorlagen
 Text	Text
+Text Properties	Texteigenschaften
 Text overflows the box	Der Text läuft über den Rahmen hinaus
 Text replacement	Textersetzung
 Texture Dilation…	Texturdehnung…
@@ -1373,7 +1387,6 @@ The CSV ends inside a quoted field	Die CSV endet innerhalb eines Feldes in Anfü
 The CSV has a header but no data sets	Die CSV hat eine Kopfzeile, aber keine Datensätze
 The CSV is empty	Die CSV ist leer
 The CSV names a variable that is not defined:	Die CSV nennt eine Variable, die nicht definiert ist:
-The active layer has no layer style to save	Die aktive Ebene hat keinen Ebenenstil zum Speichern
 The active layer is not in the document	Die aktive Ebene ist nicht im Dokument
 The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	Das aktive Smartobjekt zeigt nacheinander jedes Bild des Quellordners; jedes Ergebnis wird als PNG in den Zielordner exportiert.
 The amount must be within	Der Betrag muss liegen innerhalb von
@@ -1477,6 +1490,7 @@ Transform Layer	Ebene transformieren
 Transform Selection	Auswahl transformieren
 Transparency	Transparenz
 Transparent Pixels	Transparente Pixel
+Trim	Zuschneiden
 Trim Away	Wegschneiden
 Trim…	Zuschneiden…
 Tritone	Triplex

@@ -254,6 +254,179 @@ mod tests {
         assert_eq!(undone.path_svg, drawn.path_svg);
     }
 
+    /// Round 3: a rectangle drawn on the canvas and then dragged by the Move
+    /// tool (a layer translation, not a path edit, so it stays live) shows
+    /// its CANVAS X and Y in Properties' Live Shape section in a real chrome
+    /// frame, and an X typed there (`set_frame`) or dragged there lands the
+    /// shape at that canvas X, not that X plus the move.
+    #[test]
+    fn a_moved_live_shape_shows_and_edits_its_canvas_x_and_y_in_properties() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(dir.path());
+        ed.set_tool(ToolId::Rectangle);
+        let mut pointer = ToolPointer::new();
+        assert_eq!(
+            drag(&mut pointer, &mut ed, (8.0, 8.0), (40.0, 40.0), &[]),
+            1
+        );
+        let _ = active_shape(&mut ed);
+        ed.set_tool(ToolId::Move);
+        let mut pointer = ToolPointer::new();
+        assert_eq!(
+            drag(&mut pointer, &mut ed, (20.0, 20.0), (44.0, 12.0), &[]),
+            1
+        );
+        let (id, moved) = active_shape(&mut ed);
+        let live = tools::shape::live_shape_of(&moved).expect("a moved rectangle stays live");
+        assert_eq!(
+            live.frame(),
+            [8.0, 8.0, 32.0, 32.0],
+            "the record is untouched"
+        );
+        let t = ed
+            .active_mut()
+            .unwrap()
+            .document
+            .layers
+            .get(id)
+            .unwrap()
+            .transform;
+        assert_eq!(
+            t.translation,
+            Vec2::new(24.0, -8.0),
+            "the Move tool translated it"
+        );
+        let doc = &ed.active_mut().unwrap().document;
+        assert_eq!(
+            ui::panels::properties::LiveShapeProperties::canvas_frame(doc, id),
+            Some([32.0, 0.0, 32.0, 32.0])
+        );
+
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        let mut chrome = Chrome::new();
+        chrome
+            .workspace_for_test()
+            .dock
+            .set_open(ui::PanelId::Properties, true);
+        chrome
+            .workspace_for_test()
+            .dock
+            .raise(ui::PanelId::Properties);
+        let mut time = 0.0;
+        let mut frame = |chrome: &mut Chrome, ed: &mut Editor, events: Vec<egui::Event>| {
+            time += 0.5;
+            let mut out = ChromeOutput::default();
+            let full = ctx.run(raw_input(events, time), |c| out = chrome.ui(c, ed));
+            for edit in out.layer_kind {
+                ed.apply_kind_edit(edit);
+            }
+            full
+        };
+        // The number drawn inside a Live Shape frame field (0 W, 1 H, 2 X, 3 Y).
+        fn field_text(ctx: &egui::Context, out: &egui::FullOutput, id: egui::Id) -> f64 {
+            fn texts(shape: &egui::Shape, rect: egui::Rect, out: &mut Vec<String>) {
+                match shape {
+                    egui::Shape::Text(t) if rect.contains(t.pos) => {
+                        out.push(t.galley.text().to_string())
+                    }
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| texts(s, rect, out)),
+                    _ => {}
+                }
+            }
+            let rect = ctx.read_response(id).expect("the field is drawn").rect;
+            let mut found = Vec::new();
+            for clipped in &out.shapes {
+                texts(&clipped.shape, rect.expand(1.0), &mut found);
+            }
+            found
+                .iter()
+                .find_map(|t| t.trim().parse::<f64>().ok())
+                .unwrap_or_else(|| panic!("no number in the field: {found:?}"))
+        }
+        let live_frame = ui::panels::properties::live_ids::live_frame;
+        let mut out = frame(&mut chrome, &mut ed, Vec::new());
+        for _ in 0..3 {
+            out = frame(&mut chrome, &mut ed, Vec::new());
+        }
+        assert_eq!(
+            field_text(&ctx, &out, live_frame(id, 2)),
+            32.0,
+            "X is the canvas X"
+        );
+        assert_eq!(
+            field_text(&ctx, &out, live_frame(id, 3)),
+            0.0,
+            "Y is the canvas Y"
+        );
+        assert_eq!(field_text(&ctx, &out, live_frame(id, 0)), 32.0, "W");
+
+        // Drag the X field: the value it then shows is where the shape is.
+        let button = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        let at = ctx.read_response(live_frame(id, 2)).unwrap().rect.center();
+        frame(
+            &mut chrome,
+            &mut ed,
+            vec![egui::Event::PointerMoved(at), button(at, true)],
+        );
+        for dx in [4.0, 8.0] {
+            frame(
+                &mut chrome,
+                &mut ed,
+                vec![egui::Event::PointerMoved(at + egui::vec2(dx, 0.0))],
+            );
+        }
+        frame(
+            &mut chrome,
+            &mut ed,
+            vec![button(at + egui::vec2(8.0, 0.0), false)],
+        );
+        let mut out = frame(&mut chrome, &mut ed, Vec::new());
+        for _ in 0..2 {
+            out = frame(&mut chrome, &mut ed, Vec::new());
+        }
+        let shown = field_text(&ctx, &out, live_frame(id, 2));
+        assert!(shown > 32.0, "the drag moved X: {shown}");
+        let (_, dragged) = active_shape(&mut ed);
+        let t = ed
+            .active_mut()
+            .unwrap()
+            .document
+            .layers
+            .get(id)
+            .unwrap()
+            .transform;
+        let canvas_x =
+            tools::shape::live_shape_of(&dragged).unwrap().frame()[0] + f64::from(t.translation.x);
+        assert_eq!(canvas_x, shown, "the shown X is the canvas X");
+
+        // X = 50 set through Properties puts the left edge at canvas 50.
+        let doc = &ed.active_mut().unwrap().document;
+        let Some(ui::Intent::EditLayerKind { layer, kind }) =
+            ui::panels::properties::LiveShapeProperties::set_frame(doc, id, 2, 50.0)
+        else {
+            panic!("an X edit");
+        };
+        ed.apply_kind_edit(crate::chrome::KindEdit {
+            layer,
+            kind,
+            gesture: None,
+        });
+        let rgba = ed
+            .active_mut()
+            .unwrap()
+            .composite(raster::PixelRect::new(0, 0, SIDE, SIDE))
+            .unwrap();
+        let red = |x: u32, y: u32| rgba[((y * SIDE + x) * 4) as usize];
+        assert_eq!(red(49, 10), 255, "left of canvas X 50 is background");
+        assert_eq!(red(51, 10), 0, "right of canvas X 50 is the fill");
+    }
+
     /// The Parametric Shape tool (the Polygon slot) draws each of Photopea's
     /// shapes through the canvas pointer, its `pshape` option picking which.
     #[test]
@@ -270,6 +443,57 @@ mod tests {
             let path = vector::parse_svg(&shape.path_svg).unwrap();
             let b = path.bounds();
             assert!(b.width() > 20.0 && b.height() > 20.0, "{name}: {b:?}");
+        }
+    }
+
+    /// Photopea's Parametric Spiral (`X.hn.LC` -> `aoF`) through the canvas
+    /// pointer: centred on the press, its radius the drag's length and its
+    /// outer arm ending on the release, so a flat horizontal drag (a box no
+    /// box-fitted spiral can fill) still draws it, and a drag upward turns it.
+    #[test]
+    fn the_parametric_spiral_is_centred_on_the_press_through_the_canvas() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(dir.path());
+        ed.set_tool(ToolId::Polygon);
+        let settings = vec![("pshape".to_string(), ToolSetting::Choice(4))];
+        let anchors = |shape: &ShapeLayer| -> Vec<vector::Point> {
+            let path = vector::parse_svg(&shape.path_svg).unwrap();
+            path.elements()
+                .iter()
+                .filter_map(|e| e.end_point())
+                .collect()
+        };
+        let near = |p: &vector::Point, x: f64, y: f64| p.distance(vector::point(x, y)) < 0.01;
+        for tip in [(56.0f32, 32.0f32), (32.0, 4.0)] {
+            let mut pointer = ToolPointer::new();
+            let steps = drag(&mut pointer, &mut ed, (32.0, 32.0), tip, &settings);
+            assert_eq!(steps, 1, "one step");
+            let (_, shape) = active_shape(&mut ed);
+            let pts = anchors(&shape);
+            assert!(pts.iter().any(|p| near(p, 32.0, 32.0)), "centre: {pts:?}");
+            assert!(
+                pts.iter()
+                    .any(|p| near(p, f64::from(tip.0), f64::from(tip.1))),
+                "release: {pts:?}"
+            );
+            // Photopea's first node (1, -1) of the 6-unit spiral, turned
+            // (not mirrored) onto the drag: which way the arms wind.
+            let (dx, dy) = (f64::from(tip.0) - 32.0, f64::from(tip.1) - 32.0);
+            let (c, s) = (dx / 6.0, dy / 6.0);
+            assert!(
+                pts.iter().any(|p| near(p, 32.0 + c + s, 32.0 + s - c)),
+                "winding: {pts:?}"
+            );
+            let b = vector::parse_svg(&shape.path_svg).unwrap().bounds();
+            let r = f64::from((tip.0 - 32.0f32).hypot(tip.1 - 32.0));
+            assert!(
+                b.width() > r && b.height() > r,
+                "it winds round the press: {b:?}"
+            );
+            assert!(
+                b.max.x <= 32.0 + r + 1e-6 && b.min.y >= 32.0 - r - 1e-6,
+                "{b:?}"
+            );
         }
     }
 
@@ -328,6 +552,65 @@ mod tests {
             pointer.live_geometry(),
             Some((_, tools::SessionGeometry::Measure { .. }))
         ));
+    }
+
+    /// A line drawn on the canvas with an end arrowhead stays live (its heads
+    /// in the record, as Photopea keeps them): Properties' Weight rewrites the
+    /// shaft AND the head as one step, and a `.psd` brings the heads back
+    /// live (`keyOriginLineArr*`).
+    #[test]
+    fn an_arrowed_line_stays_live_through_properties_and_a_psd() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut ed = editor(dir.path());
+        ed.set_tool(ToolId::Line);
+        let mut pointer = ToolPointer::new();
+        let settings = vec![
+            ("width".to_string(), ToolSetting::Float(2.0)),
+            ("arrow_end".to_string(), ToolSetting::Bool(true)),
+        ];
+        assert_eq!(
+            drag(&mut pointer, &mut ed, (4.0, 32.0), (60.0, 32.0), &settings),
+            1
+        );
+        let (id, drawn) = active_shape(&mut ed);
+        let Some(LiveShape::Line {
+            arrows: Some(heads),
+            ..
+        }) = tools::shape::live_shape_of(&drawn).cloned()
+        else {
+            panic!("the arrowed line is live: {drawn:?}");
+        };
+        assert!(heads.end && !heads.start);
+        let height = |s: &ShapeLayer| vector::parse_svg(&s.path_svg).unwrap().bounds().height();
+        let before = height(&drawn);
+        let doc = &ed.active().unwrap().document;
+        let Some(ui::Intent::EditLayerKind { layer, kind }) =
+            ui::panels::properties::LiveShapeProperties::set_param(doc, id, "weight", 4.0)
+        else {
+            panic!("a weight edit");
+        };
+        ed.apply_kind_edit(crate::chrome::KindEdit {
+            layer,
+            kind,
+            gesture: None,
+        });
+        let (_, thicker) = active_shape(&mut ed);
+        // The head is 500% of the weight wide: 10 px at 2 px, 20 px at 4.
+        assert!(
+            (height(&thicker) - 2.0 * before).abs() < 0.5,
+            "the head grew with the weight: {before} -> {}",
+            height(&thicker)
+        );
+        let want = tools::shape::live_shape_of(&thicker).cloned().unwrap();
+        let psd_path = dir.path().join("arrow.psd");
+        ed.active_mut().unwrap().export_to(&psd_path).unwrap();
+        ed.open_path(&psd_path).unwrap();
+        let (_, back) = active_shape(&mut ed);
+        assert_eq!(
+            tools::shape::live_shape_of(&back),
+            Some(&want),
+            "the heads came back live: {back:?}"
+        );
     }
 
     /// A rectangle drawn on the canvas and rounded in Properties (per corner)

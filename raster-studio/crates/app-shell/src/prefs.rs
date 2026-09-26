@@ -424,6 +424,13 @@ pub struct LayersPanelPrefs {
     pub thumbnails_by_layer: bool,
     /// Photopea's "Add "copy" to copied layers", on by default.
     pub add_copy: bool,
+    /// W16-D round 2: the panel menu's "Filter" / "Blending Options" /
+    /// "Lock" row toggles (shown by default) and "Long-tap as a right
+    /// click" (off by default). A file written before them reads so.
+    pub filter_row: bool,
+    pub blending_options_row: bool,
+    pub lock_row: bool,
+    pub long_tap_right_click: bool,
 }
 
 impl Default for LayersPanelPrefs {
@@ -432,6 +439,10 @@ impl Default for LayersPanelPrefs {
             thumb_scale: ui::panels::layers::ThumbScale::default(),
             thumbs_by_layer: false,
             add_copy: true,
+            filter_row: true,
+            blend_row: true,
+            lock_row: true,
+            long_tap: false,
         })
     }
 }
@@ -443,6 +454,10 @@ impl LayersPanelPrefs {
             thumb_scale: ui::panels::layers::ThumbScale::from_key(&self.thumbnail_size),
             thumbs_by_layer: self.thumbnails_by_layer,
             add_copy: self.add_copy,
+            filter_row: self.filter_row,
+            blend_row: self.blending_options_row,
+            lock_row: self.lock_row,
+            long_tap: self.long_tap_right_click,
         }
     }
 
@@ -452,6 +467,10 @@ impl LayersPanelPrefs {
             thumbnail_size: options.thumb_scale.key().to_string(),
             thumbnails_by_layer: options.thumbs_by_layer,
             add_copy: options.add_copy,
+            filter_row: options.filter_row,
+            blending_options_row: options.blend_row,
+            lock_row: options.lock_row,
+            long_tap_right_click: options.long_tap,
         }
     }
 }
@@ -748,6 +767,10 @@ mod tests {
                 thumbnail_size: "none".to_string(),
                 thumbnails_by_layer: true,
                 add_copy: false,
+                filter_row: false,
+                blending_options_row: false,
+                lock_row: false,
+                long_tap_right_click: true,
             },
         };
 

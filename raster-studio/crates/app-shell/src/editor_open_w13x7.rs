@@ -19,10 +19,10 @@
 //! `ChromeOutput::open_recent` road, which the shell applies through
 //! [`Editor::open_paths`]); that open finds the answer and renders exactly
 //! the chosen pages at the chosen resolution. Cancel opens nothing. W16-K:
-//! a one-page `.pdf` asks too (its resolution and how it opens), as
-//! Photopea's does; a one-page Illustrator `.ai` still opens as a picture
-//! straight away (Photopea reads `.ai` with its own reader, not this
-//! dialog).
+//! a one-page `.pdf` whose page the layer reader cannot keep live (an
+//! image, a clip, a shading on it) asks too (its resolution and how it
+//! opens); a one-page `.pdf` of paths and text, and a one-page `.ai`, do
+//! not: W16-I's route (`import_vector_w16`) opens their layers.
 //!
 //! Several multi-page files opened at once (a drop of two PDFs, two on the
 //! command line) queue: each asks in turn, in the order they were opened,
@@ -451,12 +451,15 @@ impl Editor {
         // which reports why.
         let bytes = read_limited(path, limits).ok()?;
         // W16-K: every page count asks but none (left to the W13-D route,
-        // which says why), and a one-page `.ai` (see the module docs).
+        // which says why), a one-page `.ai`, and a one-page `.pdf` whose
+        // page reads as live layers (W16-I's route opens those; see the
+        // module docs).
         let pages = pdf::page_count(&bytes).ok()?;
         let ai = path
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("ai"));
-        if pages == 0 || (pages < 2 && ai) {
+        if pages == 0 || (pages < 2 && (ai || pdf::layers::page_layers(&bytes, 0, limits).is_ok()))
+        {
             return None;
         }
         let previews = match pdf::page_previews(&bytes, THUMB_PX, limits) {

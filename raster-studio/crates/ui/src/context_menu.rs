@@ -74,7 +74,7 @@ pub fn canvas_items(ctx: &MenuContext) -> Vec<MenuItem> {
 /// and its order and separators — Blending Options, Select Pixels | Duplicate
 /// Layer, Duplicate Into…, Delete | Convert to Smart Object, (on a smart
 /// object, its rows), Rasterize, Rasterize Layer Style, Convert to Shape |
-/// (on a text layer, the point / paragraph conversion) | Clipping Mask, the
+/// (on a text layer, the point / paragraph conversion) | Clipping Mask | the
 /// Layer Style clipboard (Copy, Paste, Clear), Merge Down (Merge Layers over a
 /// multi-selection), Flatten Image | the colour labels.
 ///
@@ -143,20 +143,28 @@ pub fn layer_items(ctx: &MenuContext) -> Vec<MenuItem> {
             ],
         );
     }
+    // Photopea rules the clipping row off on its own.
+    group(
+        &mut rows,
+        &[if clipped {
+            MenuAction::ReleaseClippingMask
+        } else {
+            MenuAction::CreateClippingMask
+        }],
+    );
     group(
         &mut rows,
         &[
-            if clipped {
-                MenuAction::ReleaseClippingMask
-            } else {
-                MenuAction::CreateClippingMask
-            },
             MenuAction::CopyLayerStyle,
             MenuAction::PasteLayerStyle,
             MenuAction::ClearLayerStyle,
-            MenuAction::MergeDown,
-            MenuAction::FlattenImage,
         ],
+    );
+    // Photopea's Layer Style submenu carries the separator-after flag
+    // (hs.aep FH:!0), so a rule sits between it and Merge.
+    group(
+        &mut rows,
+        &[MenuAction::MergeDown, MenuAction::FlattenImage],
     );
     // W11-E: the colour labels.
     let colors: Vec<MenuAction> = layer_model::ColorLabel::ALL
@@ -189,6 +197,9 @@ pub fn layer_items(ctx: &MenuContext) -> Vec<MenuItem> {
             MenuAction::EditSmartObjectContents => {
                 row.label = LAYER_ROW_EDIT_CONTENTS.to_string();
             }
+            MenuAction::SmartObject(SmartObjectOp::NewViaCopy) => {
+                row.label = LAYER_ROW_SO_VIA_COPY.to_string();
+            }
             _ => {}
         }
     }
@@ -203,6 +214,7 @@ const LAYER_ROW_DELETE: &str = "Delete";
 const LAYER_ROW_RASTERIZE: &str = "Rasterize";
 const LAYER_ROW_RASTERIZE_STYLE: &str = "Rasterize Layer Style";
 const LAYER_ROW_EDIT_CONTENTS: &str = "Open (Edit Contents)";
+const LAYER_ROW_SO_VIA_COPY: &str = "New Smart Obj. via Copy";
 
 /// The document-tab menu: the close family from the File menu.
 pub fn tab_items(ctx: &MenuContext) -> Vec<MenuItem> {

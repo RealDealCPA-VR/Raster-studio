@@ -603,7 +603,7 @@ pub fn to_svg(entities: &[Entity]) -> (String, u32, u32) {
     let _ = write!(
         svg,
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\">\
-         <rect width=\"{w}\" height=\"{h}\" fill=\"#ffffff\"/>"
+         <rect id=\"Background\" width=\"{w}\" height=\"{h}\" fill=\"#ffffff\"/>"
     );
     let mut layer: Option<&str> = None;
     for e in entities {
@@ -674,8 +674,8 @@ pub fn to_svg(entities: &[Entity]) -> (String, u32, u32) {
     (svg, w, h)
 }
 
-/// Decode: the drawing, rasterised.
-pub fn decode(bytes: &[u8], limits: ImportLimits) -> Result<DecodedSurface, CodecError> {
+/// The entities, or a refusal when none can be drawn.
+fn drawable(bytes: &[u8]) -> Result<Vec<Entity>, CodecError> {
     let entities = parse(bytes)?;
     if entities.is_empty() {
         return Err(CodecError::Unsupported(
@@ -684,6 +684,31 @@ pub fn decode(bytes: &[u8], limits: ImportLimits) -> Result<DecodedSurface, Code
                 .into(),
         ));
     }
+    Ok(entities)
+}
+
+/// The drawing as **vector layers** (what File > Open opens): one group per
+/// DXF layer, each entity a shape (or text) layer inside it, and the white
+/// page as a `Background` shape at the bottom. Read by the SVG layer reader
+/// from [`to_svg`]'s document, so the layers draw what [`decode`]
+/// rasterises.
+pub fn layers(
+    bytes: &[u8],
+    limits: ImportLimits,
+) -> Result<crate::codec::svg_import::layers::VectorLayers, CodecError> {
+    let entities = drawable(bytes)?;
+    let (svg, _, _) = to_svg(&entities);
+    crate::codec::svg_import::layers::read_layers(
+        svg.as_bytes(),
+        limits,
+        ImportFormat::Dxf,
+        "the drawing",
+    )
+}
+
+/// Decode: the drawing, rasterised.
+pub fn decode(bytes: &[u8], limits: ImportLimits) -> Result<DecodedSurface, CodecError> {
+    let entities = drawable(bytes)?;
     let (svg, _, _) = to_svg(&entities);
     let mut s = crate::codec::svg_import::rasterize(svg.as_bytes(), limits)?;
     s.source_format = ImportFormat::Dxf;
@@ -811,5 +836,22 @@ mod tests {
             &dxf("0\nLINE\n10\n0\n20\n0\n11\n3\n21\n4\n0\nSPLINE\n71\n3\n40\n0\n40\n0\n40\n0\n40\n0\n40\n1\n40\n1\n40\n1\n40\n1\n10\n0\n20\n0\n10\n1\n20\n2\n10\n2\n20\n-1\n10\n3\n20\n0\n"),
             ImportFormat::Dxf,
         );
+    }
+
+    #[test]
+    fn layers_are_a_group_per_dxf_layer_and_damaged_files_never_panic() {
+        let file = dxf("0\nLINE\n8\nWalls\n10\n0\n20\n0\n11\n100\n21\n50\n0\nCIRCLE\n8\nDoors\n10\n50\n20\n25\n40\n10\n");
+        let v = layers(&file, ImportLimits::default()).unwrap();
+        assert_eq!((v.width, v.height), (1056, 544));
+        let names: Vec<&str> = v.design.nodes.iter().map(|l| l.name.as_str()).collect();
+        assert!(
+            names.contains(&"Walls") && names.contains(&"Doors"),
+            "{names:?}"
+        );
+        assert!(names.contains(&"Background"), "{names:?}");
+        assert!(layers(&dxf(""), ImportLimits::default()).is_err());
+        for cut in 0..file.len() {
+            let _ = layers(&file[..cut], ImportLimits::default());
+        }
     }
 }

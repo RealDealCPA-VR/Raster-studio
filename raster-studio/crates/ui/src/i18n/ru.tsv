@@ -41,7 +41,7 @@ Add Media	Добавить медиафайл
 Add Noise…	Добавить шум…
 Add a layer mask	Добавить слой-маску
 Add a smart filter mask	Добавить маску смарт-фильтра
-Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read	Добавить видеофайл (MP4: H.264 или AV1) как видеослой в позиции воспроизведения; звук не читается
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Поместить файл изображения или видео (Файл > Поместить встроенный); видео становится видеослоем в позиции указателя воспроизведения
 Add an adjustment layer	Добавить корректирующий слой
 Add another instance of this effect	Добавить ещё один экземпляр этого эффекта
 Add current colour	Добавить текущий цвет
@@ -51,6 +51,7 @@ Add or remove room around the image. Pixels are not resampled.	Добавляе�
 Add shortcut	Добавить сочетание клавиш
 Add to Selection	Добавить к выделенной области
 Adds one guide at a document coordinate, in pixels.	Добавляет одну направляющую в координате документа, в пикселях.
+Adjustment	Коррекция
 Adjustments	Коррекция
 Advanced	Дополнительно
 Again	Повторить
@@ -539,6 +540,7 @@ File name	Имя файла
 Files that fail are listed in batch-errors.txt in the destination.	Файлы с ошибками перечислены в batch-errors.txt в папке назначения.
 Fill	Заливка
 Fill Filter Mask	Залить маску фильтра
+Fill Layer	Слой-заливка
 Fill Mask	Залить маску
 Fill Screen	Заполнить экран
 Fill in File Info, or open a file that has EXIF, to embed metadata	Заполните сведения о файле или откройте файл с EXIF, чтобы встроить метаданные
@@ -553,6 +555,7 @@ Find Edges	Выделение краёв
 First line	Первая строка
 Fish	Рыба
 Fisheye	Рыбий глаз
+Fit The Area	Вписать в область
 Fit on Screen	Показать во весь экран
 Fit the whole image in the window	Вписать всё изображение в окно
 Fixed height	Фиксированная высота
@@ -712,6 +715,7 @@ Layer	Слои
 Layer Comps	Композиции слоёв
 Layer Edges	Края слоя
 Layer Mask	Слой-маска
+Layer Properties	Свойства слоя
 Layer Style	Стиль слоя
 Layer knocks out drop shadow	Слой выбивает тень
 Layer via Copy	Скопировать на новый слой
@@ -768,6 +772,7 @@ Lock all	Закрепить все
 Lock pixels	Закрепить пикселы
 Lock position	Закрепить положение
 Lock transparent pixels	Закрепить прозрачные пикселы
+Long-tap as a right click	Долгое нажатие как правый щелчок
 Lookup table	Таблица поиска
 Luminance	Яркость
 Luminance of the preview source; the markers are the black and white points.	Яркость источника превью; маркеры — точки чёрного и белого.
@@ -787,6 +792,7 @@ Maps the active layer onto a palette as one undo step; the document stays RGB.	�
 Margins	Поля
 Mark this state so you can come back to it	Отметить это состояние, чтобы к нему вернуться
 Mask	Маска
+Mask Properties	Свойства маски
 Mask source	Источник маски
 Match Color	Подобрать цвет
 Match Color…	Подобрать цвет…
@@ -847,6 +853,7 @@ New Adjustment Layer	Новый корректирующий слой
 New Channel	Новый канал
 New Document	Новый документ
 New Fill Layer	Новый слой-заливка
+New Folder	Новая папка
 New Guide	Новая направляющая
 New Guide Layout	Новый макет направляющих
 New Guide Layout…	Новый макет направляющих…
@@ -860,7 +867,9 @@ New Snapshot	Новый снимок
 New Spot Channel	Новый канал плашечного цвета
 New Spot Channel…	Новый канал плашечного цвета…
 New Style Preset	Новый набор стилей
+New Video Group	Новая группа видео
 New channel	Новый канал
+New folder	Новая папка
 New group	Новая группа
 New layer	Новый слой
 New layer comp	Новая композиция слоёв
@@ -961,6 +970,7 @@ Open a document to see its properties	Откройте документ, что�
 Open another document, or add another pixel layer, to match its colours.	Откройте другой документ или добавьте ещё один пиксельный слой, чтобы подобрать его цвета.
 Open as	Открыть как
 Open editor…	Открыть редактор…
+Open or close the folder	Открыть или закрыть папку
 Open the Adjustments panel	Открыть панель «Коррекция»
 Open…	Открыть…
 Operation	Операция
@@ -1029,6 +1039,7 @@ Pinch…	Щипок…
 Pixel Grid	Пиксельная сетка
 Pixel dimensions	Размеры в пикселах
 Pixel mask	Пиксельная маска
+Pixel to Pixel	Пиксель к пикселю
 Pixelate	Оформление
 Pixels	Пикселы
 Place Embedded…	Поместить встроенные…
@@ -1239,6 +1250,7 @@ Select a layer to see its properties	Выберите слой, чтобы ув�
 Select a layer: a click on a style applies it to the active layer.	Выберите слой: щелчок по стилю применяет его к активному слою.
 Select a path first	Сначала выберите контур
 Select a text layer, or type into one: a click inserts the glyph at the caret.	Выберите текстовый слой или печатайте в нём: щелчок вставляет глиф в позицию курсора.
+Select a text layer to edit its type	Выберите текстовый слой, чтобы изменить его текст
 Select every pixel near one colour	Выделить все пикселы, близкие к одному цвету
 Selection	Выделение
 Selection Edges	Края выделения
@@ -1262,6 +1274,7 @@ Shadows/Highlights…	Тени/Света…
 Shape	Фигура
 Shape Dynamics	Динамика формы
 Shape Mosaic…	Мозаика из фигур…
+Shape Properties	Свойства фигуры
 Sharpen	Резкость
 Sharpen Edges	Резкость на краях
 Sharpen More	Резкость +
@@ -1364,6 +1377,7 @@ TGA…	TGA…
 TIF…	TIF…
 Templates	Шаблоны
 Text	Текст
+Text Properties	Свойства текста
 Text overflows the box	Текст не помещается в рамку
 Text replacement	Замена текста
 Texture Dilation…	Расширение текстуры…
@@ -1373,7 +1387,6 @@ The CSV ends inside a quoted field	CSV заканчивается внутри �
 The CSV has a header but no data sets	В CSV есть заголовок, но нет наборов данных
 The CSV is empty	CSV пуст
 The CSV names a variable that is not defined:	В CSV упомянута неопределённая переменная:
-The active layer has no layer style to save	У активного слоя нет стиля слоя для сохранения
 The active layer is not in the document	Активного слоя нет в документе
 The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	Активный смарт-объект по очереди показывает каждое изображение из исходной папки; каждый результат экспортируется в PNG в папку назначения.
 The amount must be within	Значение должно быть в пределах
@@ -1477,6 +1490,7 @@ Transform Layer	Трансформировать слой
 Transform Selection	Трансформировать выделенную область
 Transparency	Прозрачность
 Transparent Pixels	Прозрачные пикселы
+Trim	Тримминг
 Trim Away	Обрезать
 Trim…	Тримминг…
 Tritone	Триотон

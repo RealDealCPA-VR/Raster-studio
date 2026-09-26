@@ -22,17 +22,23 @@
 //! | --- | --- |
 //! | `Group` (every `<g>`, and each element usvg wraps for its transform or opacity) | a layer group with the group's opacity; an unnamed wrapper around a single element is dropped and the element stands in its place |
 //! | `Path` with a solid fill and / or a solid, undashed stroke | a shape layer: the path in its own space, placed by its whole transform |
+//! | `Path` filled with a padded linear gradient, or a padded radial gradient that is circular on the canvas with its focal point at its centre | a shape layer with a **live gradient fill** ([`ShapeGradient`], in [`VectorLayers::gradients`]): the same stops and the same ramp geometry, re-expressed as the editor's gradient (angle, scale and offset from the shape's filled bounds) by `app_shell` |
 //! | `Text` that is one run of one style, anchored at its start, with a solid fill and no stroke, decoration, spacing, per-glyph positioning or text path, placed without skew or mirroring | a text layer (string, first font family, size, weight, italic, colour); the baseline is placed an estimated 0.8 em below the layer's top |
 //! | any other `Text` | its outlines, as shape layers in a group named after the text |
 //! | `Image` | a raster layer |
 //!
 //! What cannot be carried as a live layer is **flattened**: the element (a
 //! group with a clip path, mask, filter or non-normal blend mode, a path
-//! with a gradient or pattern paint or a dashed stroke) is drawn by `resvg`
+//! with a pattern fill, a reflected or repeated gradient, an elliptical or
+//! off-centre radial gradient, a gradient or pattern stroke or a dashed
+//! stroke) is drawn by `resvg`
 //! on its own, at its place on the canvas, into a raster layer, and the
 //! import report says how many elements were flattened and why
 //! ([`DesignDocument::notes`]). Stroke caps and joins other than butt /
-//! miter open as butt / miter and the report says so.
+//! miter open as butt / miter and the report says so. A live gradient's
+//! ramp is blended the way the editor blends every gradient (in linear
+//! light), where an SVG viewer blends in sRGB, so its midtones differ
+//! slightly from the file's; the ends and the geometry are the file's.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -59,6 +65,161 @@ pub struct VectorLayers {
     pub height: u32,
     /// How many elements opened as pixels (see the module docs).
     pub flattened: usize,
+    /// W16-I: the live gradient fills, each keyed by its shape node's index
+    /// in [`DesignDocument::walk`] order (that node's `fill` is the first
+    /// stop's colour, what the shape shows where gradients are not drawn).
+    pub gradients: Vec<(usize, ShapeGradient)>,
+}
+
+/// The geometry of a [`ShapeGradient`], in the shape node's own path space
+/// (the space of its `path_svg`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GradientGeometry {
+    /// The ramp runs from `from` (position 0) to `to` (position 1) and is
+    /// constant across that direction; padded beyond both ends.
+    Linear { from: (f64, f64), to: (f64, f64) },
+    /// The ramp runs from `centre` (position 0) out to `radius` (position
+    /// 1); padded beyond.
+    Radial { centre: (f64, f64), radius: f64 },
+}
+
+/// W16-I: a shape's gradient fill as the file paints it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShapeGradient {
+    pub geometry: GradientGeometry,
+    /// `(position 0..=1, straight sRGB RGBA)`, in order; the fill's own
+    /// opacity is folded into each stop's alpha. Never empty.
+    pub stops: Vec<(f32, [f32; 4])>,
+}
+
+/// The marker a gradient shape's name carries while the tree is built,
+/// before [`VectorLayers::gradients`] is keyed (a NUL cannot be in an XML
+/// name).
+const GRADIENT_TAG: char = '\u{0}';
+
+/// Strip the gradient tags from `nodes` (pre-order), answering each tagged
+/// node's walk index with its gradient.
+fn key_gradients(
+    nodes: &mut [DesignNode],
+    pending: &mut [Option<ShapeGradient>],
+    index: &mut usize,
+    out: &mut Vec<(usize, ShapeGradient)>,
+) {
+    for node in nodes {
+        if let Some(at) = node.name.find(GRADIENT_TAG) {
+            let slot = node.name[at + 1..].parse::<usize>().ok();
+            node.name.truncate(at);
+            if let Some(g) = slot.and_then(|i| pending.get_mut(i)).and_then(Option::take) {
+                out.push((*index, g));
+            }
+        }
+        *index += 1;
+        match &mut node.kind {
+            DesignKind::Group { children } | DesignKind::Artboard { children, .. } => {
+                key_gradients(children, pending, index, out)
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `paint` (a fill with opacity `opacity`) as a live gradient on a path
+/// whose node is shifted by `(-dx, -dy)`, or why it must be flattened.
+/// `extent` is the path's longer side.
+fn shape_gradient(
+    paint: &usvg::Paint,
+    opacity: f32,
+    (dx, dy): (f64, f64),
+    extent: f64,
+) -> Result<ShapeGradient, &'static str> {
+    let degenerate = "a gradient with a degenerate transform";
+    let (base, geometry): (&usvg::BaseGradient, _) = match paint {
+        usvg::Paint::LinearGradient(g) => {
+            // Position t(g) = ((g - p1) . d) / |d|^2 in gradient space;
+            // gradient space is `transform` of the path's own space.
+            let inv = g.transform().invert().ok_or(degenerate)?;
+            let (p1, p2) = (
+                (f64::from(g.x1()), f64::from(g.y1())),
+                (f64::from(g.x2()), f64::from(g.y2())),
+            );
+            let d = (p2.0 - p1.0, p2.1 - p1.1);
+            let dd = d.0 * d.0 + d.1 * d.1;
+            if !(dd.is_finite() && dd > 1e-12) {
+                return Err(degenerate);
+            }
+            let (a, b, c, e) = (
+                f64::from(inv.sx),
+                f64::from(inv.ky),
+                f64::from(inv.kx),
+                f64::from(inv.sy),
+            );
+            let (tx, ty) = (f64::from(inv.tx), f64::from(inv.ty));
+            // t(u) = n . u + k for u in the path's own space.
+            let n = ((a * d.0 + b * d.1) / dd, (c * d.0 + e * d.1) / dd);
+            let k = ((tx - p1.0) * d.0 + (ty - p1.1) * d.1) / dd;
+            let nn = n.0 * n.0 + n.1 * n.1;
+            if !(nn.is_finite() && nn > 1e-18) {
+                return Err(degenerate);
+            }
+            // In the node's shifted space q = u - (dx, dy).
+            let t0 = n.0 * dx + n.1 * dy + k;
+            let from = (-t0 * n.0 / nn, -t0 * n.1 / nn);
+            let to = (from.0 + n.0 / nn, from.1 + n.1 / nn);
+            let len = (1.0 / nn).sqrt();
+            if extent > 0.0 && !(0.02..=500.0).contains(&(len / extent)) {
+                return Err("a gradient far longer or shorter than its shape");
+            }
+            (&**g, GradientGeometry::Linear { from, to })
+        }
+        usvg::Paint::RadialGradient(g) => {
+            if (g.fx() - g.cx()).abs() > 1e-4 || (g.fy() - g.cy()).abs() > 1e-4 {
+                return Err("a radial gradient with its focal point off its centre");
+            }
+            let t = g.transform();
+            let (sx, ky, kx, sy) = (
+                f64::from(t.sx),
+                f64::from(t.ky),
+                f64::from(t.kx),
+                f64::from(t.sy),
+            );
+            let (l1, l2) = (sx * sx + ky * ky, kx * kx + sy * sy);
+            let s = l1.sqrt();
+            if !(s.is_finite() && s > 1e-9)
+                || (l1 - l2).abs() > 1e-3 * l1
+                || (sx * kx + ky * sy).abs() > 1e-3 * l1
+            {
+                return Err("an elliptical radial gradient");
+            }
+            let (cx, cy) = (f64::from(g.cx()), f64::from(g.cy()));
+            let centre = (
+                sx * cx + kx * cy + f64::from(t.tx) - dx,
+                ky * cx + sy * cy + f64::from(t.ty) - dy,
+            );
+            let radius = f64::from(g.r().get()) * s;
+            if extent > 0.0 && !(0.01..=250.0).contains(&(radius / extent)) {
+                return Err("a gradient far longer or shorter than its shape");
+            }
+            (&**g, GradientGeometry::Radial { centre, radius })
+        }
+        _ => return Err("a pattern fill"),
+    };
+    if base.spread_method() != usvg::SpreadMethod::Pad {
+        return Err("a reflected or repeated gradient");
+    }
+    let stops: Vec<(f32, [f32; 4])> = base
+        .stops()
+        .iter()
+        .map(|s| {
+            (
+                s.offset().get(),
+                rgba(s.color(), s.opacity().get() * opacity.clamp(0.0, 1.0)),
+            )
+        })
+        .collect();
+    if stops.is_empty() {
+        return Err("a gradient with no stops");
+    }
+    Ok(ShapeGradient { geometry, stops })
 }
 
 /// Read `data` (an SVG, gzip-compressed or not) as layers. `format` names
@@ -81,9 +242,12 @@ pub fn read_layers(
             held: 0,
             flattened: BTreeMap::new(),
             caps: 0,
+            gradients: Vec::new(),
         };
         let root = tree.root();
-        let nodes = walk.children(root, 0)?;
+        let mut nodes = walk.children(root, 0)?;
+        let mut gradients = Vec::new();
+        key_gradients(&mut nodes, &mut walk.gradients, &mut 0, &mut gradients);
         let mut notes = Vec::new();
         for (why, n) in &walk.flattened {
             notes.push(if *n == 1 {
@@ -109,6 +273,7 @@ pub fn read_layers(
             width,
             height,
             flattened: walk.flattened.values().sum(),
+            gradients,
         })
     })
 }
@@ -171,6 +336,8 @@ struct Walk {
     flattened: BTreeMap<&'static str, usize>,
     /// Strokes whose caps / joins did not carry over.
     caps: usize,
+    /// W16-I: live gradient fills, by the tag their shape's name carries.
+    gradients: Vec<Option<ShapeGradient>>,
 }
 
 impl Walk {
@@ -250,17 +417,30 @@ impl Walk {
                 if !p.is_visible() {
                     return Ok(None);
                 }
+                let bounds = p.data().bounds();
+                let (x, y) = (bounds.left(), bounds.top());
+                let mut gradient = None;
                 let fill = match p.fill() {
                     None => None,
                     Some(f) => match f.paint() {
                         usvg::Paint::Color(c) => Some((rgba(*c, f.opacity().get()), f.rule())),
-                        _ => {
-                            return self.flatten(
-                                node,
-                                parent,
-                                named("Shape"),
-                                "a gradient or pattern fill",
-                            )
+                        paint => {
+                            // W16-I: a gradient the editor's shape gradient
+                            // draws the same stays live.
+                            let extent = f64::from(bounds.width().max(bounds.height()));
+                            match shape_gradient(
+                                paint,
+                                f.opacity().get(),
+                                (f64::from(x), f64::from(y)),
+                                extent,
+                            ) {
+                                Ok(g) => {
+                                    let first = g.stops[0].1;
+                                    gradient = Some(g);
+                                    Some((first, f.rule()))
+                                }
+                                Err(why) => return self.flatten(node, parent, named("Shape"), why),
+                            }
                         }
                     },
                 };
@@ -295,10 +475,13 @@ impl Walk {
                 if fill.is_none() && stroke.is_none() {
                     return Ok(None);
                 }
-                let bounds = p.data().bounds();
-                let (x, y) = (bounds.left(), bounds.top());
+                let mut name = named("Shape");
+                if let Some(g) = gradient {
+                    name = format!("{name}{GRADIENT_TAG}{}", self.gradients.len());
+                    self.gradients.push(Some(g));
+                }
                 Ok(Some(DesignNode {
-                    name: named("Shape"),
+                    name,
                     visible: true,
                     opacity: 1.0,
                     transform: affine(p.abs_transform())
@@ -593,7 +776,7 @@ mod tests {
     #[test]
     fn what_does_not_map_is_flattened_and_reported() {
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">
-  <defs><linearGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient>
+  <defs><linearGradient id="g" spreadMethod="repeat" x2="0.5"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient>
   <clipPath id="c"><rect width="10" height="10"/></clipPath></defs>
   <rect id="grad" width="20" height="20" fill="url(#g)"/>
   <g id="clipped" clip-path="url(#c)"><rect width="40" height="40" fill="#0f0"/></g>
@@ -617,6 +800,81 @@ mod tests {
             unreachable!()
         };
         assert_eq!((*width, *height), (10, 10));
+    }
+
+    #[test]
+    fn padded_linear_and_circular_radial_gradients_stay_live_with_their_geometry() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs>
+    <linearGradient id="h"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff" stop-opacity="0.5"/></linearGradient>
+    <linearGradient id="v" x2="0" y2="1"><stop offset="0" stop-color="#000"/><stop offset="1" stop-color="#fff"/></linearGradient>
+    <radialGradient id="r"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/></radialGradient>
+    <radialGradient id="off" fx="0.2"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/></radialGradient>
+  </defs>
+  <rect id="across" x="10" y="10" width="80" height="20" fill="url(#h)" fill-opacity="0.5"/>
+  <g id="set"><rect id="down" x="100" y="10" width="20" height="60" fill="url(#v)"/></g>
+  <circle id="glow" cx="160" cy="50" r="30" fill="url(#r)"/>
+  <circle id="focal" cx="40" cy="70" r="20" fill="url(#off)"/>
+</svg>"##;
+        let v = read_layers(
+            svg.as_bytes(),
+            ImportLimits::default(),
+            ImportFormat::Svg,
+            "the drawing",
+        )
+        .unwrap();
+        assert_eq!(
+            kinds(&v.design.nodes),
+            vec![
+                "across:shape",
+                "set:group[down:shape]",
+                "glow:shape",
+                "focal:bitmap"
+            ],
+            "the tags are stripped from the names"
+        );
+        assert_eq!(v.flattened, 1);
+        assert!(
+            v.design.notes[0].contains("focal point off its centre"),
+            "{:?}",
+            v.design.notes
+        );
+        // Keyed by walk index: across 0, set 1, down 2, glow 3.
+        let keys: Vec<usize> = v.gradients.iter().map(|(i, _)| *i).collect();
+        assert_eq!(keys, vec![0, 2, 3]);
+        let close =
+            |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3;
+        // The horizontal ramp spans the rect's width in its own space.
+        let (_, across) = &v.gradients[0];
+        let GradientGeometry::Linear { from, to } = across.geometry else {
+            panic!("{across:?}")
+        };
+        assert!(
+            close(from, (0.0, 0.0)) && close(to, (80.0, 0.0)),
+            "{from:?} {to:?}"
+        );
+        assert_eq!(across.stops[0], (0.0, [1.0, 0.0, 0.0, 0.5]));
+        assert_eq!(across.stops[1], (1.0, [0.0, 0.0, 1.0, 0.25]));
+        let DesignKind::Shape { fill, .. } = &v.design.nodes[0].kind else {
+            unreachable!()
+        };
+        assert_eq!(*fill, Some([1.0, 0.0, 0.0, 0.5]), "the first stop");
+        // The vertical one runs down the rect's height.
+        let GradientGeometry::Linear { from, to } = v.gradients[1].1.geometry else {
+            panic!()
+        };
+        assert!(
+            close(from, (0.0, 0.0)) && close(to, (0.0, 60.0)),
+            "{from:?} {to:?}"
+        );
+        // The radial one is centred in the circle's box, radius r.
+        let GradientGeometry::Radial { centre, radius } = v.gradients[2].1.geometry else {
+            panic!()
+        };
+        assert!(
+            close(centre, (30.0, 30.0)) && (radius - 30.0).abs() < 1e-3,
+            "{centre:?} {radius}"
+        );
     }
 
     pub(crate) const TWO_FILLS_EPS: &str = "%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 100 50\n%%EndComments\n1 0 0 setrgbcolor 10 10 30 20 rectfill\n0 0 1 setrgbcolor newpath 60 10 moveto 90 10 lineto 75 40 lineto closepath fill\n%%EOF\n";
@@ -651,6 +909,20 @@ mod tests {
             (x - 10.0).abs() < 1e-3 && (y - 20.0).abs() < 1e-3,
             "{x},{y}"
         );
+    }
+
+    #[test]
+    fn an_eps_show_opens_as_a_text_layer() {
+        let eps = "%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 100 50\n%%EndComments\n/Helvetica findfont 12 scalefont setfont 0 0 1 setrgbcolor 10 20 moveto (Hi) show\n%%EOF\n";
+        let (v, _) =
+            crate::codec::formats::postscript::layers(eps.as_bytes(), ImportLimits::default())
+                .unwrap();
+        assert_eq!(kinds(&v.design.nodes), vec!["Hi:text(Hi)"]);
+        let DesignKind::Text { size, color, .. } = &v.design.nodes[0].kind else {
+            unreachable!()
+        };
+        assert!((size - 12.0).abs() < 1e-3, "{size}");
+        assert_eq!(*color, [0.0, 0.0, 1.0, 1.0]);
     }
 
     #[test]

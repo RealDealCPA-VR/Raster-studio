@@ -1990,6 +1990,11 @@ impl Editor {
     /// re-reads it when the file changes. The pixels land as one undoable
     /// Transaction, so undo removes the placed object entirely.
     pub fn place_path(&mut self, path: &Path, linked: bool) -> Result<String, String> {
+        // W16-M: a video file is placed as a video layer (Photopea's "Open
+        // and Place" of media, and the timeline's Add Media).
+        if let Some(result) = self.place_video_file(path) {
+            return result;
+        }
         // Cards 046-048: decode and read the source bytes BEFORE anything
         // mutates - a failed decode or read changes neither the layer stack
         // nor dirty/history state.

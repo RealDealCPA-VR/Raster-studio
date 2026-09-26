@@ -41,7 +41,7 @@ Add Media	Medya Ekle
 Add Noise…	Gürültü Ekle…
 Add a layer mask	Katman maskesi ekle
 Add a smart filter mask	Akıllı filtre maskesi ekle
-Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read	Oynatma kafasına video katmanı olarak bir video dosyası (MP4: H.264 veya AV1) ekle; ses okunmaz
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Bir görüntü veya video dosyası yerleştir (Dosya > Gömülü Yerleştir); video, oynatma kafasında bir video katmanı olur
 Add an adjustment layer	Ayarlama katmanı ekle
 Add another instance of this effect	Bu efektin başka bir örneğini ekle
 Add current colour	Geçerli rengi ekle
@@ -51,6 +51,7 @@ Add or remove room around the image. Pixels are not resampled.	Görüntünün ç
 Add shortcut	Kısayol ekle
 Add to Selection	Seçime Ekle
 Adds one guide at a document coordinate, in pixels.	Belge koordinatına piksel cinsinden bir kılavuz ekler.
+Adjustment	Ayarlama
 Adjustments	Ayarlamalar
 Advanced	Gelişmiş
 Again	Yinele
@@ -539,6 +540,7 @@ File name	Dosya adı
 Files that fail are listed in batch-errors.txt in the destination.	Başarısız dosyalar hedefteki batch-errors.txt dosyasında listelenir.
 Fill	Dolgu
 Fill Filter Mask	Filtre Maskesini Doldur
+Fill Layer	Dolgu Katmanı
 Fill Mask	Maskeyi Doldur
 Fill Screen	Ekranı Doldur
 Fill in File Info, or open a file that has EXIF, to embed metadata	Meta verileri gömmek için Dosya Bilgisi'ni doldurun veya EXIF içeren bir dosya açın
@@ -553,6 +555,7 @@ Find Edges	Kenarları Bul
 First line	İlk satır
 Fish	Balık
 Fisheye	Balık Gözü
+Fit The Area	Alana Sığdır
 Fit on Screen	Ekrana Sığdır
 Fit the whole image in the window	Tüm görüntüyü pencereye sığdır
 Fixed height	Sabit yükseklik
@@ -712,6 +715,7 @@ Layer	Katman
 Layer Comps	Katman Kompozisyonları
 Layer Edges	Katman Kenarları
 Layer Mask	Katman Maskesi
+Layer Properties	Katman Özellikleri
 Layer Style	Katman Stili
 Layer knocks out drop shadow	Katman gölgeyi dışarıda bırakır
 Layer via Copy	Kopyalayarak Katman
@@ -768,6 +772,7 @@ Lock all	Tümünü kilitle
 Lock pixels	Pikselleri kilitle
 Lock position	Konumu kilitle
 Lock transparent pixels	Saydam pikselleri kilitle
+Long-tap as a right click	Uzun dokunmayı sağ tık say
 Lookup table	Arama tablosu
 Luminance	Parlaklık
 Luminance of the preview source; the markers are the black and white points.	Önizleme kaynağının parlaklığı; işaretçiler siyah ve beyaz noktalardır.
@@ -787,6 +792,7 @@ Maps the active layer onto a palette as one undo step; the document stays RGB.	E
 Margins	Kenar boşlukları
 Mark this state so you can come back to it	Geri dönebilmek için bu durumu işaretle
 Mask	Maske
+Mask Properties	Maske Özellikleri
 Mask source	Maske kaynağı
 Match Color	Rengi Eşle
 Match Color…	Rengi Eşle…
@@ -847,6 +853,7 @@ New Adjustment Layer	Yeni Ayarlama Katmanı
 New Channel	Yeni Kanal
 New Document	Yeni Belge
 New Fill Layer	Yeni Dolgu Katmanı
+New Folder	Yeni Klasör
 New Guide	Yeni Kılavuz
 New Guide Layout	Yeni Kılavuz Düzeni
 New Guide Layout…	Yeni Kılavuz Düzeni…
@@ -860,7 +867,9 @@ New Snapshot	Yeni Anlık Görüntü
 New Spot Channel	Yeni Spot Kanal
 New Spot Channel…	Yeni Spot Kanal…
 New Style Preset	Yeni Stil Ön Ayarı
+New Video Group	Yeni Video Grubu
 New channel	Yeni kanal
+New folder	Yeni klasör
 New group	Yeni grup
 New layer	Yeni katman
 New layer comp	Yeni katman kompozisyonu
@@ -961,6 +970,7 @@ Open a document to see its properties	Özelliklerini görmek için bir belge aç
 Open another document, or add another pixel layer, to match its colours.	Renklerini eşlemek için başka bir belge açın veya başka bir piksel katmanı ekleyin.
 Open as	Farklı aç
 Open editor…	Düzenleyiciyi aç…
+Open or close the folder	Klasörü aç veya kapat
 Open the Adjustments panel	Ayarlamalar panelini aç
 Open…	Aç…
 Operation	İşlem
@@ -1029,6 +1039,7 @@ Pinch…	Sıkıştır…
 Pixel Grid	Piksel Izgarası
 Pixel dimensions	Piksel boyutları
 Pixel mask	Piksel maskesi
+Pixel to Pixel	Pikselden Piksele
 Pixelate	Pikselleştir
 Pixels	Piksel
 Place Embedded…	Gömülü Yerleştir…
@@ -1239,6 +1250,7 @@ Select a layer to see its properties	Özelliklerini görmek için bir katman se�
 Select a layer: a click on a style applies it to the active layer.	Bir katman seçin: bir stile tıklamak onu etkin katmana uygular.
 Select a path first	Önce bir yol seçin
 Select a text layer, or type into one: a click inserts the glyph at the caret.	Bir metin katmanı seçin veya birine yazın: tıklama glifi imleç konumuna ekler.
+Select a text layer to edit its type	Metnini düzenlemek için bir metin katmanı seçin
 Select every pixel near one colour	Bir renge yakın her pikseli seç
 Selection	Seçim
 Selection Edges	Seçim Kenarları
@@ -1262,6 +1274,7 @@ Shadows/Highlights…	Gölgeler/Vurgular…
 Shape	Şekil
 Shape Dynamics	Şekil Dinamikleri
 Shape Mosaic…	Şekil Mozaiği…
+Shape Properties	Şekil Özellikleri
 Sharpen	Keskinleştir
 Sharpen Edges	Kenarları Keskinleştir
 Sharpen More	Daha Fazla Keskinleştir
@@ -1364,6 +1377,7 @@ TGA…	TGA…
 TIF…	TIF…
 Templates	Şablonlar
 Text	Metin
+Text Properties	Metin Özellikleri
 Text overflows the box	Metin kutudan taşıyor
 Text replacement	Metin değiştirme
 Texture Dilation…	Doku Genişletme…
@@ -1373,7 +1387,6 @@ The CSV ends inside a quoted field	CSV tırnak içindeki bir alanın içinde bit
 The CSV has a header but no data sets	CSV'de başlık var ama veri kümesi yok
 The CSV is empty	CSV boş
 The CSV names a variable that is not defined:	CSV tanımlanmamış bir değişkeni adlandırıyor:
-The active layer has no layer style to save	Etkin katmanın kaydedilecek katman stili yok
 The active layer is not in the document	Etkin katman belgede değil
 The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	Etkin akıllı nesne kaynak klasördeki her görüntüyü sırayla gösterir; her sonuç hedef klasöre PNG olarak dışa aktarılır.
 The amount must be within	Miktar şu aralıkta olmalı:
@@ -1477,6 +1490,7 @@ Transform Layer	Katmanı Dönüştür
 Transform Selection	Seçimi Dönüştür
 Transparency	Saydamlık
 Transparent Pixels	Saydam Pikseller
+Trim	Kırp
 Trim Away	Kırp
 Trim…	Kırp…
 Tritone	Üç Ton

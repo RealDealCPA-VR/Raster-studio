@@ -41,7 +41,7 @@ Add Media	Ajouter un média
 Add Noise…	Ajout de bruit…
 Add a layer mask	Ajouter un masque de fusion
 Add a smart filter mask	Ajouter un masque de filtre dynamique
-Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read	Ajouter un fichier vidéo (MP4 : H.264 ou AV1) comme calque vidéo à la tête de lecture ; l’audio n’est pas lu
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Importer un fichier image ou vidéo (Fichier > Importer incorporé) ; une vidéo devient un calque vidéo à la tête de lecture
 Add an adjustment layer	Ajouter un calque de réglage
 Add another instance of this effect	Ajouter une autre instance de cet effet
 Add current colour	Ajouter la couleur actuelle
@@ -51,6 +51,7 @@ Add or remove room around the image. Pixels are not resampled.	Ajoute ou retire 
 Add shortcut	Ajouter un raccourci
 Add to Selection	Ajouter à la sélection
 Adds one guide at a document coordinate, in pixels.	Ajoute un repère à une coordonnée du document, en pixels.
+Adjustment	Réglage
 Adjustments	Réglages
 Advanced	Avancé
 Again	Répéter
@@ -539,6 +540,7 @@ File name	Nom de fichier
 Files that fail are listed in batch-errors.txt in the destination.	Les fichiers en échec sont listés dans batch-errors.txt dans la destination.
 Fill	Remplissage
 Fill Filter Mask	Remplir le masque de filtre
+Fill Layer	Calque de remplissage
 Fill Mask	Remplir le masque
 Fill Screen	Plein écran
 Fill in File Info, or open a file that has EXIF, to embed metadata	Remplissez les informations sur le fichier, ou ouvrez un fichier doté d’EXIF, pour incorporer des métadonnées
@@ -553,6 +555,7 @@ Find Edges	Contour
 First line	Première ligne
 Fish	Poisson
 Fisheye	Fish-eye
+Fit The Area	Adapter à la zone
 Fit on Screen	Taille écran
 Fit the whole image in the window	Ajuster toute l’image à la fenêtre
 Fixed height	Hauteur fixe
@@ -712,6 +715,7 @@ Layer	Calque
 Layer Comps	Compositions de calques
 Layer Edges	Contours des calques
 Layer Mask	Masque de fusion
+Layer Properties	Propriétés du calque
 Layer Style	Style de calque
 Layer knocks out drop shadow	Le calque masque l’ombre portée
 Layer via Copy	Calque par copier
@@ -768,6 +772,7 @@ Lock all	Tout verrouiller
 Lock pixels	Verrouiller les pixels
 Lock position	Verrouiller la position
 Lock transparent pixels	Verrouiller les pixels transparents
+Long-tap as a right click	Appui long comme clic droit
 Lookup table	Table de correspondance
 Luminance	Luminance
 Luminance of the preview source; the markers are the black and white points.	Luminance de la source de l’aperçu ; les repères sont les points noir et blanc.
@@ -787,6 +792,7 @@ Maps the active layer onto a palette as one undo step; the document stays RGB.	A
 Margins	Marges
 Mark this state so you can come back to it	Marquer cet état pour pouvoir y revenir
 Mask	Masque
+Mask Properties	Propriétés du masque
 Mask source	Source du masque
 Match Color	Correspondance de la couleur
 Match Color…	Correspondance de la couleur…
@@ -847,6 +853,7 @@ New Adjustment Layer	Nouveau calque de réglage
 New Channel	Nouvelle couche
 New Document	Nouveau document
 New Fill Layer	Nouveau calque de remplissage
+New Folder	Nouveau dossier
 New Guide	Nouveau repère
 New Guide Layout	Nouvelle disposition de repères
 New Guide Layout…	Nouvelle disposition de repères…
@@ -860,7 +867,9 @@ New Snapshot	Nouvel instantané
 New Spot Channel	Nouvelle couche de ton direct
 New Spot Channel…	Nouvelle couche de ton direct…
 New Style Preset	Nouveau style prédéfini
+New Video Group	Nouveau groupe vidéo
 New channel	Nouvelle couche
+New folder	Nouveau dossier
 New group	Nouveau groupe
 New layer	Nouveau calque
 New layer comp	Nouvelle composition de calques
@@ -961,6 +970,7 @@ Open a document to see its properties	Ouvrez un document pour voir ses propriét
 Open another document, or add another pixel layer, to match its colours.	Ouvrez un autre document, ou ajoutez un autre calque de pixels, pour faire correspondre ses couleurs.
 Open as	Ouvrir comme
 Open editor…	Ouvrir l’éditeur…
+Open or close the folder	Ouvrir ou fermer le dossier
 Open the Adjustments panel	Ouvrir le panneau Réglages
 Open…	Ouvrir…
 Operation	Opération
@@ -1029,6 +1039,7 @@ Pinch…	Pincement…
 Pixel Grid	Grille de pixels
 Pixel dimensions	Dimensions en pixels
 Pixel mask	Masque de pixels
+Pixel to Pixel	Pixel pour pixel
 Pixelate	Pixellisation
 Pixels	Pixels
 Place Embedded…	Importer incorporé…
@@ -1239,6 +1250,7 @@ Select a layer to see its properties	Sélectionnez un calque pour voir ses propr
 Select a layer: a click on a style applies it to the active layer.	Sélectionnez un calque : un clic sur un style l’applique au calque actif.
 Select a path first	Sélectionnez d’abord un tracé
 Select a text layer, or type into one: a click inserts the glyph at the caret.	Sélectionnez un calque de texte, ou saisissez-y du texte : un clic insère le glyphe au point d’insertion.
+Select a text layer to edit its type	Sélectionnez un calque de texte pour modifier son texte
 Select every pixel near one colour	Sélectionner chaque pixel proche d’une couleur
 Selection	Sélection
 Selection Edges	Contours de la sélection
@@ -1262,6 +1274,7 @@ Shadows/Highlights…	Tons foncés/Tons clairs…
 Shape	Forme
 Shape Dynamics	Dynamique de forme
 Shape Mosaic…	Mosaïque de formes…
+Shape Properties	Propriétés de la forme
 Sharpen	Renforcement
 Sharpen Edges	Renforcement des contours
 Sharpen More	Renforcement plus
@@ -1364,6 +1377,7 @@ TGA…	TGA…
 TIF…	TIF…
 Templates	Modèles
 Text	Texte
+Text Properties	Propriétés du texte
 Text overflows the box	Le texte déborde du cadre
 Text replacement	Remplacement du texte
 Texture Dilation…	Dilatation de texture…
@@ -1373,7 +1387,6 @@ The CSV ends inside a quoted field	Le CSV se termine à l’intérieur d’un ch
 The CSV has a header but no data sets	Le CSV a un en-tête mais aucun jeu de données
 The CSV is empty	Le CSV est vide
 The CSV names a variable that is not defined:	Le CSV nomme une variable qui n’est pas définie :
-The active layer has no layer style to save	Le calque actif n’a pas de style de calque à enregistrer
 The active layer is not in the document	Le calque actif n’est pas dans le document
 The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	L’objet dynamique actif affiche tour à tour chaque image du dossier source ; chaque résultat est exporté en PNG dans le dossier de destination.
 The amount must be within	La valeur doit être comprise entre
@@ -1477,6 +1490,7 @@ Transform Layer	Transformer le calque
 Transform Selection	Transformer la sélection
 Transparency	Transparence
 Transparent Pixels	Pixels transparents
+Trim	Rogner
 Trim Away	Supprimer
 Trim…	Rogner…
 Tritone	Trichromie

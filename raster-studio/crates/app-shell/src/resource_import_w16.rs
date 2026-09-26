@@ -10,6 +10,7 @@
 //! | `.acv` (Photoshop Curves preset) | a **Curves adjustment layer** on the active document with the file's composite, red, green and blue curves (one undo step). This build's Curves dialog keeps no list of saved presets for a file to join, so the curve arrives as a layer, the way a `.cube` arrives as a Color Lookup layer; extra curves a CMYK preset carries are ignored |
 //! | `.3dl` (Autodesk / Lustre 3D LUT) | a **Color Lookup** adjustment layer: the input mesh line gives the edge (or a `Mesh a b` header, `2^a + 1`), the entries are integers scaled by the output depth (`Mesh`'s, else the smallest of 10, 12 or 16 bits that holds the largest entry), blue varying fastest |
 //! | `.look` (SpeedGrade look, XML) | a **Color Lookup** layer from its `<LUT>`: `<size>` and `<data>`, hexadecimal little-endian `f32` RGB triples. The order is taken as `.cube`'s (red fastest); no SpeedGrade-written file was available to confirm it |
+//! | `.kra` / `.dxf` (by content) | a new **layered document** ([`layered`]): Krita's layers and groups, a DXF's entities as vector layers |
 //!
 //! Every file is read through a size cap before it is parsed, and every
 //! table is validated by [`adjustments::Lut3d::new`] (edge 2..=65, finite).
@@ -28,13 +29,18 @@ pub const W16_RESOURCE_EXTENSIONS: &[&str] = &["acv", "3dl", "look"];
 /// Largest file read: a 65-point `.3dl` is ~275k short lines.
 const MAX_BYTES: u64 = 16 << 20;
 
-/// Whether File > Open routes `path` here.
+/// W16-L: a Krita `.kra` and an AutoCAD `.dxf` open as their layers.
+#[path = "import_layered_w16.rs"]
+pub(crate) mod layered;
+
+/// Whether File > Open routes `path` here: a curves preset or a LUT (by
+/// extension), or a `.kra` / `.dxf` that opens as layers (by content).
 pub fn is_w16_resource_path(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
         W16_RESOURCE_EXTENSIONS
             .iter()
             .any(|x| x.eq_ignore_ascii_case(e))
-    })
+    }) || layered::layered_format(path).is_some()
 }
 
 fn read_capped(path: &Path) -> Result<Vec<u8>, String> {
@@ -230,9 +236,13 @@ pub fn parse_look(name: &str, text: &str) -> Result<Lut3d, AdjustmentError> {
 }
 
 impl Editor {
-    /// Route a `.acv` / `.3dl` / `.look` to its layer; `None` when `path` is
-    /// none of them.
+    /// Route a `.acv` / `.3dl` / `.look` to its layer, and a `.kra` / `.dxf`
+    /// to its layered document; `None` when `path` is none of them.
     pub fn open_w16_resource(&mut self, path: &Path) -> Option<Result<Effect, ActionError>> {
+        // A `.kra` / `.dxf` opens as a layered document.
+        if let Some(result) = self.open_layered_w16(path) {
+            return Some(result);
+        }
         if !is_w16_resource_path(path) {
             return None;
         }

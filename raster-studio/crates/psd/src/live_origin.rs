@@ -3,8 +3,8 @@
 //! rectangle with per-corner radii (`keyOriginType` 2, its radii in
 //! `keyOriginRRectRadii`), an ellipse (5) and a line (4, its ends in
 //! `keyOriginLineStart` / `keyOriginLineEnd` and its weight in
-//! `keyOriginLineWeight`) — the keys Photoshop and Photopea (`H.ol.LC`)
-//! write — and the reader that turns such a block back into a
+//! `keyOriginLineWeight`, its arrowheads in `keyOriginLineArr*`) — the
+//! keys Photoshop and Photopea (`H.ol.LC`) write — and the reader that turns such a block back into a
 //! [`LiveShape`]. Every value is in canvas pixels.
 //!
 //! Polygons and stars have no origination here (Photoshop's polygon keys are
@@ -71,10 +71,27 @@ pub fn encode_live_origination(live: &LiveShape) -> Option<Vec<u8>> {
             x2,
             y2,
             weight,
+            arrows,
         } => {
             let _ = key.push("keyOriginLineStart", point(x1, y1));
             let _ = key.push("keyOriginLineEnd", point(x2, y2));
             let _ = key.push("keyOriginLineWeight", Value::Double(weight));
+            // Photopea's `H.ol.a1N`: the heads' switches, their width and
+            // length in pixels and the concavity in whole percent.
+            if let Some(h) = arrows {
+                let _ = key.push("keyOriginLineArrowSt", Value::Bool(h.start));
+                let _ = key.push("keyOriginLineArrowEnd", Value::Bool(h.end));
+                let _ = key.push(
+                    "keyOriginLineArrWdth",
+                    Value::Double(weight * h.width_pct / 100.0),
+                );
+                let _ = key.push(
+                    "keyOriginLineArrLngth",
+                    Value::Double(weight * h.length_pct / 100.0),
+                );
+                let conc = h.concavity_pct.round().clamp(-50.0, 50.0) as i32;
+                let _ = key.push("keyOriginLineArrConc", Value::Integer(conc));
+            }
         }
         _ => {}
     }
@@ -137,12 +154,42 @@ pub fn decode_live_origination(data: &[u8], opts: &ReadOptions) -> Option<LiveSh
         4 => {
             let start = key.descriptor("keyOriginLineStart")?;
             let end = key.descriptor("keyOriginLineEnd")?;
+            let weight = key.number("keyOriginLineWeight").unwrap_or(1.0);
+            // Photopea's `H.ol.as8`: all five arrow keys or none.
+            let flag = |k: &str| match key.get(k) {
+                Some(Value::Bool(b)) => Some(*b),
+                _ => None,
+            };
+            let arrows = (|| {
+                let (st, en) = (
+                    flag("keyOriginLineArrowSt")?,
+                    flag("keyOriginLineArrowEnd")?,
+                );
+                let wd = key.number("keyOriginLineArrWdth")?;
+                let ln = key.number("keyOriginLineArrLngth")?;
+                let conc = key.number("keyOriginLineArrConc")?;
+                let pct = |px: f64| {
+                    if weight > 0.0 {
+                        px / weight * 100.0
+                    } else {
+                        0.0
+                    }
+                };
+                (st || en).then(|| layer_model::LiveArrows {
+                    start: st,
+                    end: en,
+                    width_pct: pct(wd),
+                    length_pct: pct(ln),
+                    concavity_pct: conc,
+                })
+            })();
             LiveShape::Line {
                 x1: start.number("Hrzn")?,
                 y1: start.number("Vrtc")?,
                 x2: end.number("Hrzn")?,
                 y2: end.number("Vrtc")?,
-                weight: key.number("keyOriginLineWeight").unwrap_or(1.0),
+                weight,
+                arrows,
             }
         }
         _ => return None,
@@ -186,6 +233,22 @@ mod tests {
                 x2: 30.0,
                 y2: 12.0,
                 weight: 3.0,
+                arrows: None,
+            },
+            // W16-G: a line keeps its heads through `keyOriginLineArr*`.
+            LiveShape::Line {
+                x1: 1.0,
+                y1: 2.0,
+                x2: 30.0,
+                y2: 12.0,
+                weight: 4.0,
+                arrows: Some(layer_model::LiveArrows {
+                    start: true,
+                    end: true,
+                    width_pct: 500.0,
+                    length_pct: 1000.0,
+                    concavity_pct: 20.0,
+                }),
             },
         ] {
             let bytes = encode_live_origination(&live).expect("encodes");

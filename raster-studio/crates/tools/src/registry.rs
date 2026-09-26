@@ -172,6 +172,10 @@ const PIXEL_KEYS: &[&str] = &[
     "space_before",
     "space_after",
     "curve_fit",
+    // The Parametric Shape's Corner Radius and Width (its `weight` key),
+    // both px on Photopea's bar.
+    "corner_radius",
+    "weight",
     crate::transform::keys::X,
     crate::transform::keys::Y,
 ];
@@ -219,8 +223,10 @@ pub fn float_display(key: &str, label: &str, min: f32, max: f32) -> FloatDisplay
     if fraction && PERCENT_FRACTION_KEYS.contains(&key) {
         return FloatDisplay::new(FloatUnit::Percent, 100.0, 0);
     }
-    if key == "radius" && label == "Strength" {
-        return FloatDisplay::new(FloatUnit::Plain, 1.0, 1);
+    if label == "Strength" && !fraction && max > 0.0 {
+        // Photopea's Blur / Sharpen Strength is 1-100 %: the tool's top
+        // (the Blur's 64 px radius, the Sharpen's 4x amount) reads 100%.
+        return FloatDisplay::new(FloatUnit::Percent, 100.0 / max, 0);
     }
     if PIXEL_KEYS.contains(&key) {
         return FloatDisplay::new(FloatUnit::Pixels, 1.0, 1);

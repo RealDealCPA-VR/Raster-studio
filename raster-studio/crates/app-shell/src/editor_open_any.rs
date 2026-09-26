@@ -57,6 +57,8 @@ impl Editor {
             || Self::is_resource_path(path)
             // W13-K: a script opens in the File > Script window.
             || crate::script::is_script_path(path)
+            // W16-M: a video opens as a document holding a video layer.
+            || crate::timeline::video_layers::is_video_path(path)
     }
 
     /// W11-D: route a library file to its importer. `None` when `path` is
@@ -64,6 +66,11 @@ impl Editor {
     /// with the status line already set by the importer.
     pub fn open_resource_file(&mut self, path: &Path) -> Option<Result<Effect, ActionError>> {
         let failed = |e: String| ActionError::failed(Action::Open, e);
+        // W16-M: a video file opens as a video layer (Photopea: File >
+        // Open of an MP4), ahead of the image decode that refuses it.
+        if let Some(result) = self.open_video_file(path) {
+            return Some(result);
+        }
         // W9-K: a font file's faces load for the session and the Type
         // tool's Font list offers its family.
         if crate::dialogs::is_font_path(path) {

@@ -41,7 +41,7 @@ Add Media	Aggiungi media
 Add Noise…	Aggiungi disturbo…
 Add a layer mask	Aggiungi una maschera di livello
 Add a smart filter mask	Aggiungi una maschera per filtro avanzato
-Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read	Aggiungi un file video (MP4: H.264 o AV1) come livello video alla testina di riproduzione; l'audio non viene letto
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Inserisci un file immagine o video (File > Inserisci incorporato); un video diventa un livello video all'indicatore di riproduzione
 Add an adjustment layer	Aggiungi un livello di regolazione
 Add another instance of this effect	Aggiungi un'altra istanza di questo effetto
 Add current colour	Aggiungi il colore corrente
@@ -51,6 +51,7 @@ Add or remove room around the image. Pixels are not resampled.	Aggiunge o toglie
 Add shortcut	Aggiungi scelta rapida
 Add to Selection	Aggiungi alla selezione
 Adds one guide at a document coordinate, in pixels.	Aggiunge una guida a una coordinata del documento, in pixel.
+Adjustment	Regolazione
 Adjustments	Regolazioni
 Advanced	Avanzate
 Again	Di nuovo
@@ -539,6 +540,7 @@ File name	Nome file
 Files that fail are listed in batch-errors.txt in the destination.	I file non riusciti sono elencati in batch-errors.txt nella destinazione.
 Fill	Riempimento
 Fill Filter Mask	Riempi maschera filtro
+Fill Layer	Livello di riempimento
 Fill Mask	Riempi maschera
 Fill Screen	Riempi schermo
 Fill in File Info, or open a file that has EXIF, to embed metadata	Compila Info file, o apri un file con EXIF, per incorporare i metadati
@@ -553,6 +555,7 @@ Find Edges	Trova bordi
 First line	Prima riga
 Fish	Pesce
 Fisheye	Occhio di pesce
+Fit The Area	Adatta all'area
 Fit on Screen	Adatta allo schermo
 Fit the whole image in the window	Adatta l'intera immagine alla finestra
 Fixed height	Altezza fissa
@@ -712,6 +715,7 @@ Layer	Livello
 Layer Comps	Composizioni livelli
 Layer Edges	Bordi livello
 Layer Mask	Maschera di livello
+Layer Properties	Proprietà livello
 Layer Style	Stile livello
 Layer knocks out drop shadow	Il livello foratura l'ombra esterna
 Layer via Copy	Livello tramite copia
@@ -768,6 +772,7 @@ Lock all	Blocca tutto
 Lock pixels	Blocca pixel
 Lock position	Blocca posizione
 Lock transparent pixels	Blocca pixel trasparenti
+Long-tap as a right click	Pressione prolungata come clic destro
 Lookup table	Tabella di consultazione
 Luminance	Luminanza
 Luminance of the preview source; the markers are the black and white points.	Luminanza dell'origine dell'anteprima; i marcatori sono i punti del nero e del bianco.
@@ -787,6 +792,7 @@ Maps the active layer onto a palette as one undo step; the document stays RGB.	M
 Margins	Margini
 Mark this state so you can come back to it	Contrassegna questo stato per poterci tornare
 Mask	Maschera
+Mask Properties	Proprietà maschera
 Mask source	Origine maschera
 Match Color	Corrispondenza colore
 Match Color…	Corrispondenza colore…
@@ -847,6 +853,7 @@ New Adjustment Layer	Nuovo livello di regolazione
 New Channel	Nuovo canale
 New Document	Nuovo documento
 New Fill Layer	Nuovo livello di riempimento
+New Folder	Nuova cartella
 New Guide	Nuova guida
 New Guide Layout	Nuovo layout guide
 New Guide Layout…	Nuovo layout guide…
@@ -860,7 +867,9 @@ New Snapshot	Nuova istantanea
 New Spot Channel	Nuovo canale tinta piatta
 New Spot Channel…	Nuovo canale tinta piatta…
 New Style Preset	Nuovo stile predefinito
+New Video Group	Nuovo gruppo video
 New channel	Nuovo canale
+New folder	Nuova cartella
 New group	Nuovo gruppo
 New layer	Nuovo livello
 New layer comp	Nuova composizione livelli
@@ -961,6 +970,7 @@ Open a document to see its properties	Apri un documento per vederne le propriet�
 Open another document, or add another pixel layer, to match its colours.	Apri un altro documento, o aggiungi un altro livello di pixel, per farne corrispondere i colori.
 Open as	Apri come
 Open editor…	Apri editor…
+Open or close the folder	Apri o chiudi la cartella
 Open the Adjustments panel	Apri il pannello Regolazioni
 Open…	Apri…
 Operation	Operazione
@@ -1029,6 +1039,7 @@ Pinch…	Pizzica…
 Pixel Grid	Griglia pixel
 Pixel dimensions	Dimensioni in pixel
 Pixel mask	Maschera pixel
+Pixel to Pixel	Pixel per pixel
 Pixelate	Effetto pixel
 Pixels	Pixel
 Place Embedded…	Inserisci incorporato…
@@ -1239,6 +1250,7 @@ Select a layer to see its properties	Seleziona un livello per vederne le proprie
 Select a layer: a click on a style applies it to the active layer.	Seleziona un livello: un clic su uno stile lo applica al livello attivo.
 Select a path first	Seleziona prima un tracciato
 Select a text layer, or type into one: a click inserts the glyph at the caret.	Seleziona un livello di testo, o digita in uno: un clic inserisce il glifo nel punto di inserimento.
+Select a text layer to edit its type	Seleziona un livello di testo per modificarne il testo
 Select every pixel near one colour	Seleziona ogni pixel vicino a un colore
 Selection	Selezione
 Selection Edges	Bordi selezione
@@ -1262,6 +1274,7 @@ Shadows/Highlights…	Ombre/Luci…
 Shape	Forma
 Shape Dynamics	Dinamica forma
 Shape Mosaic…	Mosaico di forme…
+Shape Properties	Proprietà forma
 Sharpen	Contrasta
 Sharpen Edges	Contrasta bordi
 Sharpen More	Contrasta maggiormente
@@ -1364,6 +1377,7 @@ TGA…	TGA…
 TIF…	TIF…
 Templates	Modelli
 Text	Testo
+Text Properties	Proprietà testo
 Text overflows the box	Il testo supera il riquadro
 Text replacement	Sostituzione testo
 Texture Dilation…	Dilatazione texture…
@@ -1373,7 +1387,6 @@ The CSV ends inside a quoted field	Il CSV termina all'interno di un campo tra vi
 The CSV has a header but no data sets	Il CSV ha un'intestazione ma nessun set di dati
 The CSV is empty	Il CSV è vuoto
 The CSV names a variable that is not defined:	Il CSV nomina una variabile non definita:
-The active layer has no layer style to save	Il livello attivo non ha uno stile livello da salvare
 The active layer is not in the document	Il livello attivo non è nel documento
 The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	L'oggetto avanzato attivo mostra a turno ogni immagine della cartella di origine; ogni risultato viene esportato come PNG nella cartella di destinazione.
 The amount must be within	Il valore deve essere compreso tra
@@ -1477,6 +1490,7 @@ Transform Layer	Trasforma livello
 Transform Selection	Trasforma selezione
 Transparency	Trasparenza
 Transparent Pixels	Pixel trasparenti
+Trim	Rifila
 Trim Away	Rimuovi
 Trim…	Rifila…
 Tritone	Tricromia

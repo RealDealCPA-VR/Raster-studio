@@ -80,29 +80,113 @@ fn actions(intents: &[Intent]) -> Vec<MenuAction> {
         .collect()
 }
 
-#[test]
-fn the_view_tools_bars_fit_zoom_to_100_and_reset_the_rotation() {
-    for tool in [ToolId::Hand, ToolId::Zoom] {
-        let mut bar = Bar::new(tool);
-        assert_eq!(
-            actions(&bar.click(id(tool, FIT_KEY))),
-            vec![MenuAction::Zoom(ZoomCommand::FitOnScreen)],
-            "{tool:?}"
-        );
-        assert_eq!(
-            actions(&bar.click(id(tool, PIXEL_KEY))),
-            vec![MenuAction::Zoom(ZoomCommand::ActualPixels)],
-            "{tool:?}"
-        );
+/// Every string one frame of the bar painted, trimmed.
+fn painted(bar: &mut Bar) -> Vec<String> {
+    fn walk(shapes: &[egui::Shape], out: &mut Vec<String>) {
+        for shape in shapes {
+            match shape {
+                egui::Shape::Text(t) => out.push(t.galley.text().trim().to_string()),
+                egui::Shape::Vec(inner) => walk(inner, out),
+                _ => {}
+            }
+        }
     }
+    for _ in 0..2 {
+        bar.frame(Vec::new());
+    }
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(6000.0, 800.0),
+        )),
+        ..Default::default()
+    };
+    let w = &mut bar.w;
+    let full = bar.ctx.run(input, |ctx| tool_options(w, ctx));
+    let shapes: Vec<egui::Shape> = full.shapes.into_iter().map(|c| c.shape).collect();
+    let mut out = Vec::new();
+    walk(&shapes, &mut out);
+    out
+}
+
+fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+    egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    }
+}
+
+#[test]
+fn the_zoom_bar_is_photopeas_pixel_to_pixel_and_fit_the_area() {
+    let mut bar = Bar::new(ToolId::Zoom);
+    let words = painted(&mut bar);
+    for caption in ["Pixel to Pixel", "Fit The Area"] {
+        assert!(words.iter().any(|w| w == caption), "{caption}: {words:?}");
+    }
+    assert_eq!(
+        actions(&bar.click(id(ToolId::Zoom, PIXEL_KEY))),
+        vec![MenuAction::Zoom(ZoomCommand::ActualPixels)]
+    );
+    assert_eq!(
+        actions(&bar.click(id(ToolId::Zoom, FIT_KEY))),
+        vec![MenuAction::Zoom(ZoomCommand::FitOnScreen)]
+    );
+    // Photopea's Hand bar has neither (its one control, All Documents, is
+    // not built), nor has a tool without the row.
+    for tool in [ToolId::Hand, ToolId::Brush] {
+        let mut other = Bar::new(tool);
+        assert!(other.rect(id(tool, FIT_KEY)).is_none(), "{tool:?}");
+        assert!(other.rect(id(tool, PIXEL_KEY)).is_none(), "{tool:?}");
+    }
+}
+
+#[test]
+fn the_rotate_view_bar_types_an_angle_and_resets() {
+    use crate::panels::panel_menus_w16::{take_requests, PanelRequest};
+    let _ = take_requests();
     let mut bar = Bar::new(ToolId::RotateView);
+    let words = painted(&mut bar);
+    for caption in ["Angle", "Reset"] {
+        assert!(words.iter().any(|w| w == caption), "{caption}: {words:?}");
+    }
+    // Enter commits what was typed as the Navigator's own request.
+    bar.click(id(ToolId::RotateView, ROTATE_ANGLE_KEY));
+    bar.frame(vec![
+        key(egui::Key::A, egui::Modifiers::COMMAND),
+        egui::Event::Text("30".to_string()),
+    ]);
+    bar.frame(vec![key(egui::Key::Enter, egui::Modifiers::default())]);
+    assert_eq!(take_requests(), vec![PanelRequest::SetViewAngle(30.0)]);
     assert_eq!(
         actions(&bar.click(id(ToolId::RotateView, ROTATE_RESET_KEY))),
         vec![MenuAction::ResetViewRotation]
     );
-    // A tool without the row does not draw it.
-    let mut brush = Bar::new(ToolId::Brush);
-    assert!(brush.rect(id(ToolId::Brush, FIT_KEY)).is_none());
+}
+
+#[test]
+fn the_bar_captions_are_drawn_in_the_active_language() {
+    crate::strings::with_locale(crate::strings::Locale::De, || {
+        let mut crop = Bar::new(ToolId::Crop);
+        crop.click(id(ToolId::Crop, CROP_BY_KEY));
+        let words = painted(&mut crop);
+        for caption in ["Alle Ebenen", "Aktuelle Ebene", "Auswahl"] {
+            assert!(words.iter().any(|w| w == caption), "{caption}: {words:?}");
+        }
+        let mut marquee = Bar::new(ToolId::RectMarquee);
+        let words = painted(&mut marquee);
+        assert!(
+            words.iter().any(|w| w == "Kante verbessern\u{2026}"),
+            "Refine Edge in German: {words:?}"
+        );
+        assert!(!words.iter().any(|w| w.starts_with("Refine Edge")));
+        let mut rotate = Bar::new(ToolId::RotateView);
+        let words = painted(&mut rotate);
+        assert!(words.iter().any(|w| w == "Winkel"), "{words:?}");
+        assert!(words.iter().any(|w| w == "Zur\u{fc}cksetzen"), "{words:?}");
+    });
 }
 
 #[test]
@@ -118,6 +202,21 @@ fn selection_bars_offer_refine_edge_and_the_wand_group_select_subject() {
             .is_none(),
         "the marquee has no Select Subject in Photopea"
     );
+    // Every selection bar has Refine Edge; only the wand group (Magic
+    // Wand, Quick Selection, Object Selection) leads with Select Subject.
+    for tool in SELECTION_TOOLS {
+        let mut bar = Bar::new(tool);
+        assert!(bar.rect(id(tool, REFINE_EDGE_KEY)).is_some(), "{tool:?}");
+        let wand_group = matches!(
+            tool,
+            ToolId::MagicWand | ToolId::QuickSelect | ToolId::ObjectSelection
+        );
+        assert_eq!(
+            bar.rect(id(tool, SELECT_SUBJECT_KEY)).is_some(),
+            wand_group,
+            "{tool:?}: Select Subject only on the wand group"
+        );
+    }
     let mut wand = Bar::new(ToolId::MagicWand);
     assert_eq!(
         actions(&wand.click(id(ToolId::MagicWand, SELECT_SUBJECT_KEY))),
@@ -186,6 +285,11 @@ fn crop_by_lists_photopeas_four_rows_and_current_layer_crops_to_it() {
     bar.click(id(ToolId::Crop, CROP_BY_KEY));
     for action in CROP_BY {
         assert!(bar.rect(crop_by_id(action)).is_some(), "{action:?} row");
+    }
+    // In Photopea's words (its string table's 17.0, 17.1, 11.12.0, 17.2).
+    let words = painted(&mut bar);
+    for caption in ["All Layers", "Current Layer", "Trim", "Selection"] {
+        assert!(words.iter().any(|w| w == caption), "{caption}: {words:?}");
     }
     assert_eq!(
         actions(&bar.click(crop_by_id(MenuAction::CropToLayer))),

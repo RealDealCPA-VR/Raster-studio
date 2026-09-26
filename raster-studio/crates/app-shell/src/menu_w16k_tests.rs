@@ -92,7 +92,7 @@ fn boards(ed: &Editor) -> Vec<layer_model::Artboard> {
 }
 
 // ---------------------------------------------------------------------------
-// View > Mode, View > Show > Paths
+// View > Mode, View > Show
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -122,24 +122,20 @@ fn view_mode_rows_set_the_screen_mode() {
     }
 }
 
+/// Round 3: the canvas path overlay (chrome.rs `paint_live_session`) reads
+/// no view flag, so View > Show offers no Paths row that would tick and
+/// hide nothing. Every row the shell's View > Show carries must be a flag
+/// some painter reads; today that is Slices alone.
 #[test]
-fn view_show_lists_paths_and_it_toggles_as_a_view_flag() {
+fn view_show_offers_no_inert_paths_row() {
     let dir = tempfile::tempdir().unwrap();
     let ed = editor_with_doc(dir.path(), 8, 8);
     let show = submenu(&ed, "View", &["Show"]);
-    let paths = MenuAction::ToggleView(ui::ViewFlag::Paths);
-    assert_eq!(show.first(), Some(&paths), "Paths sits above Slices");
-    let mut w = ui::Workspace::new();
-    assert!(
-        w.view_flags.get(ui::ViewFlag::Paths),
-        "paths show by default"
+    assert_eq!(
+        show,
+        vec![MenuAction::ToggleView(ui::ViewFlag::Slices)],
+        "View > Show carries only rows whose flag a painter reads"
     );
-    let ctx = super::context(&mut editor_with_doc(dir.path(), 8, 8), &w);
-    let ui::menu::Resolution::Enabled(intent) = paths.resolve(&ctx) else {
-        panic!("View > Show > Paths is greyed");
-    };
-    w.absorb(&intent);
-    assert!(!w.view_flags.get(ui::ViewFlag::Paths));
 }
 
 // ---------------------------------------------------------------------------
@@ -420,6 +416,57 @@ fn a_page_with_a_blend_mode_goes_out_as_one_image() {
     assert_eq!(scene.pages[0].counts(), (0, 1));
 }
 
+/// A 60 x 30 white document holding one text layer, "Hi".
+fn doc_with_text(dir: &Path) -> Editor {
+    let mut ed = editor_with_doc(dir, 60, 30);
+    let text = Layer::with_kind(
+        "Hi",
+        LayerKind::Text(layer_model::TextLayer {
+            text: "Hi".to_string(),
+            size_px: 24.0,
+            ..layer_model::TextLayer::default()
+        }),
+    );
+    let id = text.id;
+    ed.apply_command(Command::create_layer(text));
+    ed.set_layer_selection(vec![id], Some(id));
+    ed
+}
+
+#[test]
+fn a_text_layer_exports_as_a_vector_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ed = doc_with_text(dir.path());
+    // The page every vector writer (PDF, EMF, DXF) encodes: the white
+    // background layer as an image, the text on top as one path.
+    let scene = {
+        let open = ed.active().unwrap();
+        super::w16k::vector_doc(&open.document, &open.tiles).unwrap()
+    };
+    assert_eq!(scene.pages.len(), 1);
+    let ev::Item::Path(glyphs) = scene.pages[0].items.last().expect("an item") else {
+        panic!(
+            "the text went out as an image: {:?}",
+            scene.pages[0].counts()
+        );
+    };
+    assert!(
+        glyphs.segs.len() > 8,
+        "the glyph outlines: {} segments",
+        glyphs.segs.len()
+    );
+    // Through Export As: a one-page PDF, and the glyphs as DXF polylines
+    // (a DXF carries no images, so they can only be the text).
+    let pdf = std::fs::read(export(&mut ed, ExportFormat::Pdf, &dir.path().join("p"))).unwrap();
+    assert_eq!(raster::codec::formats::pdf::page_count(&pdf).unwrap(), 1);
+    let dxf =
+        std::fs::read_to_string(export(&mut ed, ExportFormat::Dxf, &dir.path().join("d"))).unwrap();
+    assert!(
+        dxf.matches("\nPOLYLINE\n").count() >= 2,
+        "the two glyphs are polylines: {dxf}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // File > Open: one-page PDF, and one decode per flat open
 // ---------------------------------------------------------------------------
@@ -460,6 +507,63 @@ fn a_one_page_pdf_asks_through_the_import_dialog_and_an_ai_does_not() {
     ed.open_paths(std::slice::from_ref(&ai));
     assert_eq!(ed.documents().len(), 1, "an .ai opens as a picture");
     assert!(crate::editor::open_any::w13x7::take_pending().is_none());
+}
+
+/// A one-page PDF holding only a red square path.
+fn one_page_vector_pdf() -> Vec<u8> {
+    ev::encode_pdf(&ev::VectorDoc {
+        pages: vec![ev::Page {
+            width: 20,
+            height: 20,
+            items: vec![ev::Item::Path(ev::VectorPath {
+                segs: vec![
+                    ev::Seg::Move([2.0, 2.0]),
+                    ev::Seg::Line([12.0, 2.0]),
+                    ev::Seg::Line([12.0, 12.0]),
+                    ev::Seg::Line([2.0, 12.0]),
+                    ev::Seg::Close,
+                ],
+                fill: Some(ev::Paint {
+                    rgb: [255, 0, 0],
+                    alpha: 1.0,
+                }),
+                even_odd: false,
+                stroke: None,
+            })],
+        }],
+        title: String::new(),
+    })
+    .unwrap()
+}
+
+#[test]
+fn a_one_page_pdf_of_paths_opens_its_layers_without_the_dialog() {
+    let dir = tempfile::tempdir().unwrap();
+    let pdf = dir.path().join("shapes.pdf");
+    std::fs::write(&pdf, one_page_vector_pdf()).unwrap();
+    let mut ed = editor_in(dir.path());
+    let _ = crate::editor::open_any::w13x7::take_pending();
+    ed.open_paths(std::slice::from_ref(&pdf));
+    assert!(
+        crate::editor::open_any::w13x7::take_pending().is_none(),
+        "no import dialog for a page that reads as layers"
+    );
+    assert_eq!(ed.documents().len(), 1, "it opened at once");
+    let doc = &ed.active().unwrap().document;
+    let shapes = doc
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .filter(|id| {
+            doc.layers
+                .get(*id)
+                .is_some_and(|l| matches!(l.kind, LayerKind::Shape(_)))
+        })
+        .count();
+    assert_eq!(
+        shapes, 1,
+        "the square is a live shape layer (W16-I's route)"
+    );
 }
 
 static HEIC: &[u8] =
@@ -639,4 +743,239 @@ fn the_script_window_runs_a_demo_and_saves_and_deletes_a_script() {
     super::perform(MenuAction::Script, &mut ed).unwrap();
     assert!(!file.exists());
     assert!(crate::script::with_window(|w| w.saved().is_empty()).unwrap());
+}
+
+// ---------------------------------------------------------------------------
+// The Pencil bar's pressure toggle, to the stroke
+// ---------------------------------------------------------------------------
+
+/// One Pencil press at document (16, 16) of a white 32x32 document at 25%
+/// stylus pressure, after clicking the bar's Opacity from Pressure toggle in
+/// a headless frame of the whole chrome when `toggle` (the brush it sends
+/// back applied as the shell applies it); the red channel left there.
+fn pencil_press_at_quarter_pressure(toggle: bool) -> u8 {
+    use glam::Vec2;
+    use ui::canvas::{PointerInput, PointerPhase};
+    let dir = tempfile::tempdir().unwrap();
+    let mut ed = editor_with_doc(dir.path(), 32, 32);
+    let viewport = Vec2::new(200.0, 160.0);
+    {
+        let doc = ed.active_mut().unwrap();
+        doc.set_viewport(viewport);
+        doc.camera.zoom = 1.0;
+        doc.camera.center = Vec2::new(16.0, 16.0);
+    }
+    ed.set_tool(tools::ToolId::Pencil);
+    ed.set_foreground([0.0, 0.0, 0.0, 1.0]);
+    let ctx = egui::Context::default();
+    design::apply_theme(&ctx, design::Theme::Dark);
+    let mut chrome = Chrome::new();
+    let mut frame = |ed: &mut Editor, events: Vec<egui::Event>| {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(6000.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let mut out = ChromeOutput::default();
+        let _ = ctx.run(input, |ctx| out = chrome.ui(ctx, ed));
+        if let Some(brush) = out.set_brush {
+            ed.set_brush(brush);
+        }
+    };
+    for _ in 0..3 {
+        frame(&mut ed, Vec::new());
+    }
+    if toggle {
+        let id = ui::view::ids::tool_option(tools::ToolId::Pencil, "opacity_pressure");
+        let at = ctx
+            .read_response(id)
+            .expect("the Pencil bar draws Opacity from Pressure")
+            .rect
+            .center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        frame(
+            &mut ed,
+            vec![egui::Event::PointerMoved(at), press(true), press(false)],
+        );
+    }
+    assert_eq!(
+        ed.brush_for(tools::ToolId::Pencil).opacity_pressure,
+        toggle,
+        "the toggle is what the Pencil paints with"
+    );
+    let at = viewport * 0.5;
+    let mut pointer = crate::tool_input::ToolPointer::new();
+    pointer.handle(
+        &mut ed,
+        PointerInput::at(PointerPhase::Down, at).with_pressure(0.25),
+        false,
+        &[],
+    );
+    pointer.handle(
+        &mut ed,
+        PointerInput::at(PointerPhase::Up, at).with_pressure(0.25),
+        false,
+        &[],
+    );
+    let px = ed
+        .active_mut()
+        .unwrap()
+        .composite(raster::PixelRect::new(0, 0, 32, 32))
+        .unwrap();
+    px[((16 * 32 + 16) * 4) as usize]
+}
+
+#[test]
+fn the_pencil_bars_opacity_from_pressure_toggle_reaches_the_stroke() {
+    assert_eq!(
+        pencil_press_at_quarter_pressure(false),
+        0,
+        "off: a light press still paints solid black"
+    );
+    let light = pencil_press_at_quarter_pressure(true);
+    assert!(
+        (100..255).contains(&light),
+        "on: a quarter-pressure press paints a light grey, got {light}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The Rotate View and Zoom bars, through a headless frame of the chrome
+// ---------------------------------------------------------------------------
+
+/// A headless window of the whole chrome over `ed`, applying every frame's
+/// output as the shell does.
+struct Frames {
+    ctx: egui::Context,
+    chrome: Chrome,
+}
+
+impl Frames {
+    fn new() -> Self {
+        let _ = ui::panels::panel_menus_w16::take_requests();
+        let ctx = egui::Context::default();
+        design::apply_theme(&ctx, design::Theme::Dark);
+        Self {
+            ctx,
+            chrome: Chrome::new(),
+        }
+    }
+
+    fn frame(&mut self, ed: &mut Editor, events: Vec<egui::Event>) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(6000.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let mut out = ChromeOutput::default();
+        let chrome = &mut self.chrome;
+        let _ = self.ctx.run(input, |ctx| out = chrome.ui(ctx, ed));
+        for command in out.commands {
+            ed.apply_command(command);
+        }
+        for action in out.menu {
+            let _ = super::perform(action, ed);
+        }
+        for action in out.actions {
+            let _ = ed.dispatch(action);
+        }
+    }
+
+    fn click(&mut self, ed: &mut Editor, id: egui::Id) {
+        for _ in 0..3 {
+            self.frame(ed, Vec::new());
+        }
+        let at = self
+            .ctx
+            .read_response(id)
+            .unwrap_or_else(|| panic!("{id:?} was not drawn"))
+            .rect
+            .center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        self.frame(
+            ed,
+            vec![egui::Event::PointerMoved(at), press(true), press(false)],
+        );
+        self.frame(ed, Vec::new());
+    }
+}
+
+fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+    egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    }
+}
+
+#[test]
+fn the_rotate_view_bars_angle_turns_the_view_and_reset_uprights_it() {
+    // `ui::view::toolbar::w16k`'s keys (the module is private to `ui`).
+    const ROTATE_ANGLE_KEY: &str = "w16k_rotate_angle";
+    const ROTATE_RESET_KEY: &str = "w16k_rotate_reset";
+    let dir = tempfile::tempdir().unwrap();
+    let mut ed = editor_with_doc(dir.path(), 32, 32);
+    ed.set_tool(tools::ToolId::RotateView);
+    let mut win = Frames::new();
+    let field = ui::view::ids::tool_option(tools::ToolId::RotateView, ROTATE_ANGLE_KEY);
+    win.click(&mut ed, field);
+    win.frame(
+        &mut ed,
+        vec![
+            key(egui::Key::A, egui::Modifiers::COMMAND),
+            egui::Event::Text("30".to_string()),
+        ],
+    );
+    win.frame(
+        &mut ed,
+        vec![key(egui::Key::Enter, egui::Modifiers::default())],
+    );
+    for _ in 0..2 {
+        win.frame(&mut ed, Vec::new());
+    }
+    let rotation = ed.active().unwrap().camera.rotation;
+    assert!(
+        (rotation - 30f32.to_radians()).abs() < 1e-4,
+        "the camera is at {} degrees",
+        rotation.to_degrees()
+    );
+    // Reset uprights it (View > Reset View Rotation's route).
+    win.click(
+        &mut ed,
+        ui::view::ids::tool_option(tools::ToolId::RotateView, ROTATE_RESET_KEY),
+    );
+    assert_eq!(ed.active().unwrap().camera.rotation, 0.0);
+}
+
+#[test]
+fn the_zoom_bars_pixel_to_pixel_sets_100_percent() {
+    const PIXEL_KEY: &str = "w16k_pixel_to_pixel";
+    let dir = tempfile::tempdir().unwrap();
+    let mut ed = editor_with_doc(dir.path(), 32, 32);
+    ed.active_mut().unwrap().camera.zoom = 3.0;
+    ed.set_tool(tools::ToolId::Zoom);
+    let mut win = Frames::new();
+    win.click(
+        &mut ed,
+        ui::view::ids::tool_option(tools::ToolId::Zoom, PIXEL_KEY),
+    );
+    assert_eq!(ed.active().unwrap().camera.zoom, 1.0);
 }

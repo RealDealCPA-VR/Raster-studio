@@ -300,7 +300,7 @@ fn read_tiles(
             .filter(|b| b.len() == len && !b.is_empty())
             .ok_or_else(|| bad("a tile runs past the file"))?;
         at += len;
-        if x.abs() > 1 << 30 || y.abs() > 1 << 30 {
+        if x.unsigned_abs() > 1 << 30 || y.unsigned_abs() > 1 << 30 {
             return Err(bad("a tile lies too far from the canvas"));
         }
         *budget = budget.checked_sub(tile_bytes as u64).ok_or_else(|| {
@@ -422,8 +422,17 @@ fn read_node(ctx: &mut Ctx<'_>, e: &Element, depth: usize) -> Result<Option<KraL
             };
             let (x, y, w, h, rgba) =
                 read_tiles(&data, space == "RGBA16", ctx.limits, &mut ctx.budget)?;
-            layer.x = x + offset("x");
-            layer.y = y + offset("y");
+            // The layer's offset is as untrusted as a tile's origin: bound
+            // it the same way so the sum can never overflow.
+            let (dx, dy) = (offset("x"), offset("y"));
+            if dx.unsigned_abs() > 1 << 30 || dy.unsigned_abs() > 1 << 30 {
+                return Err(malformed(
+                    NAME,
+                    format!("\u{201c}{name}\u{201d} lies too far from the canvas"),
+                ));
+            }
+            layer.x = x + dx;
+            layer.y = y + dy;
             layer.width = w;
             layer.height = h;
             layer.rgba = rgba;
@@ -678,6 +687,64 @@ pub(crate) mod tests {
             "{:?}",
             doc.notes
         );
+    }
+
+    /// A one-layer 64x64 `.kra` whose paint layer has offset `(x, y)` and
+    /// one tile at `tile`.
+    fn kra_with_offset(x: &str, y: &str, tile: (i64, i64)) -> Vec<u8> {
+        let maindoc = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<DOC syntaxVersion="2.0">
+ <IMAGE name="D" width="64" height="64" colorspacename="RGBA">
+  <layers>
+   <layer name="P" opacity="255" visible="1" compositeop="normal" x="{x}" y="{y}"
+          nodetype="paintlayer" filename="layer1" colorspacename="RGBA"/>
+  </layers>
+ </IMAGE>
+</DOC>"#
+        );
+        let px = vec![[1u8, 2, 3, 255]; 64 * 64];
+        super::super::super::more_formats_w16::test_util::zip(
+            &[
+                ("mimetype", super::super::MIMETYPE),
+                ("maindoc.xml", maindoc.as_bytes()),
+                (
+                    "D/layers/layer1",
+                    &layer_file(&[(tile.0, tile.1, tile_bytes(&px, false))]),
+                ),
+            ],
+            false,
+        )
+    }
+
+    #[test]
+    fn a_kra_layer_offset_or_tile_origin_at_the_i64_edges_errors_never_panics() {
+        let max = i64::MAX.to_string();
+        let min = i64::MIN.to_string();
+        let far = ((1i64 << 30) + 1).to_string();
+        for (x, y, tile) in [
+            (max.as_str(), "0", (64, 0)),
+            ("0", max.as_str(), (0, 64)),
+            (min.as_str(), "0", (0, 0)),
+            ("0", min.as_str(), (0, 0)),
+            (far.as_str(), "0", (0, 0)),
+            ("0", "0", (i64::MIN, 0)),
+            ("0", "0", (0, i64::MIN)),
+        ] {
+            let file = kra_with_offset(x, y, tile);
+            let r = read(&file, ImportLimits::default());
+            assert!(
+                matches!(&r, Err(CodecError::Unsupported(m)) if m.contains("too far")),
+                "x={x} y={y} tile={tile:?}: {r:?}"
+            );
+        }
+        // An in-range offset still reads.
+        let ok = read(
+            &kra_with_offset("-3", "7", (64, 0)),
+            ImportLimits::default(),
+        )
+        .unwrap();
+        assert_eq!((ok.layers[0].x, ok.layers[0].y), (61, 7));
     }
 
     #[test]

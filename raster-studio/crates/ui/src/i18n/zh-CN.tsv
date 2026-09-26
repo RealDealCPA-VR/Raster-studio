@@ -41,7 +41,7 @@ Add Media	添加媒体
 Add Noise…	添加杂色…
 Add a layer mask	添加图层蒙版
 Add a smart filter mask	添加智能滤镜蒙版
-Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read	在播放头处将视频文件（MP4：H.264 或 AV1）添加为视频图层；不读取音频
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	置入图像或视频文件（文件 > 置入嵌入对象）；视频会在播放头位置成为视频图层
 Add an adjustment layer	添加调整图层
 Add another instance of this effect	添加此效果的另一个实例
 Add current colour	添加当前颜色
@@ -51,6 +51,7 @@ Add or remove room around the image. Pixels are not resampled.	在图像周围�
 Add shortcut	添加快捷键
 Add to Selection	添加到选区
 Adds one guide at a document coordinate, in pixels.	在文档坐标处添加一条参考线，单位为像素。
+Adjustment	调整
 Adjustments	调整
 Advanced	高级
 Again	再次
@@ -539,6 +540,7 @@ File name	文件名
 Files that fail are listed in batch-errors.txt in the destination.	失败的文件会列在目标位置的 batch-errors.txt 中。
 Fill	填充
 Fill Filter Mask	填充滤镜蒙版
+Fill Layer	填充图层
 Fill Mask	填充蒙版
 Fill Screen	填充屏幕
 Fill in File Info, or open a file that has EXIF, to embed metadata	填写文件简介，或打开带有 EXIF 的文件，以嵌入元数据
@@ -553,6 +555,7 @@ Find Edges	查找边缘
 First line	首行
 Fish	鱼形
 Fisheye	鱼眼
+Fit The Area	适合区域
 Fit on Screen	按屏幕大小缩放
 Fit the whole image in the window	将整张图像适合窗口
 Fixed height	固定高度
@@ -712,6 +715,7 @@ Layer	图层
 Layer Comps	图层复合
 Layer Edges	图层边缘
 Layer Mask	图层蒙版
+Layer Properties	图层属性
 Layer Style	图层样式
 Layer knocks out drop shadow	图层挖空投影
 Layer via Copy	通过拷贝的图层
@@ -768,6 +772,7 @@ Lock all	全部锁定
 Lock pixels	锁定像素
 Lock position	锁定位置
 Lock transparent pixels	锁定透明像素
+Long-tap as a right click	长按作为右键单击
 Lookup table	查找表
 Luminance	明亮度
 Luminance of the preview source; the markers are the black and white points.	预览源的明亮度；标记为黑场和白场。
@@ -787,6 +792,7 @@ Maps the active layer onto a palette as one undo step; the document stays RGB.	�
 Margins	边距
 Mark this state so you can come back to it	标记此状态以便返回
 Mask	蒙版
+Mask Properties	蒙版属性
 Mask source	蒙版来源
 Match Color	匹配颜色
 Match Color…	匹配颜色…
@@ -847,6 +853,7 @@ New Adjustment Layer	新建调整图层
 New Channel	新建通道
 New Document	新建文档
 New Fill Layer	新建填充图层
+New Folder	新建文件夹
 New Guide	新建参考线
 New Guide Layout	新建参考线版面
 New Guide Layout…	新建参考线版面…
@@ -860,7 +867,9 @@ New Snapshot	新建快照
 New Spot Channel	新建专色通道
 New Spot Channel…	新建专色通道…
 New Style Preset	新建样式预设
+New Video Group	新建视频组
 New channel	新建通道
+New folder	新建文件夹
 New group	新建组
 New layer	新建图层
 New layer comp	新建图层复合
@@ -961,6 +970,7 @@ Open a document to see its properties	打开文档以查看其属性
 Open another document, or add another pixel layer, to match its colours.	打开另一个文档或添加另一个像素图层，以匹配其颜色。
 Open as	打开为
 Open editor…	打开编辑器…
+Open or close the folder	打开或关闭文件夹
 Open the Adjustments panel	打开调整面板
 Open…	打开…
 Operation	操作
@@ -1029,6 +1039,7 @@ Pinch…	挤压…
 Pixel Grid	像素网格
 Pixel dimensions	像素大小
 Pixel mask	像素蒙版
+Pixel to Pixel	像素对像素
 Pixelate	像素化
 Pixels	像素
 Place Embedded…	置入嵌入对象…
@@ -1239,6 +1250,7 @@ Select a layer to see its properties	选择一个图层以查看其属性
 Select a layer: a click on a style applies it to the active layer.	选择一个图层：单击样式即可将其应用到当前图层。
 Select a path first	请先选择路径
 Select a text layer, or type into one: a click inserts the glyph at the caret.	选择一个文字图层或在其中输入：单击会在插入点处插入字形。
+Select a text layer to edit its type	选择一个文字图层以编辑其文字
 Select every pixel near one colour	选择接近某种颜色的每个像素
 Selection	选区
 Selection Edges	选区边缘
@@ -1262,6 +1274,7 @@ Shadows/Highlights…	阴影/高光…
 Shape	形状
 Shape Dynamics	形状动态
 Shape Mosaic…	形状马赛克…
+Shape Properties	形状属性
 Sharpen	锐化
 Sharpen Edges	锐化边缘
 Sharpen More	进一步锐化
@@ -1364,6 +1377,7 @@ TGA…	TGA…
 TIF…	TIF…
 Templates	模板
 Text	文字
+Text Properties	文字属性
 Text overflows the box	文本溢出文本框
 Text replacement	文本替换
 Texture Dilation…	纹理扩张…
@@ -1373,7 +1387,6 @@ The CSV ends inside a quoted field	CSV 在带引号的字段内结束
 The CSV has a header but no data sets	CSV 有标题行但没有数据组
 The CSV is empty	CSV 为空
 The CSV names a variable that is not defined:	CSV 中命名了一个未定义的变量：
-The active layer has no layer style to save	当前图层没有可存储的图层样式
 The active layer is not in the document	当前图层不在文档中
 The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	当前智能对象依次显示源文件夹中的每张图像；每个结果都以 PNG 导出到目标文件夹。
 The amount must be within	数量必须在以下范围内
@@ -1477,6 +1490,7 @@ Transform Layer	变换图层
 Transform Selection	变换选区
 Transparency	透明度
 Transparent Pixels	透明像素
+Trim	裁切
 Trim Away	裁切掉
 Trim…	裁切…
 Tritone	三色调

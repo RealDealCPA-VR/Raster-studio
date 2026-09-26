@@ -294,6 +294,54 @@ pub(super) fn effect_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document, row: &
     }
 }
 
+/// How long Photopea's long tap is held before it counts as a right click
+/// (its `setTimeout(..., 600)`).
+pub(super) const LONG_TAP_SECS: f64 = 0.6;
+
+/// Photopea's "Long-tap as a right click": with the panel option on, a
+/// primary press held [`LONG_TAP_SECS`] on a row without moving answers
+/// true once (the caller opens the row menu); the release that ends that
+/// press does not close the menu it opened. Call it once per row per frame.
+pub(super) fn long_tap(w: &mut Workspace, ui: &Ui, response: &egui::Response) -> bool {
+    if !w.layers.long_tap_menu {
+        return false;
+    }
+    let key = egui::Id::new(("raster-layers-long-tap", response.id));
+    let fired: bool = ui.data(|d| d.get_temp(key)).unwrap_or(false);
+    if !response.is_pointer_button_down_on() {
+        if fired {
+            ui.data_mut(|d| d.remove::<bool>(key));
+            if ui.input(|i| i.pointer.any_released()) {
+                w.context_menu_fresh = true;
+            }
+        }
+        return false;
+    }
+    if fired {
+        return false;
+    }
+    let (held, primary, moved) = ui.input(|i| {
+        (
+            i.pointer.press_start_time().map(|start| i.time - start),
+            i.pointer.primary_down(),
+            i.pointer.is_decidedly_dragging(),
+        )
+    });
+    let Some(held) = held else {
+        return false;
+    };
+    if !primary || moved {
+        return false;
+    }
+    if held >= LONG_TAP_SECS {
+        ui.data_mut(|d| d.insert_temp(key, true));
+        return true;
+    }
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_secs_f64(LONG_TAP_SECS - held));
+    false
+}
+
 /// The label a panel-options row shows.
 fn options_label(item: OptionsItem) -> &'static str {
     match item {
@@ -303,6 +351,10 @@ fn options_label(item: OptionsItem) -> &'static str {
         }
         OptionsItem::ByLayer => crate::strings::tr("ui.docks.layers.options.by.layer"),
         OptionsItem::ByDocument => crate::strings::tr("ui.docks.layers.options.by.document"),
+        OptionsItem::Filter => crate::strings::tr("ui.docks.layers.options.filter"),
+        OptionsItem::BlendingOptions => crate::strings::tr("ui.docks.layers.options.blending"),
+        OptionsItem::Lock => crate::strings::tr("ui.docks.layers.options.lock"),
+        OptionsItem::LongTap => crate::strings::tr("ui.docks.layers.options.long.tap"),
     }
 }
 
@@ -398,6 +450,21 @@ pub(super) fn options_menu(w: &mut Workspace, ui: &mut Ui) {
                     );
                     if enabled && response.clicked() {
                         picked = Some(item);
+                    }
+                    // Photopea's rules: under Lock and under the long-tap
+                    // toggle.
+                    if item.separator_after() {
+                        let gap = Space::XSmall.pt();
+                        let (line, _) =
+                            ui.allocate_exact_size(Vec2::new(width, gap), Sense::hover());
+                        ui.painter().hline(
+                            line.x_range(),
+                            line.center().y,
+                            egui::Stroke::new(
+                                t.borders.hairline,
+                                color32(t.palette.color(ColorRole::SeparatorHairline)),
+                            ),
+                        );
                     }
                 }
             });

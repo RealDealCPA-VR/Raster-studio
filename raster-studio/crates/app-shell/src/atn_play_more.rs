@@ -101,164 +101,184 @@ fn set_selection(editor: &mut Editor, next: editor_core::Selection) -> Result<St
     Ok(String::new())
 }
 
+/// The adjustment a Levels … Channel Mixer step applies, with the undo
+/// label Image ▸ Adjustments gives it; `None` for any other step.
+fn adjustment_of(
+    op: &StepOp,
+) -> Option<(
+    Result<adjustments::Adjustment, adjustments::AdjustmentError>,
+    &'static str,
+)> {
+    use adjustments as a;
+    Some(match op {
+        StepOp::Levels(entries) => {
+            let levels = (|| {
+                let mut levels = a::Levels::IDENTITY;
+                for e in entries {
+                    let ch =
+                        a::LevelsChannel::new(unit(e.input[0]), unit(e.input[1]), e.gamma as f32)?
+                            .with_output(unit(e.output[0]), unit(e.output[1]))?;
+                    match e.channel {
+                        ToneChannel::Composite => levels.composite = ch,
+                        ToneChannel::Red => levels.red = ch,
+                        ToneChannel::Green => levels.green = ch,
+                        ToneChannel::Blue => levels.blue = ch,
+                    }
+                }
+                Ok(a::Adjustment::Levels(levels))
+            })();
+            (levels, "Apply Levels")
+        }
+        StepOp::Curves(entries) => {
+            let curves = (|| {
+                let mut curves = a::Curves::identity();
+                for e in entries {
+                    let points: Vec<[f32; 2]> =
+                        e.points.iter().map(|p| [unit(p[0]), unit(p[1])]).collect();
+                    let curve = a::Curve::new(&points)?;
+                    match e.channel {
+                        ToneChannel::Composite => curves.composite = curve,
+                        ToneChannel::Red => curves.red = curve,
+                        ToneChannel::Green => curves.green = curve,
+                        ToneChannel::Blue => curves.blue = curve,
+                    }
+                }
+                Ok(a::Adjustment::Curves(curves))
+            })();
+            (curves, "Apply Curves")
+        }
+        StepOp::HueSaturation {
+            hue,
+            saturation,
+            lightness,
+            colorize,
+        } => {
+            let hs = if *colorize {
+                a::Colorize::new(*hue as f32, pct(*saturation), pct(*lightness))
+                    .map(a::HueSaturation::colorized)
+            } else {
+                a::HueSaturation::new(*hue as f32, pct(*saturation), pct(*lightness))
+            };
+            (hs.map(a::Adjustment::HueSaturation), "Apply Hue/Saturation")
+        }
+        StepOp::ColorBalance {
+            shadows,
+            midtones,
+            highlights,
+            preserve_luminosity,
+        } => {
+            let cb = a::ColorBalance::new(shadows.map(pct), midtones.map(pct), highlights.map(pct))
+                .map(|cb| cb.with_preserve_luminosity(*preserve_luminosity));
+            (cb.map(a::Adjustment::ColorBalance), "Apply Color Balance")
+        }
+        StepOp::BlackAndWhite { weights, tint } => {
+            let bw = (|| {
+                let tint = match tint {
+                    Some(rgb) => {
+                        let (h, s) = hue_saturation(*rgb);
+                        Some(a::BwTint::new(h, s)?)
+                    }
+                    None => None,
+                };
+                Ok(a::Adjustment::BlackAndWhite(
+                    a::BlackAndWhite::new(weights.map(pct))?.with_tint(tint),
+                ))
+            })();
+            (bw, "Apply Black & White")
+        }
+        StepOp::Vibrance {
+            vibrance,
+            saturation,
+        } => (
+            a::Vibrance::new(pct(*vibrance), pct(*saturation)).map(a::Adjustment::Vibrance),
+            "Apply Vibrance",
+        ),
+        StepOp::Exposure {
+            exposure,
+            offset,
+            gamma,
+        } => (
+            a::ExposureParams::new(*exposure as f32, *offset as f32, *gamma as f32)
+                .map(a::Adjustment::Exposure),
+            "Apply Exposure",
+        ),
+        StepOp::Threshold { level } => (
+            a::Threshold::new(unit(*level)).map(a::Adjustment::Threshold),
+            "Apply Threshold",
+        ),
+        StepOp::Posterize { levels } => (
+            a::Posterize::new(*levels).map(a::Adjustment::Posterize),
+            "Apply Posterize",
+        ),
+        StepOp::GradientMap { stops, reverse } => {
+            let map = (|| {
+                let stops = stops
+                    .iter()
+                    .map(|(at, rgb)| {
+                        let at = if *reverse { 1.0 - at } else { *at };
+                        a::GradientStop::new(at as f32, rgb.map(unit))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(a::Adjustment::GradientMap(a::GradientMap::new(&stops)?))
+            })();
+            (map, "Apply Gradient Map")
+        }
+        StepOp::PhotoFilter {
+            color,
+            density,
+            preserve_luminosity,
+        } => (
+            a::PhotoFilter::new(color.map(unit), pct(*density)).map(|f| {
+                a::Adjustment::PhotoFilter(f.with_preserve_luminosity(*preserve_luminosity))
+            }),
+            "Apply Photo Filter",
+        ),
+        StepOp::ChannelMixer {
+            red,
+            green,
+            blue,
+            monochrome,
+        } => (
+            a::ChannelMixer::new([red.map(pct), green.map(pct), blue.map(pct)])
+                .map(|m| a::Adjustment::ChannelMixer(m.monochrome(*monochrome))),
+            "Apply Channel Mixer",
+        ),
+        _ => return None,
+    })
+}
+
+/// W16-H: the adjustment an adjustment-layer step holds: one of
+/// [`adjustment_of`]'s, or Brightness/Contrast (in `atn_play`'s units) or
+/// Invert.
+fn layer_adjustment(op: &StepOp) -> Result<adjustments::Adjustment, String> {
+    match op {
+        StepOp::BrightnessContrast {
+            brightness,
+            contrast,
+        } => {
+            let unit = |v: f64, full: f64| ((v / full) as f32).clamp(-1.0, 1.0);
+            adjustments::BrightnessContrast::new(unit(*brightness, 150.0), unit(*contrast, 100.0))
+                .map(adjustments::Adjustment::BrightnessContrast)
+                .map_err(|e| e.to_string())
+        }
+        StepOp::Invert => Ok(adjustments::Adjustment::Invert),
+        _ => match adjustment_of(op) {
+            Some((adjustment, _)) => adjustment.map_err(|e| e.to_string()),
+            None => Err(format!("{op:?} is not an adjustment a layer can hold")),
+        },
+    }
+}
+
 impl Editor {
     /// Perform one W16-H step; `None` for the W13-E steps `atn_play`
     /// performs itself.
     pub(super) fn perform_w16_op(&mut self, op: &StepOp) -> Option<Result<String, String>> {
-        use adjustments as a;
         use ui::dialogs::ParamValue as P;
+        if let Some((adjustment, label)) = adjustment_of(op) {
+            return Some(adjust(self, adjustment, label));
+        }
         let menu = |editor: &mut Editor, action| crate::menu_bridge::perform(action, editor);
         Some(match op {
-            StepOp::Levels(entries) => {
-                let levels = (|| {
-                    let mut levels = a::Levels::IDENTITY;
-                    for e in entries {
-                        let ch = a::LevelsChannel::new(
-                            unit(e.input[0]),
-                            unit(e.input[1]),
-                            e.gamma as f32,
-                        )?
-                        .with_output(unit(e.output[0]), unit(e.output[1]))?;
-                        match e.channel {
-                            ToneChannel::Composite => levels.composite = ch,
-                            ToneChannel::Red => levels.red = ch,
-                            ToneChannel::Green => levels.green = ch,
-                            ToneChannel::Blue => levels.blue = ch,
-                        }
-                    }
-                    Ok(a::Adjustment::Levels(levels))
-                })();
-                adjust(self, levels, "Apply Levels")
-            }
-            StepOp::Curves(entries) => {
-                let curves = (|| {
-                    let mut curves = a::Curves::identity();
-                    for e in entries {
-                        let points: Vec<[f32; 2]> =
-                            e.points.iter().map(|p| [unit(p[0]), unit(p[1])]).collect();
-                        let curve = a::Curve::new(&points)?;
-                        match e.channel {
-                            ToneChannel::Composite => curves.composite = curve,
-                            ToneChannel::Red => curves.red = curve,
-                            ToneChannel::Green => curves.green = curve,
-                            ToneChannel::Blue => curves.blue = curve,
-                        }
-                    }
-                    Ok(a::Adjustment::Curves(curves))
-                })();
-                adjust(self, curves, "Apply Curves")
-            }
-            StepOp::HueSaturation {
-                hue,
-                saturation,
-                lightness,
-                colorize,
-            } => {
-                let hs = if *colorize {
-                    a::Colorize::new(*hue as f32, pct(*saturation), pct(*lightness))
-                        .map(a::HueSaturation::colorized)
-                } else {
-                    a::HueSaturation::new(*hue as f32, pct(*saturation), pct(*lightness))
-                };
-                adjust(
-                    self,
-                    hs.map(a::Adjustment::HueSaturation),
-                    "Apply Hue/Saturation",
-                )
-            }
-            StepOp::ColorBalance {
-                shadows,
-                midtones,
-                highlights,
-                preserve_luminosity,
-            } => {
-                let cb =
-                    a::ColorBalance::new(shadows.map(pct), midtones.map(pct), highlights.map(pct))
-                        .map(|cb| cb.with_preserve_luminosity(*preserve_luminosity));
-                adjust(
-                    self,
-                    cb.map(a::Adjustment::ColorBalance),
-                    "Apply Color Balance",
-                )
-            }
-            StepOp::BlackAndWhite { weights, tint } => {
-                let bw = (|| {
-                    let tint = match tint {
-                        Some(rgb) => {
-                            let (h, s) = hue_saturation(*rgb);
-                            Some(a::BwTint::new(h, s)?)
-                        }
-                        None => None,
-                    };
-                    Ok(a::Adjustment::BlackAndWhite(
-                        a::BlackAndWhite::new(weights.map(pct))?.with_tint(tint),
-                    ))
-                })();
-                adjust(self, bw, "Apply Black & White")
-            }
-            StepOp::Vibrance {
-                vibrance,
-                saturation,
-            } => adjust(
-                self,
-                a::Vibrance::new(pct(*vibrance), pct(*saturation)).map(a::Adjustment::Vibrance),
-                "Apply Vibrance",
-            ),
-            StepOp::Exposure {
-                exposure,
-                offset,
-                gamma,
-            } => adjust(
-                self,
-                a::ExposureParams::new(*exposure as f32, *offset as f32, *gamma as f32)
-                    .map(a::Adjustment::Exposure),
-                "Apply Exposure",
-            ),
-            StepOp::Threshold { level } => adjust(
-                self,
-                a::Threshold::new(unit(*level)).map(a::Adjustment::Threshold),
-                "Apply Threshold",
-            ),
-            StepOp::Posterize { levels } => adjust(
-                self,
-                a::Posterize::new(*levels).map(a::Adjustment::Posterize),
-                "Apply Posterize",
-            ),
-            StepOp::GradientMap { stops, reverse } => {
-                let map = (|| {
-                    let stops = stops
-                        .iter()
-                        .map(|(at, rgb)| {
-                            let at = if *reverse { 1.0 - at } else { *at };
-                            a::GradientStop::new(at as f32, rgb.map(unit))
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    Ok(a::Adjustment::GradientMap(a::GradientMap::new(&stops)?))
-                })();
-                adjust(self, map, "Apply Gradient Map")
-            }
-            StepOp::PhotoFilter {
-                color,
-                density,
-                preserve_luminosity,
-            } => adjust(
-                self,
-                a::PhotoFilter::new(color.map(unit), pct(*density)).map(|f| {
-                    a::Adjustment::PhotoFilter(f.with_preserve_luminosity(*preserve_luminosity))
-                }),
-                "Apply Photo Filter",
-            ),
-            StepOp::ChannelMixer {
-                red,
-                green,
-                blue,
-                monochrome,
-            } => adjust(
-                self,
-                a::ChannelMixer::new([red.map(pct), green.map(pct), blue.map(pct)])
-                    .map(|m| a::Adjustment::ChannelMixer(m.monochrome(*monochrome))),
-                "Apply Channel Mixer",
-            ),
             StepOp::Crop { rect: None } => self.crop_to_selection(),
             StepOp::Crop {
                 rect: Some([l, t, r, b]),
@@ -461,8 +481,58 @@ impl Editor {
                 .dispatch(Action::Export)
                 .map(|_| String::new())
                 .map_err(|e| e.to_string()),
+            StepOp::MakeAdjustmentLayer(inner) => self.make_adjustment_layer(inner),
+            StepOp::SetAdjustmentLayer(inner) => self.set_adjustment_layer(inner),
             _ => return None,
         })
+    }
+
+    /// W16-H: Layer ▸ New Adjustment Layer ▸ … with the step's settings:
+    /// the menu row's own `CreateLayer` (its name, its place) holding them
+    /// instead of the identity, made the active layer as Photoshop leaves it.
+    fn make_adjustment_layer(&mut self, inner: &StepOp) -> Result<String, String> {
+        let kind = layer_adjustment(inner)?.to_layer_kind();
+        let id = ui::panels::properties::adjustment_id_of(&kind)
+            .filter(|id| id.is_layer())
+            .ok_or_else(|| format!("{inner:?} cannot be an adjustment layer"))?;
+        let editor_core::Command::CreateLayer { mut layer } = id.create_command() else {
+            return Err(format!("{} makes no layer", id.label()));
+        };
+        layer.kind = layer_model::LayerKind::Adjustment(layer_model::AdjustmentLayer { kind });
+        let new_id = layer.id;
+        self.apply_command(editor_core::Command::CreateLayer { layer });
+        self.set_active_layer(new_id);
+        Ok(String::new())
+    }
+
+    /// W16-H: the active adjustment layer's new settings, as the Properties
+    /// panel's edit (`SetLayerKind`). The active layer must be an adjustment
+    /// layer of the same adjustment, as Photoshop's step requires.
+    fn set_adjustment_layer(&mut self, inner: &StepOp) -> Result<String, String> {
+        let kind = layer_adjustment(inner)?.to_layer_kind();
+        let doc = self.active().ok_or("No document is open")?;
+        let layer_id = doc
+            .document
+            .active_layer()
+            .ok_or("there is no active layer")?;
+        let wanted = ui::panels::properties::adjustment_id_of(&kind);
+        match doc.document.layers.get(layer_id).map(|l| &l.kind) {
+            Some(layer_model::LayerKind::Adjustment(a))
+                if ui::panels::properties::adjustment_id_of(&a.kind) == wanted => {}
+            _ => {
+                return Err(format!(
+                    "the active layer is not a {} adjustment layer",
+                    wanted.map_or("matching", |id| id.label())
+                ))
+            }
+        }
+        self.apply_command(editor_core::Command::SetLayerKind {
+            layer_id,
+            kind: Box::new(layer_model::LayerKind::Adjustment(
+                layer_model::AdjustmentLayer { kind },
+            )),
+        });
+        Ok(String::new())
     }
 
     fn play_transform(

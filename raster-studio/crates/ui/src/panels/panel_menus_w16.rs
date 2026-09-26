@@ -4,12 +4,34 @@
 //!
 //! # The preset menus (Swatches, Brushes, Styles)
 //!
-//! Photopea's preset picker menu is, in its order: **Open .ACO/.ABR/.ASL**,
-//! **Export as .ACO/.ABR/.ASL**, **Name Change**, **Delete**, **Tiles/List**,
-//! **Define New** (and **New Folder**, which this build does not have: the
-//! three preset lists here are flat). The rows are drawn under the move
-//! controls the panel header's overflow button reveals, the way the Channels
-//! panel's own menu is ([`panel_menu`]).
+//! Photopea's Brushes and Styles menus are its app bundle's `cq` gallery
+//! menu, in this order: **Define New**, **Thumbnails / List** (here
+//! "Tiles/List"), **Load .ABR/.ASL** (here "Open .ABR…"/"Open .ASL…"),
+//! **Export as .ABR/.ASL**, **Name Change**, **Delete**, then the bundled
+//! library files it ships (which this build does not list). `cq` leaves
+//! Define New off the Styles (and Shapes) menu, so the Styles menu here has
+//! no Define New either (Layer > Layer Style > New Style Preset stays the
+//! way in).
+//!
+//! Photopea's Swatches (and Gradients) list is its folder gallery `gF`,
+//! whose own item menu (`gF.Zd`) replaces `cq`'s. Its order is **Open
+//! .ACO**, **Export as .ACO**, **Name Change**, **Delete**,
+//! **Tiles/List**, **Define New**, **New Folder**, and the Swatches menu
+//! here draws exactly those rows in that order. `gF` has folder header rows
+//! that open and close, and swatches dragged onto a folder go into it. The
+//! Swatches list here has the same ([`SwatchFolder`]): New Folder is the
+//! Swatches menu's last row, it makes an open folder named "New folder" and opens
+//! Name Change on it; a swatch dragged onto a folder header or onto a
+//! swatch in a folder goes into that folder, one dragged onto a top-level
+//! swatch comes back out (after the swatch it was dropped on); Name Change,
+//! Delete and Export act on a folder clicked in the list, and Delete takes
+//! the folder's swatches with it, as `gF`'s does. What differs: folders do
+//! not nest, they are drawn after the top-level swatches, and they last for
+//! the session (the palette the preferences file keeps has no folders).
+//!
+//! The rows are drawn under the move controls the panel header's overflow
+//! button reveals, the way the Channels panel's own menu is
+//! ([`panel_menu`]).
 //!
 //! Name Change, Delete and Export act on the item last clicked in the panel
 //! ([`selected`]); with nothing selected Export writes the whole list. The
@@ -237,6 +259,18 @@ pub mod ids {
     pub fn note_author(note: u64) -> egui::Id {
         egui::Id::new(("raster-w16-note-author", note))
     }
+    /// Swatch folder `index`'s header row.
+    pub fn swatch_folder(index: usize) -> egui::Id {
+        egui::Id::new(("raster-w16-swatch-folder", index))
+    }
+    /// Swatch folder `index`'s open/close chevron.
+    pub fn swatch_folder_toggle(index: usize) -> egui::Id {
+        egui::Id::new(("raster-w16-swatch-folder-toggle", index))
+    }
+    /// The Name Change field of a swatch folder.
+    pub fn folder_rename_field() -> egui::Id {
+        egui::Id::new("raster-w16-swatch-folder-rename")
+    }
     /// The Navigator's angle field.
     pub fn navigator_angle() -> egui::Id {
         egui::Id::new("raster-w16-navigator-angle")
@@ -291,7 +325,7 @@ pub(crate) fn panel_menu(
     panel: PanelId,
 ) {
     if let Some(library) = Library::of(panel) {
-        preset_menu(w, ui, doc, library);
+        preset_menu(w, ui, library);
     } else if panel == PanelId::History {
         history_menu(w, ui, doc, history);
     }
@@ -331,42 +365,312 @@ pub fn rename_swatch(w: &mut Workspace, index: usize, name: &str) -> bool {
     true
 }
 
-fn preset_menu(w: &mut Workspace, ui: &mut Ui, doc: &Document, library: Library) {
+// ---------------------------------------------------------------------------
+// Swatch folders
+// ---------------------------------------------------------------------------
+
+/// A folder in the Swatches list: Photopea's `gF` folder, a header row that
+/// opens and closes and holds the swatches dragged onto it. Members are
+/// named by colour ([`swatch_key`]), which the palette keeps unique.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SwatchFolder {
+    pub name: String,
+    pub open: bool,
+    pub members: Vec<[u8; 4]>,
+}
+
+/// What a swatch drag carries: the dragged swatch's colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SwatchDrag(pub [u8; 4]);
+
+/// Where a dragged swatch was dropped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SwatchDrop {
+    /// On folder `index`'s header: into the folder, first.
+    Folder(usize),
+    /// On the swatch of this colour: next to it, in its folder or at the top
+    /// level.
+    Swatch([u8; 4]),
+}
+
+/// A swatch's identity in a folder: its colour at 8-bit, the precision the
+/// palette tells colours apart at.
+pub fn swatch_key(rgba: [f32; 4]) -> [u8; 4] {
+    rgba.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+fn folders_key() -> egui::Id {
+    egui::Id::new("raster-w16-swatch-folders")
+}
+
+fn folder_selected_key() -> egui::Id {
+    egui::Id::new("raster-w16-swatch-folder-selected")
+}
+
+fn folder_rename_key() -> egui::Id {
+    egui::Id::new("raster-w16-swatch-folder-renaming")
+}
+
+/// The Swatches list's folders, in order.
+pub fn swatch_folders(ctx: &egui::Context) -> Vec<SwatchFolder> {
+    ctx.data(|d| d.get_temp::<Vec<SwatchFolder>>(folders_key()))
+        .unwrap_or_default()
+}
+
+/// Replace the Swatches list's folders.
+pub fn set_swatch_folders(ctx: &egui::Context, folders: Vec<SwatchFolder>) {
+    ctx.data_mut(|d| d.insert_temp(folders_key(), folders));
+}
+
+/// The folder whose header was last clicked, if any.
+pub fn selected_folder(ctx: &egui::Context) -> Option<usize> {
+    ctx.data(|d| d.get_temp::<Option<usize>>(folder_selected_key()))
+        .flatten()
+}
+
+/// Mark folder `index` (or none) as the one the menu acts on.
+pub fn set_selected_folder(ctx: &egui::Context, index: Option<usize>) {
+    ctx.data_mut(|d| d.insert_temp(folder_selected_key(), index));
+}
+
+/// The folder that holds swatch `key`, if one does.
+pub fn folder_of(folders: &[SwatchFolder], key: [u8; 4]) -> Option<usize> {
+    folders.iter().position(|f| f.members.contains(&key))
+}
+
+/// New Folder: an open folder named "New folder", selected, with Name
+/// Change opened on it, as Photopea's `gF` does. Returns its index.
+pub fn new_swatch_folder(ctx: &egui::Context) -> usize {
+    let mut folders = swatch_folders(ctx);
+    folders.push(SwatchFolder {
+        name: tr("ui.w16.swatches.new.folder").to_string(),
+        open: true,
+        members: Vec::new(),
+    });
+    let index = folders.len() - 1;
+    set_swatch_folders(ctx, folders);
+    set_selected(ctx, Library::Swatches, None);
+    set_selected_folder(ctx, Some(index));
+    ctx.data_mut(|d| {
+        d.insert_temp(rename_key(Library::Swatches), None::<usize>);
+        d.insert_temp(folder_rename_key(), Some(index));
+    });
+    index
+}
+
+/// Rename folder `index`. `false` when the name is blank or unchanged.
+pub fn rename_swatch_folder(ctx: &egui::Context, index: usize, name: &str) -> bool {
+    let name = name.trim();
+    let mut folders = swatch_folders(ctx);
+    match folders.get_mut(index) {
+        Some(folder) if !name.is_empty() && folder.name != name => {
+            folder.name = name.to_string();
+            set_swatch_folders(ctx, folders);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Open a closed folder, close an open one.
+pub fn toggle_swatch_folder(ctx: &egui::Context, index: usize) {
+    let mut folders = swatch_folders(ctx);
+    if let Some(folder) = folders.get_mut(index) {
+        folder.open = !folder.open;
+        set_swatch_folders(ctx, folders);
+    }
+}
+
+/// Delete folder `index` and the swatches in it, as Photopea's Delete does
+/// to a folder.
+pub fn delete_swatch_folder(w: &mut Workspace, ctx: &egui::Context, index: usize) -> bool {
+    let mut folders = swatch_folders(ctx);
+    if index >= folders.len() {
+        return false;
+    }
+    let gone = folders.remove(index);
+    for key in gone.members {
+        if let Some(i) = w
+            .swatches
+            .swatches()
+            .iter()
+            .position(|s| swatch_key(s.rgba) == key)
+        {
+            w.swatches.remove(i);
+        }
+    }
+    set_swatch_folders(ctx, folders);
+    set_selected_folder(ctx, None);
+    true
+}
+
+/// Carry out a swatch drag: `dragged` goes into the folder it was dropped
+/// on, or next to the swatch it was dropped on (inside that swatch's folder,
+/// or back at the top level after it). `false` when nothing moved.
+pub fn drop_swatch(
+    w: &mut Workspace,
+    ctx: &egui::Context,
+    dragged: [u8; 4],
+    target: SwatchDrop,
+) -> bool {
+    let mut folders = swatch_folders(ctx);
+    let index_of = |w: &Workspace, key: [u8; 4]| {
+        w.swatches
+            .swatches()
+            .iter()
+            .position(|s| swatch_key(s.rgba) == key)
+    };
+    let Some(from) = index_of(w, dragged) else {
+        return false;
+    };
+    let before = folders.clone();
+    for f in &mut folders {
+        f.members.retain(|k| *k != dragged);
+    }
+    match target {
+        SwatchDrop::Folder(i) => match folders.get_mut(i) {
+            Some(folder) => folder.members.insert(0, dragged),
+            None => return false,
+        },
+        SwatchDrop::Swatch(on) if on == dragged => return false,
+        SwatchDrop::Swatch(on) => match folder_of(&folders, on) {
+            Some(i) => {
+                let members = &mut folders[i].members;
+                let at = members.iter().position(|k| *k == on).map_or(0, |p| p + 1);
+                members.insert(at, dragged);
+            }
+            None => {
+                let Some(to) = index_of(w, on) else {
+                    return false;
+                };
+                let to = if from < to { to } else { to + 1 };
+                w.swatches.reorder(from, to);
+            }
+        },
+    }
+    let moved = folders != before || index_of(w, dragged) != Some(from);
+    set_swatch_folders(ctx, folders);
+    if moved {
+        set_selected(ctx, Library::Swatches, index_of(w, dragged));
+        set_selected_folder(ctx, None);
+    }
+    moved
+}
+
+/// The Define New row (not on the Styles menu, as in Photopea's `cq`): the
+/// current colour becomes a swatch, the current brush a brush preset.
+/// Returns whether the menu should close.
+fn define_new_row(w: &mut Workspace, ui: &mut Ui, library: Library) -> bool {
+    if library == Library::Styles
+        || !row(
+            ui,
+            library.panel(),
+            "define-new",
+            tr("ui.w16.menu.define.new"),
+            None,
+        )
+    {
+        return false;
+    }
+    match library {
+        Library::Swatches => {
+            let rgba = w.color.current();
+            let name = crate::panels::color::format_hex(rgba);
+            w.swatches.add(name, rgba);
+        }
+        Library::Brushes => {
+            let tool = w.palette.active();
+            let name = format!("Brush {}", w.brushes.len() + 1);
+            w.brushes.capture(&name, &w.options, tool);
+        }
+        Library::Styles => {}
+    }
+    true
+}
+
+/// The Tiles/List row: flips the panel between tiles and a named list.
+fn tiles_list_row(ui: &mut Ui, library: Library) {
+    if row(
+        ui,
+        library.panel(),
+        "tiles-list",
+        tr("ui.w16.menu.tiles.list"),
+        None,
+    ) {
+        let ctx = ui.ctx().clone();
+        let next = match view_mode(&ctx, library) {
+            ViewMode::Tiles => ViewMode::List,
+            ViewMode::List => ViewMode::Tiles,
+        };
+        set_view_mode(&ctx, library, next);
+    }
+}
+
+fn preset_menu(w: &mut Workspace, ui: &mut Ui, library: Library) {
     let ctx = ui.ctx().clone();
     let panel = library.panel();
     let names = names(w, &ctx, library);
     let chosen = selected(&ctx, library).filter(|i| *i < names.len());
+    // The Swatches list's folders, and the folder header last clicked.
+    let is_swatches = library == Library::Swatches;
+    let folders = if is_swatches {
+        swatch_folders(&ctx)
+    } else {
+        Vec::new()
+    };
+    let chosen_folder = if is_swatches {
+        selected_folder(&ctx).filter(|i| *i < folders.len())
+    } else {
+        None
+    };
     let none_selected = tr("ui.w16.menu.nothing.selected");
     let empty = tr("ui.w16.menu.library.empty");
-    let can_define: Option<&str> = match library {
-        Library::Styles => {
-            let styled = doc
-                .active_layer()
-                .and_then(|id| doc.layers.get(id))
-                .is_some_and(|l| !l.effects.is_default());
-            (!styled).then(|| tr("ui.w16.menu.styles.no.style"))
-        }
-        _ => None,
-    };
     let mut close = false;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = Space::Hair.pt();
+        // Brushes and Styles use Photopea's `cq` gallery order: Define New,
+        // Thumbnails/List, Load, Export as, Name Change, Delete (`cq` leaves
+        // Define New off the Styles menu). The Swatches list is Photopea's
+        // folder gallery `gF`, whose item menu (`gF.Zd`) reads Open .ACO,
+        // Export as .ACO, Name Change, Delete, Tiles/List, Define New, New
+        // Folder; those last three are drawn after Delete below.
+        if !is_swatches {
+            close |= define_new_row(w, ui, library);
+            tiles_list_row(ui, library);
+        }
         if row(ui, panel, "open", library.open_label(), None) {
             post(PanelRequest::OpenLibrary(library));
             close = true;
         }
-        let export_reason = names.is_empty().then_some(empty);
+        let folder_members: Option<Vec<(String, [f32; 4])>> = chosen_folder.map(|f| {
+            folders[f]
+                .members
+                .iter()
+                .filter_map(|k| {
+                    w.swatches
+                        .swatches()
+                        .iter()
+                        .find(|s| swatch_key(s.rgba) == *k)
+                })
+                .map(|s| (s.name.clone(), s.rgba))
+                .collect()
+        });
+        let export_reason = (names.is_empty()
+            || folder_members.as_ref().is_some_and(Vec::is_empty))
+        .then_some(empty);
         if row(ui, panel, "export", library.export_label(), export_reason) {
             post(match library {
-                Library::Swatches => PanelRequest::ExportSwatches(
-                    w.swatches
+                Library::Swatches => PanelRequest::ExportSwatches(match folder_members {
+                    Some(members) => members,
+                    None => w
+                        .swatches
                         .swatches()
                         .iter()
                         .enumerate()
                         .filter(|(i, _)| chosen.is_none_or(|c| c == *i))
                         .map(|(_, s)| (s.name.clone(), s.rgba))
                         .collect(),
-                ),
+                }),
                 Library::Brushes => PanelRequest::ExportBrushes(
                     w.brushes
                         .presets()
@@ -380,12 +684,17 @@ fn preset_menu(w: &mut Workspace, ui: &mut Ui, doc: &Document, library: Library)
             });
             close = true;
         }
-        let on_item = chosen.is_none().then_some(none_selected);
+        let on_item = (chosen.is_none() && chosen_folder.is_none()).then_some(none_selected);
         if row(ui, panel, "rename", tr("ui.w16.menu.rename"), on_item) {
-            ctx.data_mut(|d| d.insert_temp(rename_key(library), chosen));
+            ctx.data_mut(|d| {
+                d.insert_temp(rename_key(library), chosen_folder.map_or(chosen, |_| None));
+                d.insert_temp(folder_rename_key(), chosen_folder);
+            });
         }
         if row(ui, panel, "delete", tr("ui.w16.menu.delete"), on_item) {
-            if let Some(index) = chosen {
+            if let Some(folder) = chosen_folder {
+                delete_swatch_folder(w, &ctx, folder);
+            } else if let Some(index) = chosen {
                 match library {
                     Library::Swatches => {
                         w.swatches.remove(index);
@@ -399,34 +708,12 @@ fn preset_menu(w: &mut Workspace, ui: &mut Ui, doc: &Document, library: Library)
             }
             close = true;
         }
-        if row(ui, panel, "tiles-list", tr("ui.w16.menu.tiles.list"), None) {
-            let next = match view_mode(&ctx, library) {
-                ViewMode::Tiles => ViewMode::List,
-                ViewMode::List => ViewMode::Tiles,
-            };
-            set_view_mode(&ctx, library, next);
-        }
-        if row(
-            ui,
-            panel,
-            "define-new",
-            tr("ui.w16.menu.define.new"),
-            can_define,
-        ) {
-            match library {
-                Library::Swatches => {
-                    let rgba = w.color.current();
-                    let name = crate::panels::color::format_hex(rgba);
-                    w.swatches.add(name, rgba);
-                }
-                Library::Brushes => {
-                    let tool = w.palette.active();
-                    let name = format!("Brush {}", w.brushes.len() + 1);
-                    w.brushes.capture(&name, &w.options, tool);
-                }
-                Library::Styles => w.emit(Intent::Action(MenuAction::DefineStylePreset)),
+        if is_swatches {
+            tiles_list_row(ui, library);
+            close |= define_new_row(w, ui, library);
+            if row(ui, panel, "new-folder", tr("ui.w16.menu.new.folder"), None) {
+                new_swatch_folder(&ctx);
             }
-            close = true;
         }
     });
     // Name Change: a field under the rows, on the item it was opened for.
@@ -434,9 +721,9 @@ fn preset_menu(w: &mut Workspace, ui: &mut Ui, doc: &Document, library: Library)
         .data(|d| d.get_temp::<Option<usize>>(rename_key(library)))
         .flatten()
         .filter(|i| *i < names.len());
+    let t = current_tokens(ui);
+    let width = ui.available_width().max(t.metrics.min_hit_target);
     if let Some(index) = renaming {
-        let t = current_tokens(ui);
-        let width = ui.available_width().max(t.metrics.min_hit_target);
         let field = text_field_sized(ui, ids::rename_field(library), &names[index], width);
         if let Some(name) = field.committed {
             match library {
@@ -456,9 +743,28 @@ fn preset_menu(w: &mut Workspace, ui: &mut Ui, doc: &Document, library: Library)
             close = true;
         }
     }
+    // ... or on the swatch folder it was opened for (New Folder opens it).
+    if is_swatches {
+        let folders = swatch_folders(&ctx);
+        let renaming_folder = ctx
+            .data(|d| d.get_temp::<Option<usize>>(folder_rename_key()))
+            .flatten()
+            .filter(|i| *i < folders.len());
+        if let Some(index) = renaming_folder {
+            let field =
+                text_field_sized(ui, ids::folder_rename_field(), &folders[index].name, width);
+            if let Some(name) = field.committed {
+                rename_swatch_folder(&ctx, index, &name);
+                close = true;
+            }
+        }
+    }
     hairline(ui);
     if close {
-        ctx.data_mut(|d| d.remove::<Option<usize>>(rename_key(library)));
+        ctx.data_mut(|d| {
+            d.remove::<Option<usize>>(rename_key(library));
+            d.remove::<Option<usize>>(folder_rename_key());
+        });
         w.panel_menu = None;
     }
 }

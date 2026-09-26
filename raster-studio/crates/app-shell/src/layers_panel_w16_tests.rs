@@ -617,7 +617,25 @@ fn the_row_menu_is_photopeas_and_duplicate_layer_follows_the_copy_option() {
         .filter(|(_, i)| i.separator_after)
         .map(|(n, _)| n)
         .collect();
-    assert_eq!(separators, vec![1, 4, 8, 14], "Photopea's separators");
+    assert_eq!(
+        separators,
+        vec![1, 4, 8, 9, 12, 14],
+        "Photopea's separators: the clipping row has one of its own, and its Layer Style submenu (hs.aep FH) one after Clear Layer Style"
+    );
+    // The rule under a separated row is drawn in the open menu: the row
+    // after it starts lower than the row after an unseparated one.
+    let row = |n: usize| rig.rect(ui::context_menu::ids::context_item(n));
+    let plain_gap = row(11).top() - row(10).bottom();
+    let ruled_gap = row(10).top() - row(9).bottom();
+    assert!(
+        ruled_gap > plain_gap + 0.5,
+        "a rule is drawn under the clipping row ({ruled_gap} vs {plain_gap})"
+    );
+    let style_gap = row(13).top() - row(12).bottom();
+    assert!(
+        style_gap > plain_gap + 0.5,
+        "a rule is drawn between Clear Layer Style and Merge Down ({style_gap} vs {plain_gap})"
+    );
 
     let count = rig.ed.active().unwrap().document.layers.len();
     let applied = rig.click(ui::context_menu::ids::context_item(2));
@@ -737,4 +755,283 @@ fn the_panel_menu_sizes_thumbnails_down_to_none_and_crops_them_by_layer() {
     let layers = &rig.chrome.workspace().layers;
     assert!(layers.thumbs_by_layer, "Thumbnails by Layer survived");
     assert_eq!(layers.thumb_scale, ThumbScale::Small);
+}
+
+// ---------------------------------------------------------------------------
+// Smart objects and adjustment layers
+// ---------------------------------------------------------------------------
+
+/// On a smart object the row menu carries Photopea's Smart Object rows
+/// between Convert to Smart Object and Rasterize, and its Open (Edit
+/// Contents) row, clicked in the drawn menu, opens the contents in a tab.
+#[test]
+fn a_smart_objects_row_menu_carries_photopeas_smart_object_rows() {
+    let mut rig = Rig::new();
+    rig.block("Ink", (10, 6, 20, 12));
+    crate::menu_bridge::perform(MenuAction::ConvertToSmartObject, &mut rig.ed).unwrap();
+    rig.settle();
+    let doc = &rig.ed.active().unwrap().document;
+    let so = doc
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|l| {
+            matches!(
+                doc.layers.get(*l).map(|x| &x.kind),
+                Some(LayerKind::SmartObject(_))
+            )
+        })
+        .expect("Ink became a smart object");
+    rig.right_click(ui::view::ids::layer_row(so));
+    let menu_ctx = crate::menu_bridge::context(&mut rig.ed, rig.chrome.workspace());
+    let items = ui::context_menu::layer_items(&menu_ctx);
+    let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+    let from = labels
+        .iter()
+        .position(|l| *l == "Convert to Smart Object")
+        .unwrap();
+    assert_eq!(
+        &labels[from..from + 10],
+        &[
+            "Convert to Smart Object",
+            "New Smart Obj. via Copy",
+            "Open (Edit Contents)",
+            "Reset Transform",
+            "Replace Contents…",
+            "Export Contents…",
+            "Convert to Layers",
+            "Rasterize",
+            "Rasterize Layer Style",
+            "Convert to Shape",
+        ]
+    );
+    let edit = from + 2;
+    assert!(items[edit].resolution.is_enabled());
+    let docs = rig.ed.documents().len();
+    let applied = rig.click(ui::context_menu::ids::context_item(edit));
+    assert!(
+        applied.menu.contains(&MenuAction::EditSmartObjectContents),
+        "the drawn row asked for Edit Contents: {:?}",
+        applied.menu
+    );
+    assert_eq!(rig.ed.documents().len(), docs + 1, "the contents opened");
+
+    // A plain raster layer's menu has none of them.
+    let mut rig = Rig::new();
+    let ink = rig.block("Ink", (10, 6, 20, 12));
+    rig.right_click(ui::view::ids::layer_row(ink));
+    let menu_ctx = crate::menu_bridge::context(&mut rig.ed, rig.chrome.workspace());
+    assert!(!ui::context_menu::layer_items(&menu_ctx)
+        .iter()
+        .any(|i| i.label == "Open (Edit Contents)"));
+}
+
+/// A double-click on an adjustment layer's thumbnail opens its settings in
+/// the Properties panel (Photopea's "the panel will show up after
+/// double-clicking the thumbnail of the adjustment layer"), not Layer Style.
+#[test]
+fn a_double_click_on_an_adjustment_thumbnail_opens_properties() {
+    let mut rig = Rig::new();
+    rig.ed
+        .apply_command(ui::panels::properties::AdjustmentsPanel::create(
+            ui::menu::AdjustmentId::Levels,
+        ));
+    rig.settle();
+    let doc = &rig.ed.active().unwrap().document;
+    let adj = doc
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|l| {
+            matches!(
+                doc.layers.get(*l).map(|x| &x.kind),
+                Some(LayerKind::Adjustment(_))
+            )
+        })
+        .expect("a Levels layer");
+    let props = ui::PanelId::Properties;
+    if rig.chrome.workspace().dock.is_open(props) {
+        rig.chrome.emit(ui::Intent::SetPanelOpen {
+            panel: props,
+            open: false,
+        });
+        rig.settle();
+    }
+    assert!(!rig.chrome.workspace().dock.is_open(props));
+    let thumb = rig.rect(ui::view::ids::layer_content_thumb(adj)).center();
+    rig.double_click_at(thumb);
+    rig.settle();
+    assert!(
+        rig.chrome.workspace().dock.is_open(props),
+        "the double-click opened Properties"
+    );
+    assert_eq!(
+        rig.ed.active().unwrap().document.active_layer(),
+        Some(adj),
+        "on the adjustment layer"
+    );
+    assert!(
+        !rig.chrome.dialogs_for_test().layer_style_is_open_for_test(),
+        "not Layer Style"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Panel options: Photopea's row toggles and long tap (round 2)
+// ---------------------------------------------------------------------------
+
+/// The panel menu opens with Photopea's toggles "Filter", "Blending
+/// Options", "Lock" (a rule), "Long-tap as a right click" (a rule), then
+/// the copy and thumbnail rows. Each of the three row toggles hides its
+/// header row (Filter also drops an active kind filter), shows it again,
+/// and is stored; a new chrome starts with them.
+#[test]
+fn the_panel_menu_toggles_hide_the_filter_blend_and_lock_rows() {
+    let mut rig = Rig::new();
+    let id = rig.block("Ink", (10, 6, 20, 12));
+    rig.open_options();
+    let tops: Vec<f32> = OptionsItem::ALL
+        .iter()
+        .map(|i| rig.rect(ids::options_item(*i)).top())
+        .collect();
+    assert!(
+        tops.windows(2).all(|p| p[0] < p[1]),
+        "drawn in Photopea's order: {tops:?}"
+    );
+    assert_eq!(
+        &OptionsItem::ALL[..5],
+        &[
+            OptionsItem::Filter,
+            OptionsItem::BlendingOptions,
+            OptionsItem::Lock,
+            OptionsItem::LongTap,
+            OptionsItem::AddCopy,
+        ]
+    );
+    let row = |rig: &Rig, n: usize| rig.rect(ids::options_item(OptionsItem::ALL[n]));
+    let plain = row(&rig, 1).top() - row(&rig, 0).bottom();
+    let under_lock = row(&rig, 3).top() - row(&rig, 2).bottom();
+    let under_long_tap = row(&rig, 4).top() - row(&rig, 3).bottom();
+    assert!(
+        under_lock > plain + 0.5 && under_long_tap > plain + 0.5,
+        "rules under Lock and Long-tap ({under_lock}, {under_long_tap} vs {plain})"
+    );
+    // Close the menu again.
+    rig.click(ids::options_button());
+
+    // A kind filter set, then "Filter" off: the icons and the search go,
+    // the filter with them, the panel's options arrow stays.
+    rig.click(ui::view::ids::layer_filter(ui::menu::LayerClass::Text));
+    rig.settle();
+    assert!(!rig.drawn(ui::view::ids::layer_row(id)), "filtered out");
+    rig.open_options();
+    rig.click(ids::options_item(OptionsItem::Filter));
+    rig.settle();
+    assert!(!rig.drawn(ui::view::ids::layer_filter_all()));
+    assert!(!rig.drawn(ui::panels::layers::ids::search_field()));
+    assert!(rig.drawn(ids::options_button()), "the arrow stays");
+    assert!(rig.chrome.workspace().layers.filter.is_none());
+    assert!(rig.drawn(ui::view::ids::layer_row(id)), "no hidden filter");
+    assert!(!rig.ed.preferences().layers_panel.filter_row, "stored");
+
+    // "Blending Options" off: the blend / opacity row goes.
+    assert!(rig.drawn(ui::view::ids::layer_blend()));
+    rig.open_options();
+    rig.click(ids::options_item(OptionsItem::BlendingOptions));
+    rig.settle();
+    assert!(!rig.drawn(ui::view::ids::layer_blend()));
+    assert!(!rig.drawn(ui::view::ids::layer_opacity()));
+    assert!(rig.drawn(ui::view::ids::layer_fill()), "the lock row stays");
+    assert!(!rig.ed.preferences().layers_panel.blending_options_row);
+
+    // "Lock" off: the lock / fill row goes.
+    let lock = ui::view::LockToggle::ALL[0];
+    rig.open_options();
+    rig.click(ids::options_item(OptionsItem::Lock));
+    rig.settle();
+    assert!(!rig.drawn(ui::view::ids::layer_fill()));
+    assert!(!rig.drawn(ui::view::ids::layer_lock(lock)));
+    assert!(!rig.ed.preferences().layers_panel.lock_row);
+
+    // A restart keeps them hidden; each toggle brings its row back.
+    rig.chrome = Chrome::new();
+    rig.open_layers_panel();
+    assert!(!rig.drawn(ui::view::ids::layer_filter_all()));
+    assert!(!rig.drawn(ui::view::ids::layer_blend()));
+    assert!(!rig.drawn(ui::view::ids::layer_fill()));
+    for item in [
+        OptionsItem::Filter,
+        OptionsItem::BlendingOptions,
+        OptionsItem::Lock,
+    ] {
+        rig.open_options();
+        rig.click(ids::options_item(item));
+    }
+    rig.settle();
+    assert!(rig.drawn(ui::view::ids::layer_filter_all()));
+    assert!(rig.drawn(ui::panels::layers::ids::search_field()));
+    assert!(rig.drawn(ui::view::ids::layer_blend()));
+    assert!(rig.drawn(ui::view::ids::layer_lock(lock)));
+    let stored = &rig.ed.preferences().layers_panel;
+    assert!(stored.filter_row && stored.blending_options_row && stored.lock_row);
+}
+
+/// "Long-tap as a right click": off (Photopea's default) a held press on a
+/// row opens nothing; on, a press held 600 ms opens the row menu (not
+/// earlier), the release does not close it, and the option is stored.
+#[test]
+fn a_long_tap_on_a_row_opens_its_menu_when_the_option_is_on() {
+    let mut rig = Rig::new();
+    let id = rig.block("Ink", (10, 6, 20, 12));
+    let at = rig.row_body(id);
+    let hold = |rig: &mut Rig, secs: f64| -> bool {
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        rig.t += 1.0;
+        rig.frame(vec![egui::Event::PointerMoved(at)], egui::Modifiers::NONE);
+        rig.frame(vec![button(true)], egui::Modifiers::NONE);
+        let mut opened_early = false;
+        let start = rig.t;
+        while rig.t - start < secs {
+            rig.frame(Vec::new(), egui::Modifiers::NONE);
+            if rig.t - start < 0.5 && rig.chrome.workspace().context_menu.is_some() {
+                opened_early = true;
+            }
+        }
+        rig.frame(vec![button(false)], egui::Modifiers::NONE);
+        rig.frame(Vec::new(), egui::Modifiers::NONE);
+        opened_early
+    };
+
+    assert!(
+        !rig.chrome.workspace().layers.long_tap_menu,
+        "off by default"
+    );
+    hold(&mut rig, 0.7);
+    assert!(
+        rig.chrome.workspace().context_menu.is_none(),
+        "off: a long press opens nothing"
+    );
+
+    rig.open_options();
+    rig.click(ids::options_item(OptionsItem::LongTap));
+    rig.settle();
+    assert!(
+        rig.ed.preferences().layers_panel.long_tap_right_click,
+        "stored"
+    );
+    let early = hold(&mut rig, 0.7);
+    assert!(!early, "not before 600 ms");
+    assert!(
+        matches!(
+            rig.chrome.workspace().context_menu,
+            Some((ui::context_menu::ContextTarget::LayerRow, _))
+        ),
+        "the long tap opened the row menu and its release kept it open"
+    );
+    assert!(rig.drawn(ui::context_menu::ids::context_item(0)));
 }

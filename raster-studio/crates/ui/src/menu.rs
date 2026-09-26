@@ -2323,8 +2323,9 @@ pub enum MenuAction {
     /// preferences and applied the moment it is picked (Photopea's More ▸
     /// Language). Each row wears the language's own name.
     SetLanguage(crate::strings::Locale),
-    /// Window ▸ Glass Menus: menus drawn over a translucent fill, the
-    /// document showing through. Stored in preferences.
+    /// Window ▸ Appearance ▸ Glass Menus (the last row of the themes list,
+    /// as in Photopea's More ▸ Themes): menus drawn over a translucent fill,
+    /// the document showing through. Stored in preferences.
     ToggleGlassMenus,
     // ---- W16-K: View ▸ Mode, Layer ▸ New ▸ Artboard, bar-only rows ------
     /// View ▸ Mode ▸ Fullscreen / Standard / Menu Bar and Canvas: Photopea's
@@ -5453,11 +5454,10 @@ fn view_menu() -> Menu {
     );
     entries.push(Entry::submenu(
         "Show",
-        // W16-K: Paths, in Photopea's place above Slices.
-        vec![
-            item(MenuAction::ToggleView(ViewFlag::Paths)),
-            item(MenuAction::ToggleView(ViewFlag::Slices)),
-        ],
+        // W16-K: Photopea's Show > Paths row stays out until the canvas
+        // path overlay reads a flag; a ticking row that hides nothing is
+        // worse than no row.
+        vec![item(MenuAction::ToggleView(ViewFlag::Slices))],
     ));
     let mut snap_to = items(ViewFlag::SNAP_TO, MenuAction::ToggleView);
     snap_to.push(Entry::Separator);
@@ -5492,16 +5492,17 @@ fn window_menu() -> Menu {
     entries.push(Entry::Separator);
     entries.extend(items(PanelId::ALL, MenuAction::TogglePanel));
     entries.push(Entry::Separator);
-    entries.push(Entry::submenu(
-        "Appearance",
-        items(design::Theme::ALL, MenuAction::SetTheme),
-    ));
-    // W16-N: Photopea's More ▸ Language and Glass Menus.
+    // W16-N: Glass Menus closes the themes list, below a separator, as it
+    // closes Photopea's More ▸ Themes.
+    let mut appearance = items(design::Theme::ALL, MenuAction::SetTheme);
+    appearance.push(Entry::Separator);
+    appearance.push(item(MenuAction::ToggleGlassMenus));
+    entries.push(Entry::submenu("Appearance", appearance));
+    // W16-N: Photopea's More ▸ Language.
     entries.push(Entry::submenu(
         "Language",
         items(crate::strings::Locale::ALL, MenuAction::SetLanguage),
     ));
-    entries.push(item(MenuAction::ToggleGlassMenus));
     Menu {
         title: "Window",
         entries,
@@ -7987,11 +7988,8 @@ mod w10j_view_tests {
         assert!(snap.contains(&MenuAction::SnapToAll) && snap.contains(&MenuAction::SnapToNone));
         assert_eq!(
             actions(submenu(&view, "Show")),
-            // W16-K: Paths above Slices, as in Photopea.
-            vec![
-                MenuAction::ToggleView(ViewFlag::Paths),
-                MenuAction::ToggleView(ViewFlag::Slices)
-            ]
+            // W16-K: no inert Paths row (the overlay reads no flag yet).
+            vec![MenuAction::ToggleView(ViewFlag::Slices)]
         );
         assert_eq!(
             MenuAction::ToggleView(ViewFlag::Extras).shortcut(),

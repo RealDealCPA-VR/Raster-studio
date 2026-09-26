@@ -616,6 +616,13 @@ pub enum StepOp {
     },
     /// File ▸ Save As / Export: the export dialog.
     Export,
+    /// W16-H: Layer ▸ New Adjustment Layer holding the settings of one of the
+    /// adjustment operations (Levels … Channel Mixer, Brightness/Contrast,
+    /// Invert); Photoshop's `make` of an `adjustmentLayer`.
+    MakeAdjustmentLayer(Box<StepOp>),
+    /// W16-H: new settings for the active adjustment layer (the Properties
+    /// panel's edit); Photoshop's `set` of the target `adjustmentLayer`.
+    SetAdjustmentLayer(Box<StepOp>),
 }
 
 /// The four-character code and the string id of each event [`interpret`]

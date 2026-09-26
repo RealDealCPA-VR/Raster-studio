@@ -600,6 +600,87 @@ pub fn rounded_polygon(verts: &[Point], radius: f64) -> Path {
     p
 }
 
+/// W16-G: the fewest and most quarter turns [`parametric_spiral`] draws
+/// (Photopea's Parametric Shape "Length", `4..=40`).
+pub const PARAMETRIC_SPIRAL_LENGTH: (u32, u32) = (4, 40);
+
+/// W16-G: Photopea's parametric Spiral (the Parametric Shape tool's
+/// "Spiral", its `aoF` outline), drawn from its centre: `center` is the
+/// press, `radius` the drag's length and `direction` the drag's direction
+/// (radians, image space with y down), which the spiral's local x axis is
+/// turned onto.
+///
+/// Photopea's geometry exactly: two interleaved arms of quarter-circle
+/// cubics (handle factor 0.553), the second the first turned half a turn
+/// about the centre, `length + 2` quarter arcs each, the growing radii
+/// 1, 1, 3, 3, 5, 5, ... scaled by `radius / (length + 2)`; the band between
+/// the arms is the filled shape. `length` is clamped into
+/// [`PARAMETRIC_SPIRAL_LENGTH`].
+///
+/// One closed ring, emitted in positive orientation like every primitive
+/// here. Empty for non-finite input or a non-positive radius.
+pub fn parametric_spiral(center: Point, radius: f64, direction: f64, length: u32) -> Path {
+    if !center.is_finite() || !radius.is_finite() || radius <= 0.0 || !direction.is_finite() {
+        return Path::new();
+    }
+    let (lo, hi) = PARAMETRIC_SPIRAL_LENGTH;
+    let r = length.clamp(lo, hi) as usize + 2;
+    // A node: (point, the handle arriving at it, the handle leaving it) -
+    // Photopea's (P, Y4, zT).
+    type Node = (Point, Point, Point);
+    let h = 0.553;
+    let mut arm: Vec<Node> = vec![(point(0.0, 0.0), point(0.0, h), point(0.0, -h))];
+    let mut back: Vec<Node> = Vec::new();
+    let (mut m, mut w) = (1.0f64, -1.0f64);
+    for j in 0..r {
+        let z = if j == 0 {
+            (point(1.0, -1.0), point(1.0 - h, -1.0), point(1.0 + h, -1.0))
+        } else {
+            let g = -((j + 2) as f64) * FRAC_PI_2;
+            let mut d = 1.0 + if j % 2 == 1 { j - 1 } else { j } as f64;
+            let (fs, fc) = (g.sin(), g.cos());
+            m += d * (fs - fc);
+            w += d * (fc + fs);
+            let p = point(m, w);
+            let arrive = point(m + d * fc * h, w - d * fs * h);
+            if j % 2 == 1 {
+                d += 2.0;
+            }
+            (p, arrive, point(m - d * fc * h, w + d * fs * h))
+        };
+        // The other arm: this node turned half a turn, its handles swapped
+        // because that arm is walked back towards the centre.
+        let k = (
+            point(-z.0.x, -z.0.y),
+            point(-z.2.x, -z.2.y),
+            point(-z.1.x, -z.1.y),
+        );
+        arm.push(z);
+        if j + 2 < r {
+            back.push(k);
+        }
+    }
+    back.reverse();
+    arm.extend(back);
+    let scale = radius / r as f64;
+    let (s, c) = direction.sin_cos();
+    let at = |p: Point| center + point(c * p.x - s * p.y, s * p.x + c * p.y) * scale;
+    let mut path = Path::new();
+    path.move_to(at(arm[0].0));
+    for (prev, next) in arm
+        .iter()
+        .zip(arm.iter().skip(1).chain(std::iter::once(&arm[0])))
+    {
+        path.curve_to(at(prev.2), at(next.1), at(next.0));
+    }
+    path.close();
+    if path.signed_area2(0.1) < 0.0 {
+        path.reversed()
+    } else {
+        path
+    }
+}
+
 #[cfg(test)]
 mod w16g_tests {
     use super::*;
@@ -703,6 +784,64 @@ mod w16g_tests {
         // A radius too big for the edges is clamped to half an edge.
         let huge = rounded_polygon(&square, 1e6);
         assert!(huge.is_finite() && (area(&huge) - std::f64::consts::PI * 2500.0).abs() < 5.0);
+    }
+
+    fn ends(p: &Path) -> Vec<Point> {
+        p.elements().iter().filter_map(|e| e.end_point()).collect()
+    }
+
+    #[test]
+    fn a_parametric_spiral_is_centred_on_the_press_and_ends_on_the_release() {
+        let near = |a: Point, b: Point| a.distance(b) < 1e-9;
+        let c = point(100.0, 100.0);
+        // Photopea's `aoF`: length 4 walks the centre, 4 + 2 nodes out along
+        // one arm and 4 back along the other, so eleven cubics round the
+        // ring; the outer arm ends on the release.
+        let east = parametric_spiral(c, 60.0, 0.0, 4);
+        assert!(!east.is_empty() && east.is_finite());
+        assert!(east.signed_area2(0.1) > 0.0, "positive orientation");
+        let curves = |p: &Path| {
+            p.elements()
+                .iter()
+                .filter(|e| matches!(e, PathEl::CurveTo(..)))
+                .count()
+        };
+        assert_eq!(curves(&east), 11);
+        let pts = ends(&east);
+        assert!(pts.iter().any(|p| near(*p, c)), "starts at the centre");
+        assert!(pts.iter().any(|p| near(*p, point(160.0, 100.0))), "{pts:?}");
+        // Photopea's nodes, scaled by radius / (length + 2) = 10.
+        for local in [
+            (1.0, -1.0),
+            (2.0, 0.0),
+            (-1.0, 3.0),
+            (-4.0, 0.0),
+            (1.0, -5.0),
+        ] {
+            let want = c + point(local.0, local.1) * 10.0;
+            assert!(pts.iter().any(|p| near(*p, want)), "{want:?}");
+        }
+        let b = east.bounds();
+        assert!(b.max.x <= 160.0 + 1e-9 && b.min.x >= 40.0 - 1e-9, "{b:?}");
+        // The drag's direction turns it: straight down puts the release at
+        // (100, 160) and every node turned a quarter turn about the centre.
+        let south = parametric_spiral(c, 60.0, FRAC_PI_2, 4);
+        let (e, s) = (ends(&east), ends(&south));
+        assert_eq!(e.len(), s.len());
+        for (a, b) in e.iter().zip(&s) {
+            let d = *a - c;
+            let turned = c + point(-d.y, d.x);
+            assert!(turned.distance(*b) < 1e-9, "{a:?} -> {b:?}");
+        }
+        // Length adds quarter arcs and is clamped to Photopea's 4..=40.
+        assert_eq!(curves(&parametric_spiral(c, 60.0, 0.0, 10)), 23);
+        assert_eq!(parametric_spiral(c, 60.0, 0.0, 1), east);
+        assert_eq!(
+            parametric_spiral(c, 60.0, 0.0, 99),
+            parametric_spiral(c, 60.0, 0.0, 40)
+        );
+        assert!(parametric_spiral(c, 0.0, 0.0, 4).is_empty());
+        assert!(parametric_spiral(c, f64::NAN, 0.0, 4).is_empty());
     }
 
     fn area(p: &Path) -> f64 {

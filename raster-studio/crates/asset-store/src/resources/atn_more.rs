@@ -154,6 +154,91 @@ const MORE_EVENTS: &[(&str, &str)] = &[
     ("save", "save"),
 ];
 
+/// W16-H: the `Type` classes of an adjustment layer's `make` / `set`, each
+/// with the event (and whether it is a four-character code) whose
+/// descriptor it reads as. Photopea's table of them (`kY.Vw`), plus `GrMp`,
+/// the spelling a `contentLayer` make gives a gradient map.
+const ADJUSTMENT_CLASSES: &[(&str, &str, bool)] = &[
+    ("BrgC", "BrgC", true),
+    ("Lvls", "Lvls", true),
+    ("Crvs", "Crvs", true),
+    ("Exps", "exposure", false),
+    ("vibrance", "vibrance", false),
+    ("HStr", "HStr", true),
+    ("ClrB", "ClrB", true),
+    ("BanW", "BanW", true),
+    ("photoFilter", "photoFilter", false),
+    ("Invr", "Invr", true),
+    ("Pstr", "Pstr", true),
+    ("Thrs", "Thrs", true),
+    ("GdMp", "GrMp", true),
+    ("GrMp", "GrMp", true),
+    ("ChnM", "ChnM", true),
+];
+
+impl StepOp {
+    /// W16-H: whether this is an adjustment an adjustment layer can hold,
+    /// so [`StepOp::MakeAdjustmentLayer`] / [`StepOp::SetAdjustmentLayer`]
+    /// can carry it.
+    pub fn is_layer_adjustment(&self) -> bool {
+        matches!(
+            self,
+            StepOp::Levels(_)
+                | StepOp::Curves(_)
+                | StepOp::HueSaturation { .. }
+                | StepOp::ColorBalance { .. }
+                | StepOp::BlackAndWhite { .. }
+                | StepOp::Vibrance { .. }
+                | StepOp::Exposure { .. }
+                | StepOp::Threshold { .. }
+                | StepOp::Posterize { .. }
+                | StepOp::GradientMap { .. }
+                | StepOp::PhotoFilter { .. }
+                | StepOp::ChannelMixer { .. }
+                | StepOp::BrightnessContrast { .. }
+                | StepOp::Invert
+        )
+    }
+}
+
+/// W16-H: the adjustment an adjustment layer's `Type` descriptor holds,
+/// read as the event of the same name reads its own descriptor.
+fn adjustment_of_type(ty: &Descriptor, name: &str) -> Result<StepOp, String> {
+    let Some(&(_, event, char_id)) = ADJUSTMENT_CLASSES
+        .iter()
+        .find(|(class, ..)| *class == ty.class_id)
+    else {
+        return Err(format!(
+            "“{name}” holds a {} adjustment, which has no equivalent in this application",
+            ty.class_id
+        ));
+    };
+    let mut inner = AtnStep::new(event, name, Some(ty.clone()));
+    inner.char_id = char_id;
+    let op = super::interpret(&inner)?;
+    if op.is_layer_adjustment() {
+        Ok(op)
+    } else {
+        Err(format!(
+            "“{name}” holds no adjustment this application can read"
+        ))
+    }
+}
+
+/// W16-H: `inner`'s descriptor as an adjustment layer's `Type`: the class
+/// Photoshop spells the adjustment with, and no target.
+fn adjustment_type(inner: &StepOp) -> Descriptor {
+    let step = inner.to_step();
+    let class = ADJUSTMENT_CLASSES
+        .iter()
+        .find(|(_, event, _)| *event == step.event)
+        .map_or(step.event.as_str(), |(class, ..)| class);
+    let mut ty = step.descriptor.clone().unwrap_or_default();
+    ty.class_id = class.to_string();
+    ty.items.retain(|(key, _)| key != "null");
+    ty
+}
+
 /// The step's event as its string id, when [`MORE_EVENTS`] knows it.
 fn event_id(step: &AtnStep) -> Option<&'static str> {
     MORE_EVENTS
@@ -750,6 +835,17 @@ pub(super) fn interpret(step: &AtnStep) -> Option<Result<StepOp, String>> {
         "mergeVisible" => StepOp::MergeVisible,
         "flattenImage" => StepOp::Flatten,
         "make" => match target_class(d) {
+            // W16-H: Layer ▸ New Adjustment Layer (a `contentLayer` make
+            // whose `Type` is an adjustment is the same, as Photopea reads it).
+            Some("AdjL" | "adjustmentLayer" | "contentLayer") => {
+                let Some(ty) = d.descriptor("Usng").and_then(|u| u.descriptor("Type")) else {
+                    return why("makes a layer with no settings to read".to_string());
+                };
+                match adjustment_of_type(ty, name) {
+                    Ok(op) => StepOp::MakeAdjustmentLayer(Box::new(op)),
+                    Err(e) => return Some(Err(e)),
+                }
+            }
             Some("layerSection") => {
                 if d.get("From").is_some() {
                     StepOp::GroupLayers
@@ -760,6 +856,15 @@ pub(super) fn interpret(step: &AtnStep) -> Option<Result<StepOp, String>> {
             _ => return None,
         },
         "set" => {
+            // W16-H: the active adjustment layer's settings.
+            if matches!(target_class(d), Some("AdjL" | "adjustmentLayer")) {
+                let Some(ty) = d.descriptor("T   ") else {
+                    return why("sets no adjustment".to_string());
+                };
+                return Some(
+                    adjustment_of_type(ty, name).map(|op| StepOp::SetAdjustmentLayer(Box::new(op))),
+                );
+            }
             if target_class(d) != Some("Lyr ") {
                 return None;
             }
@@ -1459,6 +1564,28 @@ pub(super) fn to_step(op: &StepOp) -> Option<AtnStep> {
             )
         }
         StepOp::Export => ("Expr", "Export", vec![]),
+        StepOp::MakeAdjustmentLayer(inner) => (
+            "Mk  ",
+            "Make",
+            vec![
+                ("null", reference("AdjL", false)),
+                (
+                    "Usng",
+                    Value::Descriptor(desc(
+                        "AdjL",
+                        vec![("Type", Value::Descriptor(adjustment_type(inner)))],
+                    )),
+                ),
+            ],
+        ),
+        StepOp::SetAdjustmentLayer(inner) => (
+            "setd",
+            "Set",
+            vec![
+                ("null", reference("AdjL", true)),
+                ("T   ", Value::Descriptor(adjustment_type(inner))),
+            ],
+        ),
         _ => return None,
     };
     let descriptor = (!items.is_empty()).then(|| desc("null", items));

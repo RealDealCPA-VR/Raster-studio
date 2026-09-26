@@ -163,6 +163,16 @@ pub struct LayersState {
     option_edits: u32,
     /// W16-D: what the panel asked the application for this frame.
     requests: Vec<w16::LayersRequest>,
+    /// W16-D (round 2): Photopea's panel-menu toggles "Filter", "Blending
+    /// Options" and "Lock", stored inverted so the derived default shows
+    /// each row (Photopea hides the filter row by default; this panel keeps
+    /// it, because its options arrow lives there).
+    pub hide_filter_row: bool,
+    pub hide_blend_row: bool,
+    pub hide_lock_row: bool,
+    /// W16-D (round 2): Photopea's "Long-tap as a right click" (off by
+    /// default, as in Photopea): a 600 ms press on a row opens its menu.
+    pub long_tap_menu: bool,
 }
 
 /// Photopea's thumbnail sizes. The multiplier applies to the row height, so a
@@ -776,7 +786,8 @@ impl LayersModel {
 
     /// Add an empty group at the root.
     pub fn new_group() -> Command {
-        Command::create_layer(Layer::group("Group"))
+        // W16-N: "Group" in the interface language.
+        Command::create_layer(Layer::group(crate::strings::tr_en("Group")))
     }
 }
 

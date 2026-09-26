@@ -41,7 +41,7 @@ Add Media	Añadir medios
 Add Noise…	Añadir ruido…
 Add a layer mask	Añadir una máscara de capa
 Add a smart filter mask	Añadir una máscara de filtro inteligente
-Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read	Añadir un archivo de vídeo (MP4: H.264 o AV1) como capa de vídeo en el cabezal de reproducción; el audio no se lee
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Colocar un archivo de imagen o vídeo (Archivo > Colocar incrustado); un vídeo se convierte en una capa de vídeo en el cabezal de reproducción
 Add an adjustment layer	Añadir una capa de ajuste
 Add another instance of this effect	Añadir otra instancia de este efecto
 Add current colour	Añadir el color actual
@@ -51,6 +51,7 @@ Add or remove room around the image. Pixels are not resampled.	Añade o quita es
 Add shortcut	Añadir atajo
 Add to Selection	Añadir a la selección
 Adds one guide at a document coordinate, in pixels.	Añade una guía en una coordenada del documento, en píxeles.
+Adjustment	Ajuste
 Adjustments	Ajustes
 Advanced	Avanzado
 Again	De nuevo
@@ -539,6 +540,7 @@ File name	Nombre de archivo
 Files that fail are listed in batch-errors.txt in the destination.	Los archivos que fallan se enumeran en batch-errors.txt en el destino.
 Fill	Relleno
 Fill Filter Mask	Rellenar máscara de filtro
+Fill Layer	Capa de relleno
 Fill Mask	Rellenar máscara
 Fill Screen	Llenar pantalla
 Fill in File Info, or open a file that has EXIF, to embed metadata	Complete la información de archivo o abra un archivo con EXIF para incrustar metadatos
@@ -553,6 +555,7 @@ Find Edges	Hallar bordes
 First line	Primera línea
 Fish	Pez
 Fisheye	Ojo de pez
+Fit The Area	Ajustar al área
 Fit on Screen	Encajar en pantalla
 Fit the whole image in the window	Encajar toda la imagen en la ventana
 Fixed height	Altura fija
@@ -712,6 +715,7 @@ Layer	Capa
 Layer Comps	Composiciones de capas
 Layer Edges	Bordes de capa
 Layer Mask	Máscara de capa
+Layer Properties	Propiedades de capa
 Layer Style	Estilo de capa
 Layer knocks out drop shadow	La capa extrae la sombra paralela
 Layer via Copy	Capa vía copiar
@@ -768,6 +772,7 @@ Lock all	Bloquear todo
 Lock pixels	Bloquear píxeles
 Lock position	Bloquear posición
 Lock transparent pixels	Bloquear píxeles transparentes
+Long-tap as a right click	Pulsación larga como clic derecho
 Lookup table	Tabla de consulta
 Luminance	Luminancia
 Luminance of the preview source; the markers are the black and white points.	Luminancia del origen de la vista previa; los marcadores son los puntos negro y blanco.
@@ -787,6 +792,7 @@ Maps the active layer onto a palette as one undo step; the document stays RGB.	A
 Margins	Márgenes
 Mark this state so you can come back to it	Marcar este estado para poder volver a él
 Mask	Máscara
+Mask Properties	Propiedades de máscara
 Mask source	Origen de la máscara
 Match Color	Igualar color
 Match Color…	Igualar color…
@@ -847,6 +853,7 @@ New Adjustment Layer	Nueva capa de ajuste
 New Channel	Nuevo canal
 New Document	Nuevo documento
 New Fill Layer	Nueva capa de relleno
+New Folder	Nueva carpeta
 New Guide	Nueva guía
 New Guide Layout	Nuevo diseño de guía
 New Guide Layout…	Nuevo diseño de guía…
@@ -860,7 +867,9 @@ New Snapshot	Nueva instantánea
 New Spot Channel	Nuevo canal de tinta plana
 New Spot Channel…	Nuevo canal de tinta plana…
 New Style Preset	Nuevo ajuste preestablecido de estilo
+New Video Group	Nuevo grupo de vídeo
 New channel	Nuevo canal
+New folder	Nueva carpeta
 New group	Nuevo grupo
 New layer	Nueva capa
 New layer comp	Nueva composición de capas
@@ -961,6 +970,7 @@ Open a document to see its properties	Abra un documento para ver sus propiedades
 Open another document, or add another pixel layer, to match its colours.	Abra otro documento o añada otra capa de píxeles para igualar sus colores.
 Open as	Abrir como
 Open editor…	Abrir editor…
+Open or close the folder	Abrir o cerrar la carpeta
 Open the Adjustments panel	Abrir el panel Ajustes
 Open…	Abrir…
 Operation	Operación
@@ -1029,6 +1039,7 @@ Pinch…	Pellizcar…
 Pixel Grid	Cuadrícula de píxeles
 Pixel dimensions	Dimensiones en píxeles
 Pixel mask	Máscara de píxeles
+Pixel to Pixel	Píxel a píxel
 Pixelate	Pixelizar
 Pixels	Píxeles
 Place Embedded…	Colocar incrustado…
@@ -1239,6 +1250,7 @@ Select a layer to see its properties	Seleccione una capa para ver sus propiedade
 Select a layer: a click on a style applies it to the active layer.	Seleccione una capa: un clic en un estilo lo aplica a la capa activa.
 Select a path first	Seleccione primero un trazado
 Select a text layer, or type into one: a click inserts the glyph at the caret.	Seleccione una capa de texto o escriba en una: un clic inserta el glifo en el cursor.
+Select a text layer to edit its type	Seleccione una capa de texto para editar su texto
 Select every pixel near one colour	Seleccionar cada píxel próximo a un color
 Selection	Selección
 Selection Edges	Bordes de selección
@@ -1262,6 +1274,7 @@ Shadows/Highlights…	Sombras/iluminaciones…
 Shape	Forma
 Shape Dynamics	Dinámica de forma
 Shape Mosaic…	Mosaico de formas…
+Shape Properties	Propiedades de forma
 Sharpen	Enfocar
 Sharpen Edges	Enfocar bordes
 Sharpen More	Enfocar más
@@ -1364,6 +1377,7 @@ TGA…	TGA…
 TIF…	TIF…
 Templates	Plantillas
 Text	Texto
+Text Properties	Propiedades de texto
 Text overflows the box	El texto desborda el cuadro
 Text replacement	Reemplazo de texto
 Texture Dilation…	Dilatación de textura…
@@ -1373,7 +1387,6 @@ The CSV ends inside a quoted field	El CSV termina dentro de un campo entre comil
 The CSV has a header but no data sets	El CSV tiene encabezado pero no conjuntos de datos
 The CSV is empty	El CSV está vacío
 The CSV names a variable that is not defined:	El CSV nombra una variable que no está definida:
-The active layer has no layer style to save	La capa activa no tiene estilo de capa que guardar
 The active layer is not in the document	La capa activa no está en el documento
 The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	El objeto inteligente activo muestra por turnos cada imagen de la carpeta de origen; cada resultado se exporta como PNG a la carpeta de destino.
 The amount must be within	La cantidad debe estar dentro de
@@ -1477,6 +1490,7 @@ Transform Layer	Transformar capa
 Transform Selection	Transformar selección
 Transparency	Transparencia
 Transparent Pixels	Píxeles transparentes
+Trim	Cortar
 Trim Away	Recortar
 Trim…	Cortar…
 Tritone	Tritono

@@ -2,8 +2,8 @@
 //!
 //! # Live shapes
 //!
-//! A Rectangle, Rounded Rectangle, Ellipse, Polygon, Star or (arrowless)
-//! Line drawn as a shape layer keeps the parameters it was drawn with in
+//! A Rectangle, Rounded Rectangle, Ellipse, Polygon, Star or Line (with
+//! its arrowheads) drawn as a shape layer keeps the parameters it was drawn with in
 //! [`ShapeLayer::live`] ([`layer_model::LiveShape`]). [`live_path`] rebuilds
 //! the path from them, and the commit writes exactly that path, so a fresh
 //! shape's record regenerates its `path_svg` byte for byte. [`live_shape_of`]
@@ -23,15 +23,16 @@
 //! whatever shape is picked, so the options bar can set any key in any order
 //! and switching the shape back finds the values where they were left.
 //!
-//! As in Photopea (`X.hn.LC`), a Polygon or Star is drawn from its centre:
-//! the press is the centre, the release is a vertex (Shift snaps the angle to
-//! 15 degrees), and Corner Radius rounds every corner. The Arrow runs press
+//! As in Photopea (`X.hn.LC`), a Polygon, Star or Spiral is drawn from its
+//! centre: the press is the centre, the release is a vertex (Shift snaps the
+//! angle to 15 degrees), and Corner Radius rounds a Polygon's or Star's
+//! every corner; the Spiral's outer arm ends on the release. The Arrow runs press
 //! to release and the Grid fills the drag box. Photopea keeps what this tool
 //! draws as a plain path (a `customShape` origination), so it commits no
 //! live record; the Rectangle, Ellipse and Line tools do.
 
 use glam::Vec2;
-use layer_model::{LiveShape, ShapeLayer};
+use layer_model::{LiveArrows, LiveShape, ShapeLayer};
 use vector::{point, shapes, stroke::stroke, stroke::StrokeStyle, to_svg, CornerRadii, Path};
 
 use super::{ShapeKind, ShapeTool};
@@ -200,7 +201,8 @@ impl ParametricOptions {
                 float("grid border", v, 0.0, 1000.0).map(|v| self.border = v)
             }
             ("length", ToolSetting::Int(v)) => {
-                self.length = count(v, 1, 200);
+                // Photopea's Length is `4..=40` quarter turns.
+                self.length = count(v, 4, 40);
                 Ok(())
             }
             ("corner_radius", ToolSetting::Float(v)) => {
@@ -212,16 +214,19 @@ impl ParametricOptions {
 }
 
 impl ParametricOptions {
-    /// Photopea draws a parametric Polygon or Star from its centre: the press
-    /// is the centre, the release a vertex (`X.hn.LC`: radius the drag's
-    /// length, the first vertex on the drag's direction).
+    /// Photopea draws a parametric Polygon, Star or Spiral from its centre:
+    /// the press is the centre, the release a vertex (`X.hn.LC`: radius the
+    /// drag's length, the first vertex on the drag's direction; the
+    /// Spiral's `aoF` turned onto that direction, its outer arm ending on
+    /// the release).
     pub fn is_centred(&self) -> bool {
-        self.shape <= 1
+        matches!(self.shape, 0 | 1 | 4)
     }
 
-    /// The outline of a centred Polygon or Star dragged from `centre` to
-    /// `tip`, its corners rounded by [`ParametricOptions::corner_radius`];
-    /// `None` for the shapes drawn in a box or along the drag.
+    /// The outline of a centred Polygon, Star or Spiral dragged from
+    /// `centre` to `tip` (a Polygon's or Star's corners rounded by
+    /// [`ParametricOptions::corner_radius`]); `None` for the shapes drawn in
+    /// a box or along the drag.
     pub fn centred_path(&self, centre: Vec2, tip: Vec2) -> Option<Result<Path, ToolError>> {
         if !self.is_centred() {
             return None;
@@ -233,6 +238,15 @@ impl ParametricOptions {
             return Some(Err(ToolError::Degenerate));
         }
         let start = d.y.atan2(d.x);
+        if self.shape == 4 {
+            // Photopea's Spiral (`aoF(f, w, d, s, length)`).
+            let path = shapes::parametric_spiral(c, radius, start, self.length);
+            return Some(if path.is_empty() || !path.is_finite() {
+                Err(ToolError::Degenerate)
+            } else {
+                Ok(path)
+            });
+        }
         let (count, inner) = match self.shape {
             0 => (self.sides.max(3) as usize, 1.0),
             _ => (
@@ -291,8 +305,8 @@ impl ShapeTool {
         self.parametric.as_ref()
     }
 
-    /// W16-G: the centred outline of the Parametric Shape tool's Polygon or
-    /// Star; `None` on every other tool and shape.
+    /// W16-G: the centred outline of the Parametric Shape tool's Polygon,
+    /// Star or Spiral; `None` on every other tool and shape.
     pub(super) fn parametric_outline(&self, a: Vec2, b: Vec2) -> Option<Result<Path, ToolError>> {
         self.parametric.as_ref()?.centred_path(a, b)
     }
@@ -323,9 +337,14 @@ impl ShapeTool {
 /// The live record a drag from `a` to `b` with `kind` commits, `None` for a
 /// kind that is not live (custom shapes, spirals, arrows, grids — Photopea
 /// keeps those as plain paths too). The Parametric Shape tool never commits
-/// one (see the module docs). `arrows` says whether a line carries
-/// heads, which makes it a plain path.
-pub fn live_for(kind: &ShapeKind, a: Vec2, b: Vec2, arrows: bool) -> Option<LiveShape> {
+/// one (see the module docs). `arrows` is a line's arrowheads: a line keeps
+/// them in its record (Photopea's `keyOriginLineArr*`), so it stays live.
+pub fn live_for(
+    kind: &ShapeKind,
+    a: Vec2,
+    b: Vec2,
+    arrows: Option<&super::LineArrows>,
+) -> Option<LiveShape> {
     let min = a.min(b);
     let max = a.max(b);
     let (x, y) = (f64::from(min.x), f64::from(min.y));
@@ -367,12 +386,19 @@ pub fn live_for(kind: &ShapeKind, a: Vec2, b: Vec2, arrows: bool) -> Option<Live
             points: (*points).max(3),
             inner_ratio: inner_ratio.clamp(0.01, 1.0),
         },
-        ShapeKind::Line { width } if !arrows => LiveShape::Line {
+        ShapeKind::Line { width } => LiveShape::Line {
             x1: f64::from(a.x),
             y1: f64::from(a.y),
             x2: f64::from(b.x),
             y2: f64::from(b.y),
             weight: width.max(0.1),
+            arrows: arrows.filter(|h| h.any()).map(|h| LiveArrows {
+                start: h.start,
+                end: h.end,
+                width_pct: h.width_pct,
+                length_pct: h.length_pct,
+                concavity_pct: h.concavity_pct,
+            }),
         },
         _ => return None,
     };
@@ -436,6 +462,26 @@ pub fn live_path(live: &LiveShape) -> Result<Path, ToolError> {
             x2,
             y2,
             weight,
+            arrows: Some(h),
+        } if h.start || h.end => super::line_with_arrows(
+            Vec2::new(x1 as f32, y1 as f32),
+            Vec2::new(x2 as f32, y2 as f32),
+            weight,
+            &super::LineArrows {
+                start: h.start,
+                end: h.end,
+                width_pct: h.width_pct,
+                length_pct: h.length_pct,
+                concavity_pct: h.concavity_pct,
+            },
+        )?,
+        LiveShape::Line {
+            x1,
+            y1,
+            x2,
+            y2,
+            weight,
+            ..
         } => stroke(
             &shapes::line(point(x1, y1), point(x2, y2)),
             &StrokeStyle {
@@ -556,11 +602,32 @@ mod tests {
             let shape = drawn(&mut tool, (12.5, 30.0), (77.0, 91.25));
             assert!(live_shape_of(&shape).is_some(), "{kind:?} is not live");
         }
-        // A line with heads and a custom shape are plain paths.
+        // A line with heads stays live, its heads in the record (Photopea's
+        // `keyOriginLineArr*`): a new weight regenerates shaft and heads.
         let mut tool = ShapeTool::new(ShapeKind::Line { width: 4.0 }, ShapeMode::VectorLayer);
         tool.set_setting("arrow_end", ToolSetting::Bool(true))
             .unwrap();
-        assert!(drawn(&mut tool, (10.0, 10.0), (90.0, 10.0)).live.is_none());
+        let arrowed = drawn(&mut tool, (10.0, 50.0), (190.0, 50.0));
+        let Some(LiveShape::Line {
+            arrows: Some(heads),
+            ..
+        }) = live_shape_of(&arrowed).cloned()
+        else {
+            panic!("an arrowed line is not live: {:?}", arrowed.live);
+        };
+        assert!(heads.end && !heads.start);
+        let mut thicker = live_shape_of(&arrowed).cloned().unwrap();
+        if let LiveShape::Line { weight, .. } = &mut thicker {
+            *weight = 8.0;
+        }
+        let thicker = apply_live(&arrowed, thicker).unwrap();
+        let path = vector::parse_svg(&thicker.path_svg).unwrap();
+        let inside = |x, y| vector::contains(&path, point(x, y), vector::FillRule::NonZero);
+        // 8 px x 500% = a 40 px wide head 80 px long; 40 px from the tip it
+        // is 20 px across, the shaft 8 px.
+        assert!(inside(150.0, 58.0), "the regenerated head is wide");
+        assert!(!inside(40.0, 58.0), "the shaft is 8 px");
+        assert!(inside(40.0, 53.0), "the shaft is thicker than 4 px");
     }
 
     #[test]
@@ -648,5 +715,47 @@ mod tests {
         // Shift snaps the drag to 15 degrees about the centre.
         let snapped = snap_15(Vec2::new(0.0, 0.0), Vec2::new(10.0, 1.0));
         assert!(snapped.y.abs() < 1e-4 && (snapped.x - 101f32.sqrt()).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_parametric_spiral_is_centred_on_the_press_and_turned_to_the_drag() {
+        let mut tool = ShapeTool::parametric_tool();
+        tool.set_setting("pshape", ToolSetting::Choice(4)).unwrap();
+        let anchors = |shape: &ShapeLayer| -> Vec<vector::Point> {
+            let path = vector::parse_svg(&shape.path_svg).unwrap();
+            path.elements()
+                .iter()
+                .filter_map(|e| e.end_point())
+                .collect()
+        };
+        let near = |a: vector::Point, x: f64, y: f64| a.distance(point(x, y)) < 1e-3;
+        // Photopea's `X.hn.LC`: a horizontal drag (a box with no height,
+        // which a box-fitted spiral cannot draw) is the spiral's radius and
+        // direction; it starts at the press and its outer arm ends on the
+        // release.
+        let east = drawn(&mut tool, (100.0, 100.0), (160.0, 100.0));
+        assert!(east.live.is_none(), "Photopea keeps it a plain path");
+        let pts = anchors(&east);
+        assert!(pts.iter().any(|p| near(*p, 100.0, 100.0)), "{pts:?}");
+        assert!(pts.iter().any(|p| near(*p, 160.0, 100.0)), "{pts:?}");
+        let path = vector::parse_svg(&east.path_svg).unwrap();
+        let b = path.bounds();
+        assert!(
+            b.max.x <= 160.001 && b.min.x >= 39.999,
+            "within the radius: {b:?}"
+        );
+        assert!(b.height() > 50.0, "it winds round the press: {b:?}");
+        // Dragging up turns it: the outer arm ends up at the release.
+        let north = drawn(&mut tool, (100.0, 100.0), (100.0, 40.0));
+        let pts = anchors(&north);
+        assert!(pts.iter().any(|p| near(*p, 100.0, 40.0)), "{pts:?}");
+        assert!(pts.iter().any(|p| near(*p, 100.0, 100.0)));
+        // Length adds quarter arcs (Photopea's 4..=40): more anchors.
+        tool.set_setting("length", ToolSetting::Int(12)).unwrap();
+        let long = drawn(&mut tool, (100.0, 100.0), (160.0, 100.0));
+        assert!(anchors(&long).len() > anchors(&east).len());
+        assert!(anchors(&long).iter().any(|p| near(*p, 160.0, 100.0)));
+        tool.set_setting("length", ToolSetting::Int(1)).unwrap();
+        assert_eq!(tool.parametric_options().unwrap().length, 4);
     }
 }

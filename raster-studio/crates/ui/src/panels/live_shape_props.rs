@@ -85,10 +85,36 @@ impl LiveShapeProperties {
         })
     }
 
-    /// Set one of W (0), H (1), X (2), Y (3). A size must stay positive.
+    /// The layer's transform as a pure translation `(dx, dy)` — what the
+    /// Move tool leaves — or `None` when it scales, rotates or skews (or the
+    /// layer is gone). The live record is in the shape's own (untransformed)
+    /// space; the canvas box is the record's moved by this.
+    pub fn translation(doc: &Document, layer: LayerId) -> Option<(f64, f64)> {
+        let t = doc.layers.get(layer)?.transform;
+        (t.matrix2.abs_diff_eq(glam::Mat2::IDENTITY, 1e-6) && t.translation.is_finite())
+            .then(|| (f64::from(t.translation.x), f64::from(t.translation.y)))
+    }
+
+    /// The box Properties shows as `[x, y, w, h]`, in canvas pixels: the live
+    /// record's box moved by the layer's translation, so a shape dragged by
+    /// the Move tool shows where it is. `None` when the layer is not live or
+    /// its transform is not a pure translation (the record's box is then not
+    /// the canvas box, and the W, H, X, Y fields are not drawn).
+    pub fn canvas_frame(doc: &Document, layer: LayerId) -> Option<[f64; 4]> {
+        let [x, y, w, h] = Self::live(doc, layer)?.frame();
+        let (dx, dy) = Self::translation(doc, layer)?;
+        Some([x + dx, y + dy, w, h])
+    }
+
+    /// Set one of W (0), H (1), X (2), Y (3), in canvas pixels (X and Y are
+    /// taken back through the layer's translation into the record). A size
+    /// must stay positive; `None` under a non-translation transform.
     pub fn set_frame(doc: &Document, layer: LayerId, index: usize, value: f64) -> Option<Intent> {
         let live = Self::live(doc, layer)?;
+        let (dx, dy) = Self::translation(doc, layer)?;
         let mut frame = live.frame();
+        frame[0] += dx;
+        frame[1] += dy;
         let slot = match index {
             0 => 2,
             1 => 3,
@@ -100,6 +126,8 @@ impl LiveShapeProperties {
             return None;
         }
         frame[slot] = value;
+        frame[0] -= dx;
+        frame[1] -= dy;
         Self::set(doc, layer, live.with_frame(frame))
     }
 
@@ -166,8 +194,13 @@ impl LiveShapeProperties {
         let live = Self::live(doc, layer)?;
         let mut intents: Vec<Option<Intent>> = Vec::new();
         design::section_header(ui, tr("ui.docks.shape.live"));
-        let [x, y, w, h] = live.frame();
-        for (index, value) in [w, h, x, y].into_iter().enumerate() {
+        let frame = Self::canvas_frame(doc, layer);
+        for (index, value) in frame
+            .map(|[x, y, w, h]| [w, h, x, y])
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
             let mut v = value;
             let field = design::inspector_field(ui, tr(FRAME_KEYS[index]), |ui| {
                 ui.add(egui::DragValue::new(&mut v).max_decimals(2))
@@ -324,6 +357,33 @@ mod tests {
         );
         assert!(LiveShapeProperties::set_frame(&doc, id, 1, 0.0).is_none());
         assert!(LiveShapeProperties::set_radius(&doc, id, 0, 0.0, false).is_none());
+    }
+
+    /// A layer moved by a translation (the Move tool) shows and edits its
+    /// canvas box; a scaled layer's box is not the record's, so X/Y refuse.
+    #[test]
+    fn the_frame_is_in_canvas_pixels_through_the_layers_translation() {
+        let (mut doc, id) = live_rect_doc();
+        doc.layers.get_mut(id).unwrap().transform =
+            glam::Affine2::from_translation(glam::Vec2::new(24.0, -8.0));
+        assert_eq!(
+            LiveShapeProperties::canvas_frame(&doc, id),
+            Some([34.0, 12.0, 80.0, 40.0])
+        );
+        let moved = edited(LiveShapeProperties::set_frame(&doc, id, 2, 50.0));
+        assert_eq!(
+            live_shape_of(&moved).unwrap().frame(),
+            [26.0, 20.0, 80.0, 40.0]
+        );
+        let down = edited(LiveShapeProperties::set_frame(&doc, id, 3, 0.0));
+        assert_eq!(
+            live_shape_of(&down).unwrap().frame(),
+            [10.0, 8.0, 80.0, 40.0]
+        );
+        doc.layers.get_mut(id).unwrap().transform =
+            glam::Affine2::from_scale(glam::Vec2::new(2.0, 1.0));
+        assert_eq!(LiveShapeProperties::canvas_frame(&doc, id), None);
+        assert!(LiveShapeProperties::set_frame(&doc, id, 2, 50.0).is_none());
     }
 
     /// The route: a real headless frame of the workspace with Properties

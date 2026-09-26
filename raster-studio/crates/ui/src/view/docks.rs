@@ -604,7 +604,10 @@ fn layers_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, fill_bottom: Opti
             if let Some(position) = row_drag_position(w, ui, doc, row, &response) {
                 hovered = Some(position);
             }
-            if response.secondary_clicked() {
+            // W16-D: "Long-tap as a right click" (panel menu) opens the
+            // same menu after a 600 ms press.
+            let long_tap = layers_w16::long_tap(w, ui, &response);
+            if response.secondary_clicked() || long_tap {
                 // W16-D: Photopea's right-click selects the row first, so the
                 // menu acts on the layer it was opened on.
                 if !row.selected && !row.active {
@@ -682,93 +685,107 @@ fn blend_and_opacity(w: &mut Workspace, ui: &mut Ui, doc: &Document, active: Opt
     let left = t.metrics.inspector_label_width + t.metrics.numeric_field_width;
     let height = panel_icon_side(t).max(t.metrics.control_height);
 
+    // W16-D: the panel menu's "Blending Options" and "Lock" toggles hide
+    // the first and the second row, as Photopea's do.
+    let blend_shown = !w.layers.hide_blend_row;
+    let lock_shown = !w.layers.hide_lock_row;
     ui.add_enabled_ui(enabled, |ui| {
-        ui.horizontal(|ui| {
-            ui.allocate_ui_with_layout(
-                Vec2::new(left, height),
-                Layout::left_to_right(Align::Center),
-                |ui| {
-                    ui.label(hint(ui, "Blend"));
-                    let mut picked = mode;
-                    let combo = egui::ComboBox::from_id_salt("raster-layer-blend")
-                        .width(ui.available_width())
-                        .selected_text(body(ui, crate::strings::tr_en(mode.label())))
-                        .show_ui(ui, |ui| {
-                            for candidate in BlendMode::ALL {
-                                let row = ui.selectable_label(
-                                    candidate == mode,
-                                    body(ui, crate::strings::tr_en(candidate.label())),
-                                );
-                                super::mark(
-                                    ui,
-                                    row.rect,
-                                    super::ids::layer_blend_option(candidate),
-                                );
-                                if row.clicked() {
-                                    picked = candidate;
+        if blend_shown {
+            ui.horizontal(|ui| {
+                ui.allocate_ui_with_layout(
+                    Vec2::new(left, height),
+                    Layout::left_to_right(Align::Center),
+                    |ui| {
+                        ui.label(hint(ui, "Blend"));
+                        let mut picked = mode;
+                        let combo = egui::ComboBox::from_id_salt("raster-layer-blend")
+                            .width(ui.available_width())
+                            .selected_text(body(ui, crate::strings::tr_en(mode.label())))
+                            .show_ui(ui, |ui| {
+                                for candidate in BlendMode::ALL {
+                                    let row = ui.selectable_label(
+                                        candidate == mode,
+                                        body(ui, crate::strings::tr_en(candidate.label())),
+                                    );
+                                    super::mark(
+                                        ui,
+                                        row.rect,
+                                        super::ids::layer_blend_option(candidate),
+                                    );
+                                    if row.clicked() {
+                                        picked = candidate;
+                                    }
                                 }
+                            });
+                        super::mark(ui, combo.response.rect, super::ids::layer_blend());
+                        if picked != mode {
+                            if let Some(id) = active {
+                                w.emit(Intent::Document(LayersModel::set_blend_mode(id, picked)));
                             }
-                        });
-                    super::mark(ui, combo.response.rect, super::ids::layer_blend());
-                    if picked != mode {
-                        if let Some(id) = active {
-                            w.emit(Intent::Document(LayersModel::set_blend_mode(id, picked)));
+                        }
+                    },
+                );
+                let opacity_row =
+                    percent_slider(ui, "Opacity", &mut opacity, super::ids::layer_opacity());
+                if opacity_row.changed() {
+                    if let Some(id) = active {
+                        if let Some(c) = LayersModel::set_opacity(id, opacity / 100.0) {
+                            w.emit(Intent::Document(c));
                         }
                     }
-                },
-            );
-            let opacity_row =
-                percent_slider(ui, "Opacity", &mut opacity, super::ids::layer_opacity());
-            if opacity_row.changed() {
-                if let Some(id) = active {
-                    if let Some(c) = LayersModel::set_opacity(id, opacity / 100.0) {
-                        w.emit(Intent::Document(c));
-                    }
                 }
-            }
-        });
+            });
+        }
 
-        ui.horizontal(|ui| {
-            ui.allocate_ui_with_layout(
-                Vec2::new(left, height),
-                Layout::left_to_right(Align::Center),
-                |ui| {
-                    ui.label(hint(ui, "Lock"));
-                    ui.spacing_mut().item_spacing.x = Space::Hair.pt();
-                    let mut next = locks;
-                    for toggle in super::LockToggle::ALL {
-                        let (key, tip) = toggle.icon_and_tooltip();
-                        let on = toggle.get(locks);
-                        // A lock is a real on/off, drawn as the selected accent
-                        // when engaged; without a layer there is nothing to
-                        // lock, and only then does the row read as disabled.
-                        let state = if enabled {
-                            ActionState::selected_if(on)
-                        } else {
-                            ActionState::Disabled
-                        };
-                        if icon_action_id(ui, key, tip, state, Some(super::ids::layer_lock(toggle)))
+        if lock_shown {
+            ui.horizontal(|ui| {
+                ui.allocate_ui_with_layout(
+                    Vec2::new(left, height),
+                    Layout::left_to_right(Align::Center),
+                    |ui| {
+                        ui.label(hint(ui, "Lock"));
+                        ui.spacing_mut().item_spacing.x = Space::Hair.pt();
+                        let mut next = locks;
+                        for toggle in super::LockToggle::ALL {
+                            let (key, tip) = toggle.icon_and_tooltip();
+                            let on = toggle.get(locks);
+                            // A lock is a real on/off, drawn as the selected accent
+                            // when engaged; without a layer there is nothing to
+                            // lock, and only then does the row read as disabled.
+                            let state = if enabled {
+                                ActionState::selected_if(on)
+                            } else {
+                                ActionState::Disabled
+                            };
+                            if icon_action_id(
+                                ui,
+                                key,
+                                tip,
+                                state,
+                                Some(super::ids::layer_lock(toggle)),
+                            )
                             .clicked()
-                        {
-                            toggle.set(&mut next, !on);
+                            {
+                                toggle.set(&mut next, !on);
+                            }
                         }
-                    }
-                    if next != locks {
-                        if let Some(id) = active {
-                            w.emit(Intent::Document(LayersModel::set_locks(id, next)));
+                        if next != locks {
+                            if let Some(id) = active {
+                                w.emit(Intent::Document(LayersModel::set_locks(id, next)));
+                            }
                         }
-                    }
-                },
-            );
-            let fill_row = percent_slider(ui, "Fill", &mut fill, super::ids::layer_fill());
-            if fill_row.changed() {
-                if let Some(id) = active {
-                    if let Some(c) = LayersModel::set_fill_opacity(id, fill / 100.0) {
-                        w.emit(Intent::Document(c));
+                    },
+                );
+                let fill_row = percent_slider(ui, "Fill", &mut fill, super::ids::layer_fill());
+                if fill_row.changed() {
+                    if let Some(id) = active {
+                        if let Some(c) = LayersModel::set_fill_opacity(id, fill / 100.0) {
+                            w.emit(Intent::Document(c));
+                        }
                     }
                 }
-            }
-        });
+            });
+        }
     });
 }
 
@@ -2203,18 +2220,27 @@ fn layer_filter_row(w: &mut Workspace, ui: &mut Ui) {
     let search_drawn = ui
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = Space::Hair.pt();
-            if icon_action_id(
-                ui,
-                "overflow",
-                crate::strings::tr("ui.docks.show.every.layer"),
-                ActionState::selected_if(w.layers.filter.is_none()),
-                Some(super::ids::layer_filter_all()),
-            )
-            .clicked()
+            // W16-D: the panel menu's "Filter" toggle hides the kind icons
+            // and the search; the row keeps the panel's two buttons.
+            let filter_shown = !w.layers.hide_filter_row;
+            if filter_shown
+                && icon_action_id(
+                    ui,
+                    "overflow",
+                    crate::strings::tr("ui.docks.show.every.layer"),
+                    ActionState::selected_if(w.layers.filter.is_none()),
+                    Some(super::ids::layer_filter_all()),
+                )
+                .clicked()
             {
                 w.layers.filter = None;
             }
-            for class in crate::menu::LayerClass::ALL {
+            let classes: &[crate::menu::LayerClass] = if filter_shown {
+                &crate::menu::LayerClass::ALL
+            } else {
+                &[]
+            };
+            for &class in classes {
                 let on = w.layers.filter == Some(class);
                 if icon_action_id(
                     ui,
@@ -2249,7 +2275,9 @@ fn layer_filter_row(w: &mut Workspace, ui: &mut Ui) {
                 // it drops to its own line below instead of overflowing.
                 let t = current_tokens(ui);
                 let width = ui.available_width() - Space::XSmall.pt();
-                if width >= t.metrics.numeric_field_width {
+                if !filter_shown {
+                    search_drawn = true;
+                } else if width >= t.metrics.numeric_field_width {
                     layer_search_field(w, ui, width);
                     search_drawn = true;
                 }
@@ -3922,14 +3950,156 @@ fn swatches_body(w: &mut Workspace, ui: &mut Ui) {
         .map(|(i, s)| (i, s.rgba, s.name.clone()))
         .collect();
     // W16-E: the panel menu's Tiles/List, and the swatch its Name Change,
-    // Delete and Export act on (the one last clicked, ringed).
-    use crate::panels::panel_menus_w16::{self as menus, Library, ViewMode};
-    let chosen = menus::selected(ui.ctx(), Library::Swatches);
-    let as_list = menus::view_mode(ui.ctx(), Library::Swatches) == ViewMode::List;
-    let mut picked: Option<(usize, [f32; 4])> = None;
-    let mut remove: Option<usize> = None;
+    // Delete and Export act on (the one last clicked, ringed). And the
+    // folders of Photopea's Swatches list (its `gF` gallery): a header row
+    // per folder that opens and closes, holding the swatches dragged onto it.
+    use crate::panels::panel_menus_w16::{
+        self as menus, Library, SwatchDrag, SwatchDrop, ViewMode,
+    };
+    let ctx = ui.ctx().clone();
+    let mut folders = menus::swatch_folders(&ctx);
+    let present: Vec<[u8; 4]> = entries.iter().map(|e| menus::swatch_key(e.1)).collect();
+    let mut pruned = false;
+    for folder in &mut folders {
+        let had = folder.members.len();
+        folder.members.retain(|k| present.contains(k));
+        pruned |= folder.members.len() != had;
+    }
+    if pruned {
+        menus::set_swatch_folders(&ctx, folders.clone());
+    }
+    let chosen = menus::selected(&ctx, Library::Swatches);
+    let chosen_folder = menus::selected_folder(&ctx);
+    let as_list = menus::view_mode(&ctx, Library::Swatches) == ViewMode::List;
+    let mut clicks = SwatchClicks::default();
+    let loose: Vec<(usize, [f32; 4], String)> = entries
+        .iter()
+        .filter(|e| menus::folder_of(&folders, menus::swatch_key(e.1)).is_none())
+        .cloned()
+        .collect();
+    swatch_entries(ui, &loose, chosen, as_list, per_row, &mut clicks);
+    for (index, folder) in folders.iter().enumerate() {
+        let header = list_row_layout(
+            ui,
+            menus::ids::swatch_folder(index),
+            chosen_folder == Some(index),
+            |ui| {
+                let chevron = if folder.open {
+                    "chevron-down"
+                } else {
+                    "chevron-right"
+                };
+                let toggle = super::icon_button_id(
+                    ui,
+                    chevron,
+                    true,
+                    menus::ids::swatch_folder_toggle(index),
+                )
+                .on_hover_text(crate::strings::tr("ui.w16.swatches.folder.toggle"));
+                let icon = t.metrics.list_row_height - Space::XSmall.pt();
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(icon), Sense::hover());
+                crate::icons::paint_ui_icon(ui, rect, "layer-group", TextRole::Primary);
+                ui.label(body(ui, folder.name.clone()));
+                toggle.clicked()
+            },
+        );
+        if header.inner {
+            clicks.toggle = Some(index);
+        } else if header.response.clicked() {
+            clicks.folder = Some(index);
+        }
+        if let Some(drag) = header.response.dnd_release_payload::<SwatchDrag>() {
+            clicks.dropped = Some((drag.0, SwatchDrop::Folder(index)));
+        }
+        if folder.open {
+            let members: Vec<(usize, [f32; 4], String)> = folder
+                .members
+                .iter()
+                .filter_map(|k| {
+                    entries
+                        .iter()
+                        .find(|e| menus::swatch_key(e.1) == *k)
+                        .cloned()
+                })
+                .collect();
+            ui.indent(("raster-w16-swatch-folder-body", index), |ui| {
+                let per_row =
+                    ((ui.available_width() / (side + Space::Hair.pt())).floor() as usize).max(1);
+                swatch_entries(ui, &members, chosen, as_list, per_row, &mut clicks);
+            });
+        }
+    }
+    if let Some((i, rgba)) = clicks.picked {
+        menus::set_selected(&ctx, Library::Swatches, Some(i));
+        menus::set_selected_folder(&ctx, None);
+        if w.color.set_current(rgba) {
+            emit_color(w);
+        }
+    }
+    if let Some(index) = clicks.toggle {
+        menus::toggle_swatch_folder(&ctx, index);
+    }
+    if let Some(index) = clicks.folder {
+        menus::set_selected_folder(&ctx, Some(index));
+        menus::set_selected(&ctx, Library::Swatches, None);
+    }
+    if let Some((dragged, target)) = clicks.dropped {
+        menus::drop_swatch(w, &ctx, dragged, target);
+    }
+    if let Some(i) = clicks.remove {
+        w.swatches.remove(i);
+        menus::set_selected(&ctx, Library::Swatches, None);
+    }
+    ui.add_space(Space::XSmall.pt());
+    if design::secondary_button(ui, crate::strings::tr("ui.docks.add.current.colour")).clicked() {
+        let rgba = w.color.current();
+        let name = crate::panels::color::format_hex(rgba);
+        w.swatches.add(name, rgba);
+    }
+    ui.label(hint(
+        ui,
+        crate::strings::tr("ui.docks.right.click.a.swatch.to.remove"),
+    ));
+}
+
+/// W16-E: what the swatches drawn this frame were asked to do.
+#[derive(Default)]
+struct SwatchClicks {
+    picked: Option<(usize, [f32; 4])>,
+    remove: Option<usize>,
+    toggle: Option<usize>,
+    folder: Option<usize>,
+    dropped: Option<([u8; 4], crate::panels::panel_menus_w16::SwatchDrop)>,
+}
+
+/// W16-E: draw `entries` (palette index, colour, name) as tiles or List
+/// rows; each can be clicked, right-clicked, dragged, and dropped on.
+fn swatch_entries(
+    ui: &mut Ui,
+    entries: &[(usize, [f32; 4], String)],
+    chosen: Option<usize>,
+    as_list: bool,
+    per_row: usize,
+    clicks: &mut SwatchClicks,
+) {
+    use crate::panels::panel_menus_w16::{self as menus, Library, SwatchDrag, SwatchDrop};
+    let t = current_tokens(ui);
+    let side = t.metrics.min_hit_target;
+    let mut handle = |response: &egui::Response, i: usize, rgba: [f32; 4]| {
+        let key = menus::swatch_key(rgba);
+        response.dnd_set_drag_payload(SwatchDrag(key));
+        if let Some(drag) = response.dnd_release_payload::<SwatchDrag>() {
+            clicks.dropped = Some((drag.0, SwatchDrop::Swatch(key)));
+        }
+        if response.clicked() {
+            clicks.picked = Some((i, rgba));
+        }
+        if response.secondary_clicked() {
+            clicks.remove = Some(i);
+        }
+    };
     if as_list {
-        for (i, rgba, name) in &entries {
+        for (i, rgba, name) in entries {
             let row = list_row_layout(
                 ui,
                 menus::ids::list_row(Library::Swatches, *i),
@@ -3942,12 +4112,8 @@ fn swatches_body(w: &mut Workspace, ui: &mut Ui) {
                     ui.label(body(ui, name.clone()));
                 },
             );
-            if row.response.clicked() {
-                picked = Some((*i, *rgba));
-            }
-            if row.response.secondary_clicked() {
-                remove = Some(*i);
-            }
+            let response = row.response.interact(Sense::drag());
+            handle(&response, *i, *rgba);
         }
     } else {
         for chunk in entries.chunks(per_row) {
@@ -3956,7 +4122,7 @@ fn swatches_body(w: &mut Workspace, ui: &mut Ui) {
                 for (i, rgba, name) in chunk {
                     let rect = swatch(ui, *rgba, side, Sense::hover()).rect;
                     let response = ui
-                        .interact(rect, menus::ids::swatch_tile(*i), Sense::click())
+                        .interact(rect, menus::ids::swatch_tile(*i), Sense::click_and_drag())
                         .on_hover_text(name);
                     if chosen == Some(*i) && ui.is_rect_visible(rect) {
                         ui.painter().rect_stroke(
@@ -3968,36 +4134,11 @@ fn swatches_body(w: &mut Workspace, ui: &mut Ui) {
                             ),
                         );
                     }
-                    if response.clicked() {
-                        picked = Some((*i, *rgba));
-                    }
-                    if response.secondary_clicked() {
-                        remove = Some(*i);
-                    }
+                    handle(&response, *i, *rgba);
                 }
             });
         }
     }
-    if let Some((i, rgba)) = picked {
-        menus::set_selected(ui.ctx(), Library::Swatches, Some(i));
-        if w.color.set_current(rgba) {
-            emit_color(w);
-        }
-    }
-    if let Some(i) = remove {
-        w.swatches.remove(i);
-        menus::set_selected(ui.ctx(), Library::Swatches, None);
-    }
-    ui.add_space(Space::XSmall.pt());
-    if design::secondary_button(ui, crate::strings::tr("ui.docks.add.current.colour")).clicked() {
-        let rgba = w.color.current();
-        let name = crate::panels::color::format_hex(rgba);
-        w.swatches.add(name, rgba);
-    }
-    ui.label(hint(
-        ui,
-        crate::strings::tr("ui.docks.right.click.a.swatch.to.remove"),
-    ));
 }
 
 // ---------------------------------------------------------------------------

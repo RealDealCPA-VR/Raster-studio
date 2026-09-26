@@ -367,8 +367,14 @@ fn backspace_and_delete_remove_the_polygonal_lassos_last_point() {
     assert_eq!(lasso_points(&mut shell).map(|p| p.len()), Some(5));
     key(&mut shell, NamedKey::Backspace);
     assert_eq!(lasso_points(&mut shell).map(|p| p.len()), Some(4));
+    shell.chrome.workspace_for_test().drain_intents();
     key(&mut shell, NamedKey::Delete);
     assert_eq!(lasso_points(&mut shell).map(|p| p.len()), Some(3));
+    assert_eq!(
+        shell.chrome.workspace_for_test().drain_intents(),
+        Vec::new(),
+        "Delete also went to the keymap's Clear"
+    );
     assert_eq!(composite(&mut shell), pixels, "Delete cleared pixels");
     assert_eq!(depth(&shell), before, "a removed point is not a step");
     click(&mut shell, 10.0, 50.0);
@@ -515,4 +521,59 @@ fn alt_during_a_lasso_drag_draws_straight_segments_until_alt_is_let_go() {
     );
     assert_eq!(depth(&shell), before + 1);
     assert!(lasso_points(&mut shell).is_none());
+}
+
+#[test]
+fn escape_drops_an_open_polygonal_or_magnetic_outline_and_keeps_the_selection() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut shell = shell_with_image(dir.path());
+    let (min, max) = (IVec2::new(2, 2), IVec2::new(8, 8));
+    for tool in [ToolId::PolygonalLasso, ToolId::MagneticLasso] {
+        shell.editor.set_tool(tool);
+        set_selection(&mut shell, min, max);
+        let before = depth(&shell);
+        // Presses outside the selection: each adds a point, none is a drag.
+        click(&mut shell, 12.0, 12.0);
+        click(&mut shell, 50.0, 12.0);
+        to(&mut shell, 50.0, 30.0);
+        click(&mut shell, 50.0, 50.0);
+        assert!(
+            lasso_points(&mut shell).is_some_and(|p| p.len() >= 3),
+            "{tool:?}: no open outline to cancel"
+        );
+        key(&mut shell, NamedKey::Escape);
+        assert!(
+            lasso_points(&mut shell).is_none(),
+            "{tool:?}: Escape left the outline up"
+        );
+        assert_eq!(
+            selection(&shell),
+            Selection::Rect { min, max },
+            "{tool:?}: Escape changed the selection"
+        );
+        assert_eq!(depth(&shell), before, "{tool:?}: Escape took a step");
+        // Nothing left for Enter to close.
+        key(&mut shell, NamedKey::Enter);
+        assert_eq!(selection(&shell), Selection::Rect { min, max });
+        assert_eq!(
+            depth(&shell),
+            before,
+            "{tool:?}: Enter closed a dropped outline"
+        );
+    }
+}
+
+#[test]
+fn delete_with_no_open_lasso_outline_still_reaches_the_keymaps_clear() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut shell = shell_with_image(dir.path());
+    shell.editor.set_tool(ToolId::PolygonalLasso);
+    set_selection(&mut shell, IVec2::new(20, 20), IVec2::new(30, 30));
+    shell.chrome.workspace_for_test().drain_intents();
+    key(&mut shell, NamedKey::Delete);
+    assert_eq!(
+        shell.chrome.workspace_for_test().drain_intents(),
+        vec![ui::Intent::Action(ui::menu::MenuAction::ClearPixels)],
+        "Delete was swallowed by the lasso route with no outline open"
+    );
 }

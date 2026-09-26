@@ -307,9 +307,10 @@ pub fn active_text(doc: &Document, active: Option<LayerId>) -> Option<(LayerId, 
     }
 }
 
-/// Why the Character and Paragraph panels are inert.
-pub const fn no_text_layer_reason() -> &'static str {
-    "Select a text layer to edit its type"
+/// Why the Character and Paragraph panels are inert, in the interface
+/// language (W16-N).
+pub fn no_text_layer_reason() -> &'static str {
+    crate::strings::tr_en("Select a text layer to edit its type")
 }
 
 /// Emit the edit that replaces a text layer's run, or nothing when the run is

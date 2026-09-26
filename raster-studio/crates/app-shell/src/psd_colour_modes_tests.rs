@@ -376,3 +376,34 @@ fn an_rgb_document_saved_in_cmyk_mode_is_written_as_cmyk() {
         assert!(a.abs_diff(*b) <= 1, "{back:?} vs {composite:?}");
     }
 }
+
+/// A 16-bit layered greyscale `.psd` opens as a 16-bit Grayscale document
+/// and Save as PSD writes the layer's 16-bit samples back, not the 8-bit
+/// codes nearest them (1000 is not an 8-bit code: 8 bits would write 1028).
+#[test]
+fn a_sixteen_bit_greyscale_psd_saves_back_its_sixteen_bit_samples() {
+    let values = [1000u16, 30000, 65000, 7];
+    let w = values.len() as u32;
+    let plane: Vec<u8> = values.iter().flat_map(|v| v.to_be_bytes()).collect();
+    let mut file = PsdFile::new(header(ColorMode::Grayscale, 2, Depth::Sixteen, w, 1));
+    let mut layer = PsdLayer::raster("Grey", Rect::sized(w, 1));
+    layer.channels = vec![
+        Channel::new(psd::CHANNEL_ALPHA, [0xFFu8, 0xFF].repeat(w as usize)),
+        Channel::new(0, plane.clone()),
+    ];
+    file.layers.push(layer);
+    file.merged = Some(MergedImage {
+        channels: vec![plane.clone(), [0xFFu8, 0xFF].repeat(w as usize)],
+    });
+    let (import, saved, _) = open_and_save(&psd::write(&file).unwrap());
+    let doc = &import.imported.document;
+    assert_eq!(doc.meta.color_mode, mode::GRAYSCALE);
+    assert_eq!(doc.meta.bit_depth, 16);
+    assert_eq!(saved.header.color_mode, ColorMode::Grayscale);
+    assert_eq!(saved.header.depth, Depth::Sixteen);
+    let got = &saved.layers[0].channel(0).unwrap().data;
+    for (i, (pair, want)) in got.chunks(2).zip(values).enumerate() {
+        let g = u16::from_be_bytes([pair[0], pair[1]]);
+        assert!(g.abs_diff(want) <= 1, "pixel {i}: {g} vs {want}");
+    }
+}

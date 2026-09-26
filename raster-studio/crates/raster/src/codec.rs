@@ -252,8 +252,10 @@ pub enum ImportFormat {
     Xcf,
     /// W10-F: JPEG XL, decoded by `jxl-oxide` ([`formats::jxl`]).
     Jxl,
-    /// W10-F: AVIF. **Recognised, refused by name**: no fuzz-safe pure-Rust
-    /// AV1 decoder exists (see [`formats::avif`]); AVIF *export* works.
+    /// W10-F: AVIF. W15-A: decoded only through the isolated decoder the
+    /// application installs ([`formats::heif`]: its AV1 decoder runs in a
+    /// worker process, so a decoder panic cannot close the editor); with none
+    /// installed (this crate alone) it is refused by name. Export works.
     Avif,
     /// W11-H: OpenEXR, opened as a 16-bit sRGB surface ([`formats::float`]).
     Exr,
@@ -274,8 +276,11 @@ pub enum ImportFormat {
     /// W13-D: PDF, and an Illustrator `.ai` saved PDF-compatible: pages
     /// rendered by `hayro` ([`formats::pdf`]); the flat decode is page 1.
     Pdf,
-    /// W13-D: EPS: its embedded TIFF / WMF / EPSI preview only
-    /// ([`formats::vector_docs`]).
+    /// W13-D: EPS. W15-E: its PostScript artwork, drawn by the bounded
+    /// interpreter ([`formats::postscript`]), falling back to the embedded
+    /// TIFF / WMF / EPSI preview when that draws nothing
+    /// ([`formats::vector_docs`]); W16-I: the application opens it as
+    /// vector layers.
     Eps,
     /// W13-D: Paint.NET `.pdn`: its flattened thumbnail only
     /// ([`formats::vector_docs`]).

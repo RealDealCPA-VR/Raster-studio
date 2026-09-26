@@ -582,8 +582,11 @@ pub fn to_working_rgb(file: &mut PsdFile, science: &WorkingScience<'_>) -> PsdRe
     if source == ColorMode::Multichannel {
         result.dropped_channels = declared.saturating_sub(inputs);
     }
-    let with_alpha = indexed.as_ref().is_some_and(|t| t.transparent.is_some())
-        || (source == ColorMode::Indexed && extras_declared > 0);
+    // An Indexed composite's first channel past the index is its
+    // transparency (the header counts it as alpha): it becomes the working
+    // alpha, combined with the transparent index when the file names both.
+    let indexed_alpha = source == ColorMode::Indexed && extras_declared > 0;
+    let with_alpha = indexed.as_ref().is_some_and(|t| t.transparent.is_some()) || indexed_alpha;
     if let Some(merged) = file.merged.take() {
         let planes: Vec<Vec<u8>> = merged.channels.iter().map(|p| narrow(p, depth)).collect();
         let colour: Vec<&[u8]> = planes.iter().take(inputs).map(Vec::as_slice).collect();
@@ -593,7 +596,13 @@ pub fn to_working_rgb(file: &mut PsdFile, science: &WorkingScience<'_>) -> PsdRe
             Some((out, alpha)) => {
                 channels.extend(out);
                 if with_alpha {
-                    channels.push(alpha.unwrap_or_else(|| vec![255u8; n]));
+                    let mut alpha = alpha.unwrap_or_else(|| vec![255u8; n]);
+                    if let Some(file_alpha) = planes.get(1).filter(|_| indexed_alpha) {
+                        for (a, f) in alpha.iter_mut().zip(file_alpha) {
+                            *a = (*a).min(*f);
+                        }
+                    }
+                    channels.push(alpha);
                 }
             }
             None => {
@@ -605,7 +614,11 @@ pub fn to_working_rgb(file: &mut PsdFile, science: &WorkingScience<'_>) -> PsdRe
             }
         }
         if source != ColorMode::Multichannel {
-            channels.extend(planes.into_iter().skip(consumed));
+            channels.extend(
+                planes
+                    .into_iter()
+                    .skip(consumed + usize::from(indexed_alpha)),
+            );
         }
         file.merged = Some(MergedImage { channels });
     }
@@ -614,7 +627,7 @@ pub fn to_working_rgb(file: &mut PsdFile, science: &WorkingScience<'_>) -> PsdRe
         + if source == ColorMode::Multichannel {
             0
         } else {
-            extras_declared
+            extras_declared - usize::from(indexed_alpha)
         };
     file.header = PsdHeader {
         channels: channels.min(56) as u16,
@@ -703,6 +716,18 @@ pub fn luma601(rgb: [u8; 3]) -> u8 {
         .clamp(0.0, 255.0) as u8
 }
 
+/// Rec. 601 luma of three big-endian 16-bit planes of `n` samples, as one
+/// big-endian 16-bit plane.
+fn luma601_16(planes: [&[u8]; 3], n: usize) -> Vec<u8> {
+    let at = |p: &[u8], i: usize| f64::from(u16::from_be_bytes([p[2 * i], p[2 * i + 1]]));
+    (0..n)
+        .flat_map(|i| {
+            let y = 0.299 * at(planes[0], i) + 0.587 * at(planes[1], i) + 0.114 * at(planes[2], i);
+            (y.round().clamp(0.0, 65535.0) as u16).to_be_bytes()
+        })
+        .collect()
+}
+
 /// The inverse of [`to_working_rgb`] for the modes this crate writes:
 /// convert an RGB file (8- or 16-bit, as the application builds it) into
 /// Greyscale, CMYK or Lab — every layer's colour channels and the merged
@@ -712,8 +737,9 @@ pub fn luma601(rgb: [u8; 3]) -> u8 {
 /// table's transparent index) at 8 bits.
 ///
 /// CMYK samples are written inverted (`0` = 100 % ink) and Lab ones
-/// offset-encoded, the way Photoshop reads them. Conversion runs at 8-bit
-/// precision; a 16-bit file is widened back exactly.
+/// offset-encoded, the way Photoshop reads them. Colour conversion runs at
+/// 8-bit precision and a 16-bit file is widened back exactly; a 16-bit
+/// Greyscale separation keeps its 16-bit samples.
 pub fn from_working_rgb(file: &mut PsdFile, separation: Separation<'_>) -> PsdResult<()> {
     if file.header.color_mode != ColorMode::Rgb {
         return Err(PsdError::InvalidDocument(format!(
@@ -753,9 +779,15 @@ pub fn from_working_rgb(file: &mut PsdFile, separation: Separation<'_>) -> PsdRe
         }
     };
     let bps = depth.bytes_per_sample();
+    // A 16-bit greyscale document keeps its 16-bit samples: its luma is taken
+    // at 16 bits, not through the 8-bit path the colour separations use.
+    let grey16 = target == ColorMode::Grayscale && depth == Depth::Sixteen;
     let mut separate = |planes: [&[u8]; 3], n: usize| -> Option<Vec<Vec<u8>>> {
         if planes.iter().any(|p| p.len() != n * bps) {
             return None;
+        }
+        if grey16 {
+            return Some(vec![luma601_16(planes, n)]);
         }
         let narrowed = planes.map(|p| narrow(p, depth));
         let mut out = vec![Vec::with_capacity(n); outputs];

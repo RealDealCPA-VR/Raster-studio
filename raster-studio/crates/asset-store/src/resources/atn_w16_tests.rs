@@ -263,7 +263,7 @@ fn steps_this_application_cannot_follow_say_why() {
 
 fn every_w16_op() -> Vec<StepOp> {
     use layer_model::BlendMode;
-    vec![
+    let mut ops = vec![
         StepOp::Levels(vec![
             LevelsEntry {
                 channel: ToneChannel::Composite,
@@ -499,7 +499,27 @@ fn every_w16_op() -> Vec<StepOp> {
         },
         StepOp::Save,
         StepOp::Export,
-    ]
+    ];
+    // W16-H: every adjustment also as a new adjustment layer and as an edit
+    // of the active one.
+    let layers: Vec<StepOp> = ops
+        .iter()
+        .chain([&StepOp::Invert])
+        .filter(|op| op.is_layer_adjustment())
+        .flat_map(|op| {
+            [
+                StepOp::MakeAdjustmentLayer(Box::new(op.clone())),
+                StepOp::SetAdjustmentLayer(Box::new(op.clone())),
+            ]
+        })
+        .collect();
+    assert!(
+        layers.len() >= 28,
+        "fourteen adjustments, twice: {}",
+        layers.len()
+    );
+    ops.extend(layers);
+    ops
 }
 
 /// Close enough for the one lossy pair (Color Range's colour goes through
@@ -552,4 +572,130 @@ fn lab_and_rgb_are_inverse() {
             "{rgb:?} -> {back:?}"
         );
     }
+}
+
+/// W16-H: Layer ▸ New Adjustment Layer and an edit of the active one, laid
+/// down the way Photoshop records them.
+#[test]
+fn photoshop_recorded_adjustment_layers_read_with_their_settings() {
+    let levels = photoshop_levels().descriptor.unwrap();
+    let mut ty = levels.clone();
+    ty.class_id = "Lvls".into();
+    let make = AtnStep::new(
+        "Mk  ",
+        "Make",
+        Some(d(
+            "null",
+            vec![
+                (
+                    "null",
+                    Value::Reference(vec![RefItem::Class {
+                        name: String::new(),
+                        class_id: "AdjL".into(),
+                    }]),
+                ),
+                (
+                    "Usng",
+                    Value::Descriptor(d("AdjL", vec![("Type", Value::Descriptor(ty))])),
+                ),
+            ],
+        )),
+    );
+    let expected_levels = interpret(&photoshop_levels()).unwrap();
+    assert_eq!(
+        interpret(&make),
+        Ok(StepOp::MakeAdjustmentLayer(Box::new(expected_levels)))
+    );
+
+    let set = AtnStep::new(
+        "setd",
+        "Set",
+        Some(d(
+            "null",
+            vec![
+                (
+                    "null",
+                    Value::Reference(vec![RefItem::Enumerated {
+                        name: String::new(),
+                        class_id: "AdjL".into(),
+                        type_id: "Ordn".into(),
+                        value: "Trgt".into(),
+                    }]),
+                ),
+                (
+                    "T   ",
+                    Value::Descriptor(d(
+                        "HStr",
+                        vec![
+                            ("presetKind", en("presetKindType", "presetKindCustom")),
+                            ("Clrz", Value::Bool(false)),
+                            (
+                                "Adjs",
+                                Value::List(vec![Value::Descriptor(d(
+                                    "Hst2",
+                                    vec![
+                                        ("H   ", Value::Integer(25)),
+                                        ("Strt", Value::Integer(-30)),
+                                        ("Lght", Value::Integer(0)),
+                                    ],
+                                ))]),
+                            ),
+                        ],
+                    )),
+                ),
+            ],
+        )),
+    );
+    assert_eq!(
+        interpret(&set),
+        Ok(StepOp::SetAdjustmentLayer(Box::new(
+            StepOp::HueSaturation {
+                hue: 25.0,
+                saturation: -30.0,
+                lightness: 0.0,
+                colorize: false,
+            }
+        )))
+    );
+
+    // A content layer whose Type is an adjustment is one too; a Selective
+    // Color layer and a solid-colour fill layer say why they are skipped.
+    let content = |class: &str| {
+        AtnStep::new(
+            "Mk  ",
+            "Make",
+            Some(d(
+                "null",
+                vec![
+                    (
+                        "null",
+                        Value::Reference(vec![RefItem::Class {
+                            name: String::new(),
+                            class_id: "contentLayer".into(),
+                        }]),
+                    ),
+                    (
+                        "Usng",
+                        Value::Descriptor(d(
+                            "contentLayer",
+                            vec![(
+                                "Type",
+                                Value::Descriptor(d(class, vec![("Lvls", Value::Integer(6))])),
+                            )],
+                        )),
+                    ),
+                ],
+            )),
+        )
+    };
+    assert_eq!(
+        interpret(&content("Pstr")),
+        Ok(StepOp::MakeAdjustmentLayer(Box::new(StepOp::Posterize {
+            levels: 6
+        })))
+    );
+    assert!(interpret(&content("SlcC")).unwrap_err().contains("SlcC"));
+    assert!(interpret(&content("solidColorLayer"))
+        .unwrap_err()
+        .contains("solidColorLayer"));
 }

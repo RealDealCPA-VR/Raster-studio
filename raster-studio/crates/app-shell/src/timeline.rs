@@ -27,9 +27,9 @@ impl crate::editor::Editor {
     /// No history step and no dirty flag: the playhead is not an edit. Not
     /// journaled either, for the same reason. Answers whether anything moved.
     pub fn seek_timeline(&mut self, t_ms: u32) -> bool {
-        // W16-M: a reopened document's video layers read their frames again
-        // (once per source file a session).
-        video_layers::reload_once(self);
+        // W16-M: video layers decode on demand: the frame each shows at
+        // `t_ms`, when not decoded yet, is decoded (its window) first.
+        self.load_video_frames_at(t_ms);
         let Some(open) = self.active_mut() else {
             return false;
         };
@@ -77,6 +77,18 @@ pub fn export_frames(
     if !exports_timeline(doc) {
         return crate::import::composite_animation_frames(doc, tiles).map_err(|e| e.to_string());
     }
+    // W16-M: video layers decode on demand, so the frames the export renders
+    // that are not decoded yet are decoded now, into this export's own copy.
+    let filled;
+    let (doc, tiles) = if doc.timeline.videos.iter().all(|c| c.frames_loaded()) {
+        (doc, tiles)
+    } else {
+        let mut doc = doc.clone();
+        let mut tiles = tiles.clone();
+        video_layers::fill_video_frames(&mut doc, &mut tiles);
+        filled = (doc, tiles);
+        (&filled.0, &filled.1)
+    };
     let times = doc.timeline.frame_times();
     let bytes = u64::from(doc.width()) * u64::from(doc.height()) * 4 * times.len() as u64;
     if times.len() > MAX_ANIMATION_FRAMES || bytes > MAX_ANIMATION_BYTES {

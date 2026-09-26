@@ -1,7 +1,12 @@
 //! W16-K: the options-bar rows Photopea's bars carry that ours lacked.
 //!
-//! * Hand and Zoom: Fit on Screen and 100% (the View menu's own rows);
-//!   Rotate View: Reset (View > Reset View Rotation).
+//! * Zoom: Photopea's Pixel to Pixel (View > 100%) and Fit The Area (View >
+//!   Fit on Screen); Rotate View: Photopea's Angle field (the document
+//!   camera's rotation, -180 to 180 degrees, the Navigator's own route) and
+//!   Reset (View > Reset View Rotation). Not built (see the parity matrix):
+//!   the Zoom bar's Zoom In / Zoom Out toggle (a zoom click is stepped by the
+//!   canvas router, `canvas::input`, which reads only Alt) and the All
+//!   Documents box on the Zoom and Hand bars, so the Hand bar has no row.
 //! * Every selection tool: Refine Edge; the wand group (Object Selection,
 //!   Magic Wand, Quick Selection): Select Subject first.
 //! * Type and Vertical Type: Warp (Layer > Text > Warp Text...) and Convert
@@ -9,12 +14,15 @@
 //! * Every brush-driven tool: a brush-preset picker (the Brushes panel's
 //!   presets, applied exactly as a click in the panel applies one).
 //! * Crop: Photopea's "..." Crop by list - All Layers (Image > Reveal All),
-//!   Current Layer, Trim, Selection (Image > Crop to Selection).
+//!   Current Layer, Trim, Selection (Image > Crop to Selection), in
+//!   Photopea's words. Each row crops at once; Photopea sets the crop box
+//!   and waits for the commit (not built, see the parity matrix).
 //! * Artboard: the + buttons, a new artboard of the active one's size on
 //!   each side of it.
 //!
 //! Every button raises a menu action ([`Intent::Action`]), so the bar and the
-//! menu run one route; the captions are the actions' own labels.
+//! menu run one route; the captions are the actions' own labels in the
+//! active language (`tr_owned`, as the menus draw them).
 
 use super::*;
 use crate::menu::{ArtboardSide, WarpTextItem, ZoomCommand};
@@ -24,6 +32,7 @@ use crate::menu::{ArtboardSide, WarpTextItem, ZoomCommand};
 pub const FIT_KEY: &str = "w16k_fit";
 pub const PIXEL_KEY: &str = "w16k_pixel_to_pixel";
 pub const ROTATE_RESET_KEY: &str = "w16k_rotate_reset";
+pub const ROTATE_ANGLE_KEY: &str = "w16k_rotate_angle";
 pub const REFINE_EDGE_KEY: &str = "w16k_refine_edge";
 pub const SELECT_SUBJECT_KEY: &str = "w16k_select_subject";
 pub const TYPE_WARP_KEY: &str = "w16k_type_warp";
@@ -46,6 +55,18 @@ pub const CROP_BY: [MenuAction; 4] = [
     MenuAction::CropToSelection,
 ];
 
+/// Crop by's row captions, Photopea's words (`17.0`, `17.1`, `11.12.0`,
+/// `17.2` in its string table), as catalogue keys.
+pub fn crop_by_caption(action: MenuAction) -> &'static str {
+    use crate::strings::tr;
+    match action {
+        MenuAction::RevealAll => tr("ui.w16k.crop_by.all_layers"),
+        MenuAction::CropToLayer => tr("ui.w16k.crop_by.current_layer"),
+        MenuAction::Trim => tr("ui.w16k.crop_by.trim"),
+        _ => tr("ui.w16k.crop_by.selection"),
+    }
+}
+
 /// The selection tools (Refine Edge on each bar).
 pub const SELECTION_TOOLS: [ToolId; 10] = [
     ToolId::RectMarquee,
@@ -61,8 +82,7 @@ pub const SELECTION_TOOLS: [ToolId; 10] = [
 ];
 
 /// The wand group, whose bars lead with Select Subject.
-pub const SUBJECT_TOOLS: [ToolId; 4] = [
-    ToolId::SingleRowMarquee,
+pub const SUBJECT_TOOLS: [ToolId; 3] = [
     ToolId::MagicWand,
     ToolId::QuickSelect,
     ToolId::ObjectSelection,
@@ -85,40 +105,85 @@ fn action_button(
     action: MenuAction,
     key: &'static str,
 ) {
-    let response = super::super::labelled_button(
-        ui,
-        &action.label(),
-        true,
-        super::super::ids::tool_option(tool, key),
-    );
+    let caption = crate::strings::tr_owned(action.label());
+    captioned_button(w, ui, tool, action, key, &caption);
+}
+
+fn captioned_button(
+    w: &mut Workspace,
+    ui: &mut Ui,
+    tool: ToolId,
+    action: MenuAction,
+    key: &'static str,
+    caption: &str,
+) {
+    let response =
+        super::super::labelled_button(ui, caption, true, super::super::ids::tool_option(tool, key));
     if response.clicked() {
         w.emit(Intent::Action(action));
     }
 }
 
-/// Hand, Zoom and Rotate View have no settings, only these buttons; `true`
-/// when `tool` is one of them (the bar then draws nothing else).
+/// Photopea's Rotate View Angle: the document camera's rotation as the
+/// application publishes it for the Navigator, committed on Enter through
+/// the Navigator's own request (`PanelRequest::SetViewAngle`).
+fn angle_field(ui: &mut Ui) {
+    use crate::panels::panel_menus_w16 as menus;
+    let width = design::current_tokens(ui).metrics.numeric_field_width;
+    ui.label(hint(ui, crate::strings::tr("ui.w16.navigator.angle")));
+    let shown = menus::published_view_angle(ui.ctx());
+    let field = super::super::text_field_sized(
+        ui,
+        super::super::ids::tool_option(ToolId::RotateView, ROTATE_ANGLE_KEY),
+        &format!("{shown:.1}"),
+        width,
+    );
+    ui.label(hint(ui, crate::strings::tr("ui.w16.navigator.degrees")));
+    if let Some(typed) = field.committed {
+        if let Some(angle) = crate::panels::navigator::parse_angle(&typed) {
+            if (angle - shown).abs() > f32::EPSILON {
+                menus::publish_view_angle(ui.ctx(), angle);
+                menus::post(menus::PanelRequest::SetViewAngle(angle));
+            }
+        }
+    }
+}
+
+/// Zoom and Rotate View have no settings, only Photopea's controls; `true`
+/// when `tool` is one of them (the bar then draws nothing else). The Hand
+/// is not: its bar says it has no options.
 pub(super) fn view_row(w: &mut Workspace, ui: &mut Ui, tool: ToolId) -> bool {
+    use crate::strings::tr;
     match tool {
-        ToolId::Hand | ToolId::Zoom => {
-            action_button(
-                w,
-                ui,
-                tool,
-                MenuAction::Zoom(ZoomCommand::FitOnScreen),
-                FIT_KEY,
-            );
-            action_button(
+        ToolId::Zoom => {
+            captioned_button(
                 w,
                 ui,
                 tool,
                 MenuAction::Zoom(ZoomCommand::ActualPixels),
                 PIXEL_KEY,
+                tr("ui.w16k.bar.pixel_to_pixel"),
+            );
+            captioned_button(
+                w,
+                ui,
+                tool,
+                MenuAction::Zoom(ZoomCommand::FitOnScreen),
+                FIT_KEY,
+                tr("ui.w16k.bar.fit_the_area"),
             );
             true
         }
         ToolId::RotateView => {
-            action_button(w, ui, tool, MenuAction::ResetViewRotation, ROTATE_RESET_KEY);
+            angle_field(ui);
+            captioned_button(
+                w,
+                ui,
+                tool,
+                MenuAction::ResetViewRotation,
+                ROTATE_RESET_KEY,
+                tr("ui.w16k.bar.reset"),
+            );
             true
         }
         _ => false,
@@ -238,8 +303,12 @@ fn crop_by(w: &mut Workspace, ui: &mut Ui) {
         egui::PopupCloseBehavior::CloseOnClickOutside,
         |ui| {
             for action in CROP_BY {
-                let row =
-                    super::super::labelled_button(ui, &action.label(), true, crop_by_id(action));
+                let row = super::super::labelled_button(
+                    ui,
+                    crop_by_caption(action),
+                    true,
+                    crop_by_id(action),
+                );
                 if row.clicked() {
                     picked = Some(action);
                 }

@@ -11,13 +11,214 @@
 //! mode and bit-depth changes; and, by the undo label the menu gives them,
 //! the parameterless menu commands (Invert, Desaturate, Equalize, flips,
 //! 180° turns, merges, Flatten, Group, Duplicate, Paste, Layer via Copy /
-//! Cut). A pixel edit whose settings the command does not keep — a brush
-//! stroke, a filter or adjustment applied through its dialog, whose tiles
-//! are recorded but not its sliders — has no step, and the export counts it
-//! as left out.
+//! Cut). An adjustment layer made or edited carries its settings, so it is
+//! written as Photoshop's `make` / `set` of an `adjustmentLayer`
+//! ([`adjustment_step`]). A pixel edit whose settings the command does not
+//! keep — a brush stroke, a filter or adjustment applied through its dialog,
+//! whose tiles are recorded but not its sliders — has no step, nor has a new
+//! text, shape, fill or smart-object layer (its content is not a Photoshop
+//! step this writer spells), and the export counts each as left out.
 
-use asset_store::resources::atn::{Length, ModeTarget, Pivot, StepOp, TransformTarget};
+use asset_store::resources::atn::{
+    CurvesEntry, Length, LevelsEntry, ModeTarget, Pivot, StepOp, ToneChannel, TransformTarget,
+};
 use editor_core::Command;
+use layer_model::{AdjustmentKind, LayerKind};
+
+/// W16-H: an adjustment layer's settings as the adjustment step that holds
+/// them, in Photoshop's units; `None` for an adjustment Photoshop's
+/// adjustment-layer steps here do not carry (Selective Color, Color Lookup
+/// and the destructive-only ones).
+pub(crate) fn adjustment_step(kind: &AdjustmentKind) -> Option<StepOp> {
+    let level = |v: f32| f64::from(v) * 255.0;
+    let pct = |v: f32| f64::from(v) * 100.0;
+    let levels_entry = |channel, m: &[f32; 5]| LevelsEntry {
+        channel,
+        input: [level(m[0]), level(m[1])],
+        gamma: f64::from(m[2]),
+        output: [level(m[3]), level(m[4])],
+    };
+    let curve_entry = |channel, points: &[[f32; 2]]| CurvesEntry {
+        channel,
+        points: points.iter().map(|p| [level(p[0]), level(p[1])]).collect(),
+    };
+    Some(match kind {
+        AdjustmentKind::Levels {
+            black,
+            white,
+            gamma,
+        } => StepOp::Levels(vec![levels_entry(
+            ToneChannel::Composite,
+            &[*black, *white, *gamma, 0.0, 1.0],
+        )]),
+        AdjustmentKind::LevelsFull {
+            composite,
+            red,
+            green,
+            blue,
+        } => {
+            const IDENTITY: [f32; 5] = [0.0, 1.0, 1.0, 0.0, 1.0];
+            let mut entries = vec![levels_entry(ToneChannel::Composite, composite)];
+            for (channel, m) in [
+                (ToneChannel::Red, red),
+                (ToneChannel::Green, green),
+                (ToneChannel::Blue, blue),
+            ] {
+                if *m != IDENTITY {
+                    entries.push(levels_entry(channel, m));
+                }
+            }
+            StepOp::Levels(entries)
+        }
+        AdjustmentKind::Curves { points } => {
+            StepOp::Curves(vec![curve_entry(ToneChannel::Composite, points)])
+        }
+        AdjustmentKind::CurvesFull {
+            composite,
+            red,
+            green,
+            blue,
+        } => {
+            let identity: &[[f32; 2]] = &[[0.0, 0.0], [1.0, 1.0]];
+            let mut entries = vec![curve_entry(ToneChannel::Composite, composite)];
+            for (channel, points) in [
+                (ToneChannel::Red, red),
+                (ToneChannel::Green, green),
+                (ToneChannel::Blue, blue),
+            ] {
+                if points.as_slice() != identity {
+                    entries.push(curve_entry(channel, points));
+                }
+            }
+            StepOp::Curves(entries)
+        }
+        AdjustmentKind::Exposure { stops } => StepOp::Exposure {
+            exposure: f64::from(*stops),
+            offset: 0.0,
+            gamma: 1.0,
+        },
+        AdjustmentKind::ExposureFull {
+            stops,
+            offset,
+            gamma,
+        } => StepOp::Exposure {
+            exposure: f64::from(*stops),
+            offset: f64::from(*offset),
+            gamma: f64::from(*gamma),
+        },
+        AdjustmentKind::HueSaturation {
+            hue,
+            saturation,
+            lightness,
+        }
+        | AdjustmentKind::HueSaturationFull {
+            hue,
+            saturation,
+            lightness,
+            colorize: None,
+        } => StepOp::HueSaturation {
+            hue: f64::from(*hue),
+            saturation: pct(*saturation),
+            lightness: pct(*lightness),
+            colorize: false,
+        },
+        AdjustmentKind::HueSaturationFull {
+            colorize: Some([hue, saturation, lightness]),
+            ..
+        } => StepOp::HueSaturation {
+            hue: f64::from(*hue),
+            saturation: pct(*saturation),
+            lightness: pct(*lightness),
+            colorize: true,
+        },
+        AdjustmentKind::ColorBalance {
+            shadows,
+            midtones,
+            highlights,
+        } => StepOp::ColorBalance {
+            shadows: shadows.map(pct),
+            midtones: midtones.map(pct),
+            highlights: highlights.map(pct),
+            preserve_luminosity: false,
+        },
+        AdjustmentKind::ColorBalanceFull {
+            shadows,
+            midtones,
+            highlights,
+            preserve_luminosity,
+        } => StepOp::ColorBalance {
+            shadows: shadows.map(pct),
+            midtones: midtones.map(pct),
+            highlights: highlights.map(pct),
+            preserve_luminosity: *preserve_luminosity,
+        },
+        // Photoshop's ranges, as `atn_play` reads them back.
+        AdjustmentKind::BrightnessContrast {
+            brightness,
+            contrast,
+        } => StepOp::BrightnessContrast {
+            brightness: f64::from(*brightness) * 150.0,
+            contrast: pct(*contrast),
+        },
+        AdjustmentKind::Vibrance {
+            vibrance,
+            saturation,
+        } => StepOp::Vibrance {
+            vibrance: pct(*vibrance),
+            saturation: pct(*saturation),
+        },
+        AdjustmentKind::BlackAndWhite { weights, tint } => StepOp::BlackAndWhite {
+            weights: weights.map(pct),
+            // The tint as the fully bright colour of its hue and saturation,
+            // which `atn_play` reads back as that hue and saturation.
+            tint: tint.map(|[hue, saturation]| hsv_to_rgb(f64::from(hue), f64::from(saturation))),
+        },
+        AdjustmentKind::PhotoFilter {
+            color_srgb,
+            density,
+            preserve_luminosity,
+        } => StepOp::PhotoFilter {
+            color: color_srgb.map(level),
+            density: pct(*density),
+            preserve_luminosity: *preserve_luminosity,
+        },
+        AdjustmentKind::ChannelMixer { rows, monochrome } => StepOp::ChannelMixer {
+            red: rows[0].map(pct),
+            green: rows[1].map(pct),
+            blue: rows[2].map(pct),
+            monochrome: *monochrome,
+        },
+        AdjustmentKind::Invert => StepOp::Invert,
+        AdjustmentKind::Posterize { levels } => StepOp::Posterize { levels: *levels },
+        AdjustmentKind::Threshold { level: l } => StepOp::Threshold { level: level(*l) },
+        AdjustmentKind::GradientMap { stops, reverse } => StepOp::GradientMap {
+            stops: stops
+                .iter()
+                .map(|(at, rgb)| (f64::from(*at), rgb.map(level)))
+                .collect(),
+            reverse: *reverse,
+        },
+        _ => return None,
+    })
+}
+
+/// `[r, g, b]` `0..=255` of a hue (degrees) and saturation `0..=1` at full
+/// value.
+fn hsv_to_rgb(hue: f64, saturation: f64) -> [f64; 3] {
+    let h = hue.rem_euclid(360.0) / 60.0;
+    let c = saturation.clamp(0.0, 1.0);
+    let x = c * (1.0 - (h % 2.0 - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = 1.0 - c;
+    [(r + m) * 255.0, (g + m) * 255.0, (b + m) * 255.0]
+}
 
 /// A recorded `TransformLayer` delta as Photoshop's Free Transform about
 /// the document origin: the translation, then rotate · skew · scale.
@@ -91,11 +292,22 @@ fn by_label(label: &str) -> Option<StepOp> {
 pub(crate) fn steps_for(command: &Command) -> Option<Vec<StepOp>> {
     let one = |op: StepOp| Some(vec![op]);
     match command {
-        Command::CreateLayer { layer } => one(if layer.is_group() {
-            StepOp::MakeGroup
-        } else {
-            StepOp::MakeLayer
+        Command::CreateLayer { layer } => one(match &layer.kind {
+            LayerKind::Group(_) => StepOp::MakeGroup,
+            LayerKind::Raster(_) => StepOp::MakeLayer,
+            LayerKind::Adjustment(a) => {
+                StepOp::MakeAdjustmentLayer(Box::new(adjustment_step(&a.kind)?))
+            }
+            // A text, shape, fill, smart-object or generator layer is not a
+            // new empty layer: writing Make Layer for it would replay as one.
+            _ => return None,
         }),
+        Command::SetLayerKind { kind, .. } => match kind.as_ref() {
+            LayerKind::Adjustment(a) => one(StepOp::SetAdjustmentLayer(Box::new(adjustment_step(
+                &a.kind,
+            )?))),
+            _ => None,
+        },
         Command::DeleteLayer { .. } => one(StepOp::DeleteLayer),
         Command::SetLayerProperties { patch, .. } => {
             let mut bare = patch.clone();

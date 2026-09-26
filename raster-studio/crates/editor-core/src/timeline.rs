@@ -75,7 +75,7 @@ use crate::document::Document;
 // playhead is put on the layer's pixels).
 #[path = "timeline_video.rs"]
 mod video;
-pub use video::VideoClip;
+pub use video::{new_video_group, video_group_line, VideoClip};
 
 /// Frames per second a new timeline plays and exports at.
 pub const DEFAULT_FPS: u32 = 30;
@@ -459,6 +459,11 @@ pub struct DocumentTimeline {
     /// documents).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub videos: Vec<VideoClip>,
+    /// W16-M: the video groups (Photopea's "New Video Group"): layer groups
+    /// whose layers play one after another on one line of the timeline
+    /// (appended; absent in older documents).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub video_groups: Vec<LayerId>,
 }
 
 impl Default for DocumentTimeline {
@@ -470,6 +475,7 @@ impl Default for DocumentTimeline {
             current_ms: 0,
             tracks: Vec::new(),
             videos: Vec::new(),
+            video_groups: Vec::new(),
         }
     }
 }

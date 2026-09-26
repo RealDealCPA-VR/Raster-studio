@@ -84,10 +84,11 @@ pub fn set_worker_executable(exe: impl Into<PathBuf>) {
 }
 
 /// Route every AVIF / HEIC decode in this process through the worker.
-/// W16-M: and every video-layer decode ([`decode_video_with_installed_worker`]).
+/// W16-M: and every video-layer decode
+/// ([`decode_video_window_with_installed_worker`]).
 pub fn install() {
     heif::install_isolated_decoder(decode_with_installed_worker);
-    crate::timeline::video_layers::install_video_decoder(decode_video_with_installed_worker);
+    crate::timeline::video_layers::install_video_decoder(decode_video_window_with_installed_worker);
 }
 
 fn decode_with_installed_worker(
@@ -497,10 +498,12 @@ pub fn worker_main(kind: Option<OsString>, mut input: impl Read, mut output: imp
         }
         _ => {}
     }
-    // W16-M: a video's frames, for a video layer.
-    if kind == VIDEO_ARG {
+    // W16-M: a video's frames (all, or a window of them), for a video layer.
+    if let Some((first, count)) = video_window_of_arg(&kind) {
         let result = match read_request(&mut input) {
-            Ok((limits, bytes)) => video::decode_in_this_process(&bytes, limits),
+            Ok((limits, bytes)) => {
+                video::decode_window_in_this_process(&bytes, limits, first, count)
+            }
             Err(e) => Err(CodecError::Unsupported(e)),
         };
         let answer = encode_video_answer(&result);
@@ -532,23 +535,44 @@ pub fn worker_main(kind: Option<OsString>, mut input: impl Read, mut output: imp
 // ---------------------------------------------------------------------------
 //
 // `<exe> --decode-worker video` decodes an MP4's video track
-// (`raster::codec::formats::mp4::video`) for a video layer. The request is
-// the one above. Answer: `RSDW`, version `1`, then status `0` (decoded):
-// `width` u32, `height` u32, `codec` u8 (0 H.264, 1 AV1), `count` u32,
-// `count` durations (u32 ms), then `count * width * height * 4` RGBA8
-// bytes; or status `1`, a refusal exactly as above. The header (size,
-// frame count and the bytes they imply) is checked against the limits and
-// the video bounds before a frame is read or allocated.
+// (`raster::codec::formats::mp4::video`) for a video layer;
+// `<exe> --decode-worker video-window:<first>:<count>` decodes only the
+// frames `first..first + count` (a video layer decodes on demand, a window
+// around the timeline time at a time). The request is the one above.
+// Answer: `RSDW`, version `1`, then status `0` (decoded): `width` u32,
+// `height` u32, `codec` u8 (0 H.264, 1 AV1), `total` u32 (the track's
+// frames), `first` u32, `count` u32 (the frames that follow), `total`
+// durations (u32 ms), then `count * width * height * 4` RGBA8 bytes; or
+// status `1`, a refusal exactly as above. The header (size, frame counts
+// and the bytes they imply) is checked against the limits and the video
+// bounds before a frame is read or allocated.
 
 use raster::codec::formats::mp4::video;
-pub use raster::codec::formats::mp4::video::{DecodedVideo, VideoCodec, VideoFrame};
+pub use raster::codec::formats::mp4::video::{DecodedVideo, VideoCodec, VideoFrame, VideoWindow};
 /// The MP4 writer File > Export As uses, for the worker's tests in
 /// `studio-desktop` (which do not link `raster` themselves).
 #[doc(hidden)]
 pub use raster::codec::formats::mp4::{encode as encode_mp4, Mp4Frame};
 
-/// The worker argument of the video kind.
+/// The worker argument of the video kind (every frame).
 pub const VIDEO_ARG: &str = "video";
+
+/// The worker argument of a window of a video's frames:
+/// `video-window:<first>:<count>`.
+pub const VIDEO_WINDOW_ARG_PREFIX: &str = "video-window:";
+
+/// The `(first, count)` a video worker argument names: every frame for
+/// [`VIDEO_ARG`], the window for a [`VIDEO_WINDOW_ARG_PREFIX`] one; `None`
+/// for any other kind.
+fn video_window_of_arg(kind: &str) -> Option<(usize, usize)> {
+    if kind == VIDEO_ARG {
+        return Some((0, usize::MAX));
+    }
+    let (first, count) = kind
+        .strip_prefix(VIDEO_WINDOW_ARG_PREFIX)?
+        .split_once(':')?;
+    Some((first.parse().ok()?, count.parse().ok()?))
+}
 
 /// Decode an MP4's video track in a worker process spawned from `exe`.
 pub fn decode_video_in_worker(
@@ -558,30 +582,86 @@ pub fn decode_video_in_worker(
     timeout: Duration,
 ) -> Result<DecodedVideo, CodecError> {
     let request = encode_request(bytes, limits);
-    spawn_worker(exe, VIDEO_ARG, "video", request, timeout, move |stdout| {
+    let window = spawn_worker(exe, VIDEO_ARG, "video", request, timeout, move |stdout| {
         read_video_answer(stdout, limits)
+    })?;
+    if window.first != 0 || window.frames.len() != window.durations_ms.len() {
+        return Err(CodecError::Unsupported(
+            "the video decode worker answered part of the video".into(),
+        ));
+    }
+    Ok(DecodedVideo {
+        width: window.width,
+        height: window.height,
+        codec: window.codec,
+        frames: window.frames,
     })
 }
 
-/// [`decode_video_in_worker`] with the executable [`install`] uses: the one
-/// [`set_worker_executable`] named, or this process's own.
-pub fn decode_video_with_installed_worker(
+/// W16-M: decode the frames `first..first + count` of an MP4's video track
+/// (clamped to its end) in a worker process spawned from `exe`.
+pub fn decode_video_window_in_worker(
+    exe: &Path,
     bytes: &[u8],
     limits: ImportLimits,
-) -> Result<DecodedVideo, CodecError> {
+    first: usize,
+    count: usize,
+    timeout: Duration,
+) -> Result<VideoWindow, CodecError> {
+    let request = encode_request(bytes, limits);
+    let arg = format!("{VIDEO_WINDOW_ARG_PREFIX}{first}:{count}");
+    let window = spawn_worker(exe, &arg, "video", request, timeout, move |stdout| {
+        read_video_answer(stdout, limits)
+    })?;
+    if window.first != first {
+        return Err(CodecError::Unsupported(
+            "the video decode worker answered another window".into(),
+        ));
+    }
+    Ok(window)
+}
+
+/// The executable [`install`] spawns: the one [`set_worker_executable`]
+/// named, or this process's own.
+fn video_worker_exe() -> Result<PathBuf, CodecError> {
     let configured = WORKER_EXE.read().unwrap_or_else(|e| e.into_inner()).clone();
-    let exe = match configured {
-        Some(exe) => exe,
+    match configured {
+        Some(exe) => Ok(exe),
         None => std::env::current_exe().map_err(|e| {
             CodecError::Unsupported(format!(
                 "could not find the editor's executable to start the video decode worker: {e}"
             ))
-        })?,
-    };
-    decode_video_in_worker(&exe, bytes, limits, DEFAULT_TIMEOUT)
+        }),
+    }
 }
 
-fn encode_video_answer(result: &Result<DecodedVideo, CodecError>) -> Vec<u8> {
+/// [`decode_video_in_worker`] with the executable [`install`] uses.
+pub fn decode_video_with_installed_worker(
+    bytes: &[u8],
+    limits: ImportLimits,
+) -> Result<DecodedVideo, CodecError> {
+    decode_video_in_worker(&video_worker_exe()?, bytes, limits, DEFAULT_TIMEOUT)
+}
+
+/// [`decode_video_window_in_worker`] with the executable [`install`] uses:
+/// what every video layer decodes through once [`install`] has run.
+pub fn decode_video_window_with_installed_worker(
+    bytes: &[u8],
+    limits: ImportLimits,
+    first: usize,
+    count: usize,
+) -> Result<VideoWindow, CodecError> {
+    decode_video_window_in_worker(
+        &video_worker_exe()?,
+        bytes,
+        limits,
+        first,
+        count,
+        DEFAULT_TIMEOUT,
+    )
+}
+
+fn encode_video_answer(result: &Result<VideoWindow, CodecError>) -> Vec<u8> {
     let mut out = MAGIC.to_vec();
     out.push(VERSION);
     let v = match result {
@@ -607,9 +687,11 @@ fn encode_video_answer(result: &Result<DecodedVideo, CodecError>) -> Vec<u8> {
         VideoCodec::H264 => 0,
         VideoCodec::Av1 => 1,
     });
+    out.extend_from_slice(&(v.durations_ms.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(v.first as u32).to_le_bytes());
     out.extend_from_slice(&(v.frames.len() as u32).to_le_bytes());
-    for f in &v.frames {
-        out.extend_from_slice(&f.duration_ms.to_le_bytes());
+    for d in &v.durations_ms {
+        out.extend_from_slice(&d.to_le_bytes());
     }
     for f in &v.frames {
         out.extend_from_slice(&f.rgba8);
@@ -622,7 +704,7 @@ fn encode_video_answer(result: &Result<DecodedVideo, CodecError>) -> Vec<u8> {
 fn read_video_answer(
     mut r: impl Read,
     limits: ImportLimits,
-) -> Result<Answer<DecodedVideo>, AnswerError> {
+) -> Result<Answer<VideoWindow>, AnswerError> {
     let m = |_| AnswerError::Malformed;
     if !read_header(&mut r).map_err(m)? {
         return Err(AnswerError::Malformed);
@@ -653,10 +735,17 @@ fn read_video_answer(
         1 => VideoCodec::Av1,
         _ => return Err(AnswerError::Malformed),
     };
+    let total = read_u32(&mut r).map_err(m)? as usize;
+    let first = read_u32(&mut r).map_err(m)? as usize;
     let count = read_u32(&mut r).map_err(m)? as usize;
     // The bounds, on the header, before any frame is read or allocated.
     let limit = |text: String| AnswerError::Limit(CodecError::LimitExceeded(text));
-    if width == 0 || height == 0 || count == 0 {
+    if total > video::MAX_VIDEO_FRAMES {
+        return Err(limit(format!(
+            "the video decode worker answered a {total}-frame video, more than a video layer holds"
+        )));
+    }
+    if width == 0 || height == 0 || count == 0 || first.saturating_add(count) > total {
         return Err(AnswerError::Malformed);
     }
     if width > limits.max_width
@@ -676,12 +765,12 @@ fn read_video_answer(
              video layer holds"
         )));
     }
-    let mut durations = Vec::with_capacity(count);
-    for _ in 0..count {
+    let mut durations = Vec::with_capacity(total);
+    for _ in 0..total {
         durations.push(read_u32(&mut r).map_err(m)?);
     }
     let mut frames = Vec::with_capacity(count);
-    for duration_ms in durations {
+    for &duration_ms in &durations[first..first + count] {
         let mut rgba8 = vec![0u8; frame_bytes as usize];
         r.read_exact(&mut rgba8).map_err(m)?;
         frames.push(VideoFrame { rgba8, duration_ms });
@@ -690,10 +779,12 @@ fn read_video_answer(
     if r.read(&mut [0u8; 1]).map_err(m)? != 0 {
         return Err(AnswerError::Malformed);
     }
-    Ok(Answer::Decoded(DecodedVideo {
+    Ok(Answer::Decoded(VideoWindow {
         width,
         height,
         codec,
+        durations_ms: durations,
+        first,
         frames,
     }))
 }
@@ -889,7 +980,24 @@ mod tests {
             panic!("decoded");
         };
         assert_eq!((video.width, video.height, video.frames.len()), (32, 32, 2));
+        assert_eq!((video.first, video.durations_ms.len()), (0, 2));
         assert_eq!(video.frames[1].duration_ms, 120);
+        // A window: the second frame only, with the whole track's timing.
+        let mut out = Vec::new();
+        let code = worker_main(
+            Some(format!("{VIDEO_WINDOW_ARG_PREFIX}1:1").into()),
+            Cursor::new(encode_request(&mp4, limits)),
+            &mut out,
+        );
+        assert_eq!(code, 0);
+        let Ok(Answer::Decoded(window)) = read_video_answer(Cursor::new(&out), limits) else {
+            panic!("a window decoded");
+        };
+        assert_eq!((window.first, window.frames.len()), (1, 1));
+        assert_eq!(window.durations_ms, vec![120, 120]);
+        assert_eq!(window.frames[0].rgba8, video.frames[1].rgba8);
+        assert_eq!(video_window_of_arg("video-window:3:x"), None);
+        assert_eq!(video_window_of_arg("avif"), None);
         let Ok(Answer::Refused(err)) = read_video_answer(Cursor::new(run(b"garbage")), limits)
         else {
             panic!("refused");
@@ -910,6 +1018,8 @@ mod tests {
             header.extend_from_slice(&1920u32.to_le_bytes());
             header.extend_from_slice(&1080u32.to_le_bytes());
             header.push(0);
+            header.extend_from_slice(&count.to_le_bytes());
+            header.extend_from_slice(&0u32.to_le_bytes());
             header.extend_from_slice(&count.to_le_bytes());
             assert!(
                 matches!(

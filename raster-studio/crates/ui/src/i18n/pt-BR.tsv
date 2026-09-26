@@ -41,7 +41,7 @@ Add Media	Adicionar mídia
 Add Noise…	Adicionar ruído…
 Add a layer mask	Adicionar uma máscara de camada
 Add a smart filter mask	Adicionar uma máscara de filtro inteligente
-Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read	Adicionar um arquivo de vídeo (MP4: H.264 ou AV1) como camada de vídeo no indicador de reprodução; o áudio não é lido
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Inserir um arquivo de imagem ou vídeo (Arquivo > Inserir incorporado); um vídeo se torna uma camada de vídeo na agulha de reprodução
 Add an adjustment layer	Adicionar uma camada de ajuste
 Add another instance of this effect	Adicionar outra instância deste efeito
 Add current colour	Adicionar a cor atual
@@ -51,6 +51,7 @@ Add or remove room around the image. Pixels are not resampled.	Adiciona ou remov
 Add shortcut	Adicionar atalho
 Add to Selection	Adicionar à seleção
 Adds one guide at a document coordinate, in pixels.	Adiciona uma guia em uma coordenada do documento, em pixels.
+Adjustment	Ajuste
 Adjustments	Ajustes
 Advanced	Avançado
 Again	Novamente
@@ -539,6 +540,7 @@ File name	Nome do arquivo
 Files that fail are listed in batch-errors.txt in the destination.	Os arquivos que falham são listados em batch-errors.txt no destino.
 Fill	Preenchimento
 Fill Filter Mask	Preencher máscara de filtro
+Fill Layer	Camada de preenchimento
 Fill Mask	Preencher máscara
 Fill Screen	Preencher a tela
 Fill in File Info, or open a file that has EXIF, to embed metadata	Preencha as informações do arquivo ou abra um arquivo com EXIF para incorporar metadados
@@ -553,6 +555,7 @@ Find Edges	Localizar bordas
 First line	Primeira linha
 Fish	Peixe
 Fisheye	Olho de peixe
+Fit The Area	Ajustar à área
 Fit on Screen	Ajustar à tela
 Fit the whole image in the window	Ajustar a imagem inteira à janela
 Fixed height	Altura fixa
@@ -712,6 +715,7 @@ Layer	Camada
 Layer Comps	Composições de camadas
 Layer Edges	Bordas da camada
 Layer Mask	Máscara de camada
+Layer Properties	Propriedades da camada
 Layer Style	Estilo de camada
 Layer knocks out drop shadow	A camada vaza a sombra projetada
 Layer via Copy	Camada por cópia
@@ -768,6 +772,7 @@ Lock all	Bloquear tudo
 Lock pixels	Bloquear pixels
 Lock position	Bloquear posição
 Lock transparent pixels	Bloquear pixels transparentes
+Long-tap as a right click	Toque longo como clique direito
 Lookup table	Tabela de pesquisa
 Luminance	Luminância
 Luminance of the preview source; the markers are the black and white points.	Luminância da origem da visualização; os marcadores são os pontos de preto e de branco.
@@ -787,6 +792,7 @@ Maps the active layer onto a palette as one undo step; the document stays RGB.	M
 Margins	Margens
 Mark this state so you can come back to it	Marcar este estado para poder voltar a ele
 Mask	Máscara
+Mask Properties	Propriedades da máscara
 Mask source	Origem da máscara
 Match Color	Corresponder cor
 Match Color…	Corresponder cor…
@@ -847,6 +853,7 @@ New Adjustment Layer	Nova camada de ajuste
 New Channel	Novo canal
 New Document	Novo documento
 New Fill Layer	Nova camada de preenchimento
+New Folder	Nova pasta
 New Guide	Nova guia
 New Guide Layout	Novo layout de guias
 New Guide Layout…	Novo layout de guias…
@@ -860,7 +867,9 @@ New Snapshot	Novo instantâneo
 New Spot Channel	Novo canal de cor especial
 New Spot Channel…	Novo canal de cor especial…
 New Style Preset	Nova predefinição de estilo
+New Video Group	Novo grupo de vídeo
 New channel	Novo canal
+New folder	Nova pasta
 New group	Novo grupo
 New layer	Nova camada
 New layer comp	Nova composição de camadas
@@ -961,6 +970,7 @@ Open a document to see its properties	Abra um documento para ver as propriedades
 Open another document, or add another pixel layer, to match its colours.	Abra outro documento, ou adicione outra camada de pixels, para corresponder às cores.
 Open as	Abrir como
 Open editor…	Abrir editor…
+Open or close the folder	Abrir ou fechar a pasta
 Open the Adjustments panel	Abrir o painel Ajustes
 Open…	Abrir…
 Operation	Operação
@@ -1029,6 +1039,7 @@ Pinch…	Apertar…
 Pixel Grid	Grade de pixels
 Pixel dimensions	Dimensões em pixels
 Pixel mask	Máscara de pixels
+Pixel to Pixel	Pixel a pixel
 Pixelate	Pixelização
 Pixels	Pixels
 Place Embedded…	Inserir incorporado…
@@ -1239,6 +1250,7 @@ Select a layer to see its properties	Selecione uma camada para ver as propriedad
 Select a layer: a click on a style applies it to the active layer.	Selecione uma camada: um clique em um estilo o aplica à camada ativa.
 Select a path first	Selecione um demarcador primeiro
 Select a text layer, or type into one: a click inserts the glyph at the caret.	Selecione uma camada de texto ou digite em uma: um clique insere o glifo no cursor.
+Select a text layer to edit its type	Selecione uma camada de texto para editar seu texto
 Select every pixel near one colour	Selecionar cada pixel próximo de uma cor
 Selection	Seleção
 Selection Edges	Bordas da seleção
@@ -1262,6 +1274,7 @@ Shadows/Highlights…	Sombras/realces…
 Shape	Forma
 Shape Dynamics	Dinâmica de forma
 Shape Mosaic…	Mosaico de formas…
+Shape Properties	Propriedades da forma
 Sharpen	Tornar nítido
 Sharpen Edges	Tornar as bordas nítidas
 Sharpen More	Tornar mais nítido
@@ -1364,6 +1377,7 @@ TGA…	TGA…
 TIF…	TIF…
 Templates	Modelos
 Text	Texto
+Text Properties	Propriedades do texto
 Text overflows the box	O texto transborda a caixa
 Text replacement	Substituição de texto
 Texture Dilation…	Dilatação de textura…
@@ -1373,7 +1387,6 @@ The CSV ends inside a quoted field	O CSV termina dentro de um campo entre aspas
 The CSV has a header but no data sets	O CSV tem cabeçalho, mas nenhum conjunto de dados
 The CSV is empty	O CSV está vazio
 The CSV names a variable that is not defined:	O CSV nomeia uma variável que não está definida:
-The active layer has no layer style to save	A camada ativa não tem estilo de camada para salvar
 The active layer is not in the document	A camada ativa não está no documento
 The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	O objeto inteligente ativo mostra cada imagem da pasta de origem por vez; cada resultado é exportado como PNG para a pasta de destino.
 The amount must be within	O valor deve estar dentro de
@@ -1477,6 +1490,7 @@ Transform Layer	Transformar camada
 Transform Selection	Transformar seleção
 Transparency	Transparência
 Transparent Pixels	Pixels transparentes
+Trim	Aparar
 Trim Away	Aparar
 Trim…	Aparar…
 Tritone	Tritônico

@@ -285,24 +285,74 @@ fn check_budget(
     Ok(())
 }
 
-/// Decode `bytes` (an MP4) here, in this process. Only the decode worker
-/// calls this in the application (see the module docs).
+/// Decode `bytes` (an MP4) here, in this process: every frame. Only the
+/// decode worker calls this in the application (see the module docs).
 pub fn decode_in_this_process(
     bytes: &[u8],
     limits: ImportLimits,
 ) -> Result<DecodedVideo, CodecError> {
+    let window = decode_window_in_this_process(bytes, limits, 0, usize::MAX)?;
+    Ok(DecodedVideo {
+        width: window.width,
+        height: window.height,
+        codec: window.codec,
+        frames: window.frames,
+    })
+}
+
+/// W16-M: part of a video track, decoded on demand for the timeline time:
+/// the whole track's frame timing, and the pictures of the frames
+/// `first..first + frames.len()` only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VideoWindow {
+    pub width: u32,
+    pub height: u32,
+    pub codec: VideoCodec,
+    /// Every frame's duration, in milliseconds: the whole track's.
+    pub durations_ms: Vec<u32>,
+    /// The track index of `frames[0]`.
+    pub first: usize,
+    /// The decoded frames `first..first + frames.len()`.
+    pub frames: Vec<VideoFrame>,
+}
+
+/// W16-M: decode the frames `first..first + count` of `bytes` (an MP4)
+/// here, in this process (clamped to the track's end), for a video layer
+/// that decodes on demand. The stream is decoded from its start up to the
+/// window's last frame (a frame depends on the ones before it) and only the
+/// window's pictures are kept, so the decoded-bytes budget
+/// ([`max_video_bytes`]) bounds the window, not the whole video. Only the
+/// decode worker calls this in the application (see the module docs).
+pub fn decode_window_in_this_process(
+    bytes: &[u8],
+    limits: ImportLimits,
+    first: usize,
+    count: usize,
+) -> Result<VideoWindow, CodecError> {
     let track = track(bytes)?;
+    let total = track.samples.len();
+    if total == 0 {
+        return Err(malformed("the video holds no picture"));
+    }
+    if first >= total {
+        return Err(malformed(format!(
+            "frame {first} is past the video's {total} frames"
+        )));
+    }
+    let end = first.saturating_add(count.max(1)).min(total);
+    let want = end - first;
     let (cw, ch) = track.coded;
     check_size(limits, cw, ch)?;
-    check_budget(limits, cw, ch, track.samples.len())?;
-    let mut frames: Vec<VideoFrame> = Vec::with_capacity(track.samples.len());
+    check_budget(limits, cw, ch, want)?;
+    let mut frames: Vec<VideoFrame> = Vec::with_capacity(want);
     let mut size: Option<(u32, u32)> = None;
+    let mut seen = 0usize;
     let durations = &track.durations_ms;
     let mut push = |w: u32, h: u32, rgba8: Vec<u8>| -> Result<(), CodecError> {
         match size {
             None => {
                 check_size(limits, w, h)?;
-                check_budget(limits, w, h, durations.len())?;
+                check_budget(limits, w, h, want)?;
                 size = Some((w, h));
             }
             Some(s) if s != (w, h) => {
@@ -313,28 +363,31 @@ pub fn decode_in_this_process(
             }
             Some(_) => {}
         }
-        let Some(&duration_ms) = durations.get(frames.len()) else {
+        let index = seen;
+        seen += 1;
+        let Some(&duration_ms) = durations.get(index).filter(|_| index < end) else {
             return Err(malformed("the stream holds more pictures than samples"));
         };
-        frames.push(VideoFrame { rgba8, duration_ms });
+        if index >= first {
+            frames.push(VideoFrame { rgba8, duration_ms });
+        }
         Ok(())
     };
+    let samples = &track.samples[..end];
     match track.codec {
-        VideoCodec::H264 => decode_h264(track.config, &track.samples, limits, &mut push)?,
-        VideoCodec::Av1 => decode_av1(&track.samples, limits, &mut push)?,
+        VideoCodec::H264 => decode_h264(track.config, samples, limits, &mut push)?,
+        VideoCodec::Av1 => decode_av1(samples, limits, &mut push)?,
     }
     let (width, height) = size.ok_or_else(|| malformed("the video holds no picture"))?;
-    if frames.len() != track.samples.len() {
-        return Err(malformed(format!(
-            "{} of the {} frames decoded",
-            frames.len(),
-            track.samples.len()
-        )));
+    if seen != end {
+        return Err(malformed(format!("{seen} of the {end} frames decoded")));
     }
-    Ok(DecodedVideo {
+    Ok(VideoWindow {
         width,
         height,
         codec: track.codec,
+        durations_ms: track.durations_ms.clone(),
+        first,
         frames,
     })
 }
@@ -631,6 +684,55 @@ mod tests {
             assert!(close(&at(&f.rgba8, w, 40, 16), &[128, 128, 128, 255], 8));
             assert_eq!(got[3], 255, "opaque");
         }
+    }
+
+    /// W16-M: a window decodes only its frames: the whole track's timing,
+    /// and the pictures `first..first + count` (clamped to the end), the
+    /// same pictures a whole decode gives; a window past the end is an
+    /// error, and the budget bounds the window, not the whole video.
+    #[test]
+    fn a_window_decodes_only_its_frames() {
+        let (w, h) = (32, 32);
+        let px = clip(w, h, 4);
+        let input: Vec<Mp4Frame<'_>> = px
+            .iter()
+            .zip([100, 150, 200, 250])
+            .map(|(p, d)| Mp4Frame {
+                rgba8: p,
+                duration_ms: d,
+            })
+            .collect();
+        let bytes = encode(w, h, &input, 90).unwrap();
+        let limits = ImportLimits::default();
+        let win = decode_window_in_this_process(&bytes, limits, 2, 5).unwrap();
+        assert_eq!(win.durations_ms, vec![100, 150, 200, 250]);
+        assert_eq!((win.first, win.frames.len()), (2, 2), "clamped to the end");
+        for (k, f) in win.frames.iter().enumerate() {
+            let got = at(&f.rgba8, w, 4, 4);
+            let want = at(&px[2 + k], w, 4, 4);
+            assert!(
+                close(&got, &want, 8),
+                "frame {}: {got:?} vs {want:?}",
+                2 + k
+            );
+        }
+        let one = decode_window_in_this_process(&bytes, limits, 1, 1).unwrap();
+        assert_eq!((one.first, one.frames.len()), (1, 1));
+        assert_eq!(one.frames[0].duration_ms, 150);
+        assert!(decode_window_in_this_process(&bytes, limits, 4, 1).is_err());
+        // Two frames fit a budget that four do not.
+        let tight = ImportLimits {
+            max_alloc_bytes: u64::from(w * h * 4) * 2,
+            ..limits
+        };
+        assert!(decode_in_this_process(&bytes, tight).is_err());
+        assert_eq!(
+            decode_window_in_this_process(&bytes, tight, 0, 2)
+                .unwrap()
+                .frames
+                .len(),
+            2
+        );
     }
 
     /// The AV1 option decodes back too (through rusty_av1d).

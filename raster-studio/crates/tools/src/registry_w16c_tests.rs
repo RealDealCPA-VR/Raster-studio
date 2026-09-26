@@ -139,3 +139,38 @@ fn the_paint_bucket_offers_foreground_or_pattern_and_the_tool_takes_it() {
         .set_setting(FILL_SOURCE_KEY, ToolSetting::Bool(true))
         .is_err());
 }
+
+/// Round 2: Photopea's `strn` is "Strength" 1-100 %, and its Parametric
+/// Shape's Corner Radius (0-50) and Width (0-100) are px.
+#[test]
+fn strength_is_a_percentage_and_the_parametric_radius_and_width_are_pixels() {
+    let mut seen = 0;
+    for (tool, spec, display) in floats() {
+        if spec.label != "Strength" {
+            continue;
+        }
+        seen += 1;
+        let OptionKind::Float { max, .. } = spec.kind else {
+            unreachable!()
+        };
+        assert_eq!(display.unit, FloatUnit::Percent, "{tool:?}.{}", spec.key);
+        assert!(
+            (display.shown(max) - 100.0).abs() < 1e-3,
+            "{tool:?}.{}: the top reads {}",
+            spec.key,
+            display.shown(max)
+        );
+    }
+    assert!(seen >= 4, "Blur, Sharpen, Smudge and more carry a Strength");
+    let sharpen = display_of(ToolId::Sharpen, "amount");
+    assert_eq!(sharpen.stored(25.0), 1.0);
+    let blur = display_of(ToolId::Blur, "radius");
+    assert_eq!(blur.stored(50.0), 32.0);
+    for key in ["corner_radius", "weight"] {
+        assert_eq!(
+            display_of(ToolId::Polygon, key).unit,
+            FloatUnit::Pixels,
+            "Parametric Shape {key}"
+        );
+    }
+}

@@ -58,15 +58,18 @@ impl ColorNotation {
         }
     }
 
-    pub const fn label(self) -> &'static str {
-        match self {
+    /// The notation's name on the panel's segmented control, in the
+    /// interface language (W16-N: "Gray"; the others are proper names every
+    /// table keeps).
+    pub fn label(self) -> &'static str {
+        crate::strings::tr_en(match self {
             ColorNotation::Hsb => "HSB",
             ColorNotation::Rgb => "RGB",
             ColorNotation::Hex => "Hex",
             ColorNotation::Lab => "Lab",
             ColorNotation::Cmyk => "CMYK",
             ColorNotation::Gray => "Gray",
-        }
+        })
     }
 }
 

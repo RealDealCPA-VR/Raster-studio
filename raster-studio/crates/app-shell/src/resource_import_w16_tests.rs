@@ -307,3 +307,261 @@ fn file_open_of_fits_and_dxf_opens_documents() {
     let doc = ed.active_mut().expect("the DXF opened");
     assert_eq!((doc.document.width(), doc.document.height()), (1056, 544));
 }
+
+// ------------------------------------------------ KRA and DXF as layers
+
+/// A stored (uncompressed) ZIP of `entries`; CRCs are zero (the Krita
+/// reader does not check them).
+fn stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut dir = Vec::new();
+    for (name, data) in entries {
+        let local = out.len() as u32;
+        let size = (data.len() as u32).to_le_bytes();
+        let name_len = (name.len() as u16).to_le_bytes();
+        out.extend_from_slice(b"PK\x03\x04");
+        out.extend_from_slice(&[20, 0, 0, 0, 0, 0]);
+        out.extend_from_slice(&[0; 8]);
+        out.extend_from_slice(&size);
+        out.extend_from_slice(&size);
+        out.extend_from_slice(&name_len);
+        out.extend_from_slice(&[0, 0]);
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(data);
+        dir.extend_from_slice(b"PK\x01\x02");
+        dir.extend_from_slice(&[20, 0, 20, 0, 0, 0, 0, 0]);
+        dir.extend_from_slice(&[0; 8]);
+        dir.extend_from_slice(&size);
+        dir.extend_from_slice(&size);
+        dir.extend_from_slice(&name_len);
+        dir.extend_from_slice(&[0; 12]);
+        dir.extend_from_slice(&local.to_le_bytes());
+        dir.extend_from_slice(name.as_bytes());
+    }
+    let dir_at = out.len() as u32;
+    out.extend_from_slice(&dir);
+    out.extend_from_slice(b"PK\x05\x06");
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(dir.len() as u32).to_le_bytes());
+    out.extend_from_slice(&dir_at.to_le_bytes());
+    out.extend_from_slice(&[0, 0]);
+    out
+}
+
+/// A Krita layer file holding one uncompressed 64x64 tile of `rgba` at
+/// tile origin (`x`, `y`): Krita stores a tile's pixels as BGRA byte planes.
+fn kra_layer_file(x: i64, y: i64, rgba: [u8; 4]) -> Vec<u8> {
+    let n = 64 * 64;
+    let mut tile = vec![0u8];
+    for v in [rgba[2], rgba[1], rgba[0], rgba[3]] {
+        tile.extend(std::iter::repeat_n(v, n));
+    }
+    let mut out = format!(
+        "VERSION 2\nTILEWIDTH 64\nTILEHEIGHT 64\nPIXELSIZE 4\nDATA 1\n{x},{y},LZF,{}\n",
+        tile.len()
+    )
+    .into_bytes();
+    out.extend(tile);
+    out
+}
+
+const KRA_MAINDOC: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<DOC xmlns="http://www.calligra.org/DTD/krita" syntaxVersion="2.0">
+ <IMAGE name="Pic" width="64" height="64" colorspacename="RGBA" mime="application/x-kra">
+  <layers>
+   <layer name="Top" opacity="128" visible="1" compositeop="multiply" x="0" y="0"
+          nodetype="paintlayer" filename="layer4" colorspacename="RGBA"/>
+   <layer name="Shade" opacity="255" visible="0" compositeop="normal" x="0" y="0"
+          nodetype="grouplayer" filename="layer3">
+    <layers>
+     <layer name="Inner" opacity="255" visible="1" compositeop="screen" x="0" y="0"
+            nodetype="paintlayer" filename="layer2" colorspacename="RGBA"/>
+    </layers>
+   </layer>
+   <layer name="Blur" nodetype="adjustmentlayer" filename="layer5"/>
+   <layer name="Paper" opacity="255" visible="1" compositeop="normal" x="0" y="0"
+          nodetype="paintlayer" filename="layer1" colorspacename="RGBA"/>
+  </layers>
+ </IMAGE>
+</DOC>"#;
+
+/// A 64x64 `.kra`: "Top" (red, Multiply, 50%), a hidden group "Shade"
+/// holding "Inner" (blue, Screen), "Paper" (white, bottom), a filter layer
+/// the reader leaves out, and a green `mergedimage.png` that must NOT be
+/// what opens.
+fn kra_file() -> Vec<u8> {
+    let merged = raster::encode(
+        raster::ExportFormat::Png,
+        64,
+        64,
+        &[0, 255, 0, 255].repeat(64 * 64),
+    )
+    .unwrap();
+    stored_zip(&[
+        ("mimetype", b"application/x-krita"),
+        ("maindoc.xml", KRA_MAINDOC.as_bytes()),
+        ("Pic/layers/layer4", &kra_layer_file(0, 0, [255, 0, 0, 255])),
+        ("Pic/layers/layer2", &kra_layer_file(0, 0, [0, 0, 255, 255])),
+        (
+            "Pic/layers/layer1",
+            &kra_layer_file(0, 0, [255, 255, 255, 255]),
+        ),
+        ("mergedimage.png", &merged),
+    ])
+}
+
+/// Every layer of the active document as `name:kind`, depth first.
+fn layer_tree(ed: &Editor) -> Vec<String> {
+    let doc = ed.active().expect("a document opened");
+    doc.document
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .map(|id| {
+            let layer = doc.document.layers.get(id).unwrap();
+            let kind = match &layer.kind {
+                LayerKind::Shape(_) => "shape",
+                LayerKind::Text(_) => "text",
+                LayerKind::Group(_) => "group",
+                LayerKind::Raster(_) => "raster",
+                _ => "other",
+            };
+            format!("{}:{kind}", layer.name)
+        })
+        .collect()
+}
+
+fn layer_named(ed: &Editor, name: &str) -> layer_model::Layer {
+    let doc = ed.active().unwrap();
+    let id = doc
+        .document
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|id| doc.document.layers.get(*id).unwrap().name == name)
+        .unwrap_or_else(|| panic!("no layer {name:?}"));
+    doc.document.layers.get(id).unwrap().clone()
+}
+
+/// File > Open of a `.kra` opens Krita's layer tree (names, opacity,
+/// visibility, blend modes, the group), not its merged image; the filter
+/// layer the reader leaves out is in the import report.
+#[test]
+fn file_open_of_a_kra_opens_its_layers_not_the_merged_image() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write(dir.path(), "pic.kra", &kra_file());
+    let mut ed = editor(dir.path(), ScriptedDialogs::new().opening(path));
+    assert_eq!(ed.dispatch(Action::Open), Ok(Effect::DocumentSet));
+    wait_for_imports(&mut ed);
+    let mut tree = layer_tree(&ed);
+    tree.sort();
+    assert_eq!(
+        tree,
+        vec!["Inner:raster", "Paper:raster", "Shade:group", "Top:raster"]
+    );
+    let top = layer_named(&ed, "Top");
+    assert_eq!(top.blend_mode, layer_model::BlendMode::Multiply);
+    assert!((top.opacity - 128.0 / 255.0).abs() < 1e-6 && top.visible);
+    assert!(!layer_named(&ed, "Shade").visible);
+    assert_eq!(
+        layer_named(&ed, "Inner").blend_mode,
+        layer_model::BlendMode::Screen
+    );
+    // Stacking: Top, then the group, then Paper (one direction or the other).
+    {
+        let doc = ed.active().unwrap();
+        let order: Vec<String> = doc
+            .document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .map(|id| doc.document.layers.get(id).unwrap().name.clone())
+            .collect();
+        let at = |n: &str| order.iter().position(|o| o == n).unwrap();
+        let (top, shade, paper) = (at("Top"), at("Shade"), at("Paper"));
+        assert!(
+            (top < shade && shade < paper) || (top > shade && shade > paper),
+            "{order:?}"
+        );
+    }
+    let status = ed.status.clone().unwrap_or_default();
+    assert!(status.contains("3 layers in 1 group"), "{status}");
+    assert!(status.contains("import report"), "{status}");
+    // The composite is red multiplied at 50% over white, not the green
+    // merged image.
+    let doc = ed.active_mut().unwrap();
+    assert_eq!((doc.document.width(), doc.document.height()), (64, 64));
+    let rgba = doc.composite(doc.canvas_rect()).unwrap();
+    let px = [rgba[0], rgba[1], rgba[2], rgba[3]];
+    assert!(
+        px[0] > 250 && px[1] > 90 && px[1] < 200 && px[3] == 255,
+        "{px:?}"
+    );
+}
+
+/// A drop of a `.kra` onto a window with a document open opens its layers
+/// in a new tab (it is not placed as a picture).
+#[test]
+fn a_dropped_kra_opens_its_layers_in_a_new_document() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write(dir.path(), "pic.kra", &kra_file());
+    let mut ed = editor(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&png(dir.path())).unwrap();
+    let mut shell = crate::shell::Shell::new(ed, Vec::new());
+    shell.on_dropped_files(&[path]);
+    let ed = shell.editor();
+    assert_eq!(ed.documents().len(), 2);
+    assert_eq!(layer_tree(ed).len(), 4);
+}
+
+/// A `.kra` whose layers cannot be read (maindoc.xml gives no canvas size)
+/// opens its merged image and says why.
+#[test]
+fn a_kra_whose_layers_cannot_be_read_opens_its_merged_image_saying_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let maindoc = br#"<DOC><IMAGE name="Pic" width="0" height="0"><layers/></IMAGE></DOC>"#;
+    let merged = raster::encode(
+        raster::ExportFormat::Png,
+        4,
+        4,
+        &[0, 255, 0, 255].repeat(16),
+    )
+    .unwrap();
+    let file = stored_zip(&[
+        ("mimetype", b"application/x-krita"),
+        ("maindoc.xml", maindoc),
+        ("mergedimage.png", &merged),
+    ]);
+    let path = write(dir.path(), "flat.kra", &file);
+    let mut ed = editor(dir.path(), ScriptedDialogs::new().opening(path));
+    assert_eq!(ed.dispatch(Action::Open), Ok(Effect::DocumentSet));
+    let status = ed.status.clone().unwrap_or_default();
+    assert!(status.contains("its layers could not be read"), "{status}");
+    let doc = ed.active_mut().unwrap();
+    assert_eq!((doc.document.width(), doc.document.height()), (4, 4));
+    let rgba = doc.composite(doc.canvas_rect()).unwrap();
+    assert_eq!(&rgba[..4], &[0, 255, 0, 255]);
+}
+
+const PLAN_DXF: &str = "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\nWalls\n10\n0\n20\n0\n11\n100\n21\n0\n0\nCIRCLE\n8\nWalls\n10\n50\n20\n25\n40\n10\n0\nLINE\n8\nDoors\n10\n0\n20\n50\n11\n100\n21\n50\n0\nENDSEC\n0\nEOF\n";
+
+/// File > Open of a DXF opens one group per DXF layer holding a shape layer
+/// per entity, over the white page.
+#[test]
+fn file_open_of_a_dxf_opens_its_layers_as_vector_shapes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write(dir.path(), "plan.dxf", PLAN_DXF.as_bytes());
+    let mut ed = editor(dir.path(), ScriptedDialogs::new().opening(path));
+    assert_eq!(ed.dispatch(Action::Open), Ok(Effect::DocumentSet));
+    wait_for_imports(&mut ed);
+    let tree = layer_tree(&ed);
+    assert!(tree.contains(&"Walls:group".to_string()), "{tree:?}");
+    assert!(tree.contains(&"Doors:group".to_string()), "{tree:?}");
+    assert!(tree.contains(&"Background:shape".to_string()), "{tree:?}");
+    let shapes = tree.iter().filter(|t| t.ends_with(":shape")).count();
+    assert_eq!(shapes, 4, "three entities and the page: {tree:?}");
+    let doc = ed.active().unwrap();
+    assert_eq!((doc.document.width(), doc.document.height()), (1056, 544));
+}

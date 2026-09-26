@@ -78,7 +78,7 @@ pub use tree::{ClippingGroup, DetachedSubtree, LayerTree, TreeError};
 pub use color_label::{ColorLabel, LayerColorLabel};
 // W10-A: the group an old document's single link chain maps to.
 pub use link_groups::LEGACY_LINK_GROUP;
-pub use live_shape::LiveShape;
+pub use live_shape::{LiveArrows, LiveShape};
 // W10-B: the document-level records of the Layer Comps, Notes and style panels.
 pub use doc_extras::{
     AlphaEdit, CharacterStyle, CompLayerState, DocumentExtras, LayerComp, Note, ParagraphStyle,

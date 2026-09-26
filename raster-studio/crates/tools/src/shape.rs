@@ -1141,7 +1141,7 @@ impl ShapeTool {
     /// except that a line with arrowheads on draws them in
     /// ([`line_with_arrows`]).
     fn outline(&self, a: Vec2, b: Vec2) -> Result<Path, ToolError> {
-        // W16-G: the Parametric Shape tool's centred Polygon / Star.
+        // W16-G: the Parametric Shape tool's centred Polygon / Star / Spiral.
         if let Some(outline) = self.parametric_outline(a, b) {
             return outline;
         }
@@ -1272,10 +1272,9 @@ impl Tool for ShapeTool {
                 };
                 // W16-G: a live kind commits its parameters and exactly the
                 // path they regenerate (see `live_shape_of`).
-                let arrows = matches!(self.kind, ShapeKind::Line { .. }) && self.arrows.any();
                 // Photopea keeps a Parametric Shape as a plain path (its
                 // `customShape` origination), so that tool commits no record.
-                let live = live_for(&self.kind, a, b, arrows)
+                let live = live_for(&self.kind, a, b, Some(&self.arrows))
                     .filter(|_| self.parametric.is_none())
                     .and_then(|live| live_path(&live).ok().map(|p| (live, p)));
                 let shape = match live {

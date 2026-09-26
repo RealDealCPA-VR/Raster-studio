@@ -37,7 +37,8 @@ pub enum CloseChoice {
 /// through [`HEIF_EXTENSIONS`].
 ///
 /// W11-H: OpenEXR and Radiance HDR (opened as 32 Bits/Channel documents), Apple ICNS,
-/// Amiga IFF ILBM/PBM and Krita KRA (its merged image) join the list.
+/// Amiga IFF ILBM/PBM and Krita KRA join the list (W16-L: File > Open reads a
+/// `.kra` as its layers; the merged image only when the layers cannot be read).
 pub const IMAGE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "tif", "tiff", "gif", "bmp", "ico", "tga", "svg", "ppm", "pgm",
     "pbm", "pnm", "dds", "xcf", "jxl", "exr", "hdr", "icns", "iff", "ilbm", "lbm", "kra",
@@ -49,7 +50,7 @@ pub const IMAGE_EXTENSIONS: &[&str] = &[
     // are recognised and refused by name (`raster::codec::formats::raw`).
     // W15-A: AVIF, decoded in the decode worker process.
     "dng", "avif",
-    // W16-L: JPEG 2000, VTF, FITS, DICOM, DXF (drawn); Clip Studio, zipped
+    // W16-L: JPEG 2000, VTF, FITS, DICOM, DXF (as vector layers); Clip Studio, zipped
     // Pixelmator Pro, CorelDRAW and InDesign through their embedded
     // previews. Affinity Photo and PaintTool SAI are recognised and
     // refused by name, so they are not offered.
@@ -60,6 +61,10 @@ pub const IMAGE_EXTENSIONS: &[&str] = &[
 /// `raster::ImportFormat` has no `.heic` spelling: the codec finds a HEIC by
 /// its `ftyp` brand, whatever its name.
 pub const HEIF_EXTENSIONS: &[&str] = &["heic", "heif"];
+/// W16-M: video files File > Open opens as a document holding a video layer,
+/// and File > Place (the timeline's Add Media) adds as a video layer: the
+/// ISO-BMFF containers the decode worker reads (H.264 or 8-bit AV1 video).
+pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "m4v", "mov"];
 /// W10-F: extension of Photoshop's large-document format, opened through the
 /// same layered road as a `.psd` (both start `8BPS`; the `psd` crate reads
 /// version 2).
@@ -103,6 +108,8 @@ pub fn open_file_filters() -> Vec<(&'static str, Vec<&'static str>)> {
     everything.extend_from_slice(W16_ADJUSTMENT_EXTENSIONS);
     // W13-K: a script opens in the File > Script window.
     everything.extend_from_slice(crate::script::SCRIPT_EXTENSIONS);
+    // W16-M: a video opens as a video layer.
+    everything.extend_from_slice(VIDEO_EXTENSIONS);
     let mut images = IMAGE_EXTENSIONS.to_vec();
     images.extend_from_slice(HEIF_EXTENSIONS);
     images.push(PSD_EXTENSION);
@@ -122,6 +129,7 @@ pub fn open_file_filters() -> Vec<(&'static str, Vec<&'static str>)> {
             W16_ADJUSTMENT_EXTENSIONS.to_vec(),
         ),
         ("Scripts", crate::script::SCRIPT_EXTENSIONS.to_vec()),
+        ("Videos", VIDEO_EXTENSIONS.to_vec()),
         ("All files", vec!["*"]),
     ]
 }
@@ -433,6 +441,7 @@ impl FileDialogs for NativeDialogs {
     fn pick_place_file(&mut self) -> Option<PathBuf> {
         rfd::FileDialog::new()
             .add_filter("Images", IMAGE_EXTENSIONS)
+            .add_filter("Videos", VIDEO_EXTENSIONS)
             .add_filter("All files", &["*"])
             .set_title("Place")
             .pick_file()

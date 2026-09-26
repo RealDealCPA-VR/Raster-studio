@@ -55,15 +55,40 @@ pub enum LiveShape {
         inner_ratio: f64,
     },
     /// A straight line from `(x1, y1)` to `(x2, y2)`, `weight` pixels thick
-    /// with round ends (no arrowheads: a line drawn with heads is a plain
-    /// path).
+    /// with round ends, and its arrowheads when it was drawn with any (as
+    /// Photopea keeps them in `keyOriginLineArr*`).
     Line {
         x1: f64,
         y1: f64,
         x2: f64,
         y2: f64,
         weight: f64,
+        /// W16-G: the line's arrowheads; `None` (and not written) for a
+        /// line without heads, so records that predate it load unchanged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        arrows: Option<LiveArrows>,
     },
+}
+
+/// W16-G: a live line's arrowheads — the Line tool's Arrowheads options
+/// (`tools::shape::LineArrows`), their width and length a percentage of the
+/// line weight and the concavity a percentage of the head length.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LiveArrows {
+    pub start: bool,
+    pub end: bool,
+    pub width_pct: f64,
+    pub length_pct: f64,
+    pub concavity_pct: f64,
+}
+
+impl LiveArrows {
+    /// Every number is finite.
+    pub fn is_finite(&self) -> bool {
+        [self.width_pct, self.length_pct, self.concavity_pct]
+            .iter()
+            .all(|v| v.is_finite())
+    }
 }
 
 impl LiveShape {
@@ -119,7 +144,9 @@ impl LiveShape {
         let extra = match *self {
             LiveShape::Rectangle { radii, .. } => radii.iter().all(|r| r.is_finite()),
             LiveShape::Star { inner_ratio, .. } => inner_ratio.is_finite(),
-            LiveShape::Line { weight, .. } => weight.is_finite(),
+            LiveShape::Line { weight, arrows, .. } => {
+                weight.is_finite() && arrows.is_none_or(|a| a.is_finite())
+            }
             _ => true,
         };
         [x, y, w, h].iter().all(|v| v.is_finite()) && extra
@@ -159,6 +186,7 @@ mod tests {
             x2: 30.0,
             y2: 20.0,
             weight: 2.0,
+            arrows: None,
         };
         assert_eq!(line.frame(), [10.0, 10.0, 20.0, 10.0]);
         assert_eq!(
@@ -169,8 +197,31 @@ mod tests {
                 x2: 40.0,
                 y2: 20.0,
                 weight: 2.0,
+                arrows: None,
             }
         );
+        // W16-G: a line's arrowheads travel with it; a line without them
+        // writes no `arrows` key, so an older record reads back the same.
+        let arrowed = LiveShape::Line {
+            x1: 0.0,
+            y1: 0.0,
+            x2: 40.0,
+            y2: 0.0,
+            weight: 3.0,
+            arrows: Some(LiveArrows {
+                start: false,
+                end: true,
+                width_pct: 500.0,
+                length_pct: 1000.0,
+                concavity_pct: 10.0,
+            }),
+        };
+        let json = serde_json::to_string(&arrowed).unwrap();
+        assert_eq!(serde_json::from_str::<LiveShape>(&json).unwrap(), arrowed);
+        let old = r#"{"Line":{"x1":0.0,"y1":0.0,"x2":4.0,"y2":0.0,"weight":1.0}}"#;
+        let plain: LiveShape = serde_json::from_str(old).unwrap();
+        assert!(matches!(plain, LiveShape::Line { arrows: None, .. }));
+        assert!(!serde_json::to_string(&plain).unwrap().contains("arrows"));
         assert!(!LiveShape::Ellipse {
             x: f64::NAN,
             y: 0.0,

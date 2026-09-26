@@ -81,6 +81,7 @@ const MS: &str = "ui.animation.ms";
 const ADD_MEDIA: &str = "ui.animation.add_media";
 const ADD_MEDIA_TIP: &str = "ui.animation.add_media.tip";
 const VIDEO_FRAMES: &str = "ui.animation.video.frames";
+const NEW_VIDEO_GROUP: &str = "ui.animation.new_video_group";
 
 fn tr(key: &str) -> &'static str {
     crate::strings::tr(key)
@@ -330,13 +331,26 @@ pub mod ids {
     pub fn video(index: usize) -> egui::Id {
         egui::Id::new(("raster-animation-video", index))
     }
+    /// W16-M: the timeline's New Video Group button.
+    pub fn new_video_group() -> egui::Id {
+        egui::Id::new("raster-animation-new-video-group")
+    }
+    /// W16-M: video group `index`'s row.
+    pub fn video_group(index: usize) -> egui::Id {
+        egui::Id::new(("raster-animation-video-group", index))
+    }
+    /// W16-M: the bar of layer `child` (in time order) on video group
+    /// `group`'s line.
+    pub fn video_group_child(group: usize, child: usize) -> egui::Id {
+        egui::Id::new(("raster-animation-video-group-child", group, child))
+    }
 }
 
 /// W16-M: the timeline's Add Media button and one row per video layer (its
 /// file, frame count, and trimmed length). Add Media is Photopea's "File -
 /// Open and Place" for a media file, so it asks the application for the
-/// same Place Embedded route, which turns a video file into a video layer
-/// at the playhead.
+/// same Place Embedded route. That route does not take a video yet
+/// (`Editor::place_path` has no video branch), so its tooltip says so.
 fn video_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     ui.horizontal(|ui| {
         let add = ui
@@ -346,7 +360,45 @@ fn video_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
         if add.clicked() {
             w.emit(Intent::Action(crate::menu::MenuAction::PlaceEmbedded));
         }
+        // Photopea's "New Video Group" for the selected layer: a group
+        // whose layers play one after another on one line.
+        let command = doc
+            .active_layer()
+            .and_then(|l| editor_core::timeline::new_video_group(doc, l));
+        let group = ui.add_enabled(
+            command.is_some(),
+            egui::Button::new(body(ui, tr(NEW_VIDEO_GROUP))),
+        );
+        crate::view::mark(ui, group.rect, ids::new_video_group());
+        if group.clicked() {
+            if let Some(c) = command {
+                w.emit(Intent::Document(c));
+            }
+        }
     });
+    for (index, gid) in doc.timeline.video_groups.iter().enumerate() {
+        let Some(layer) = doc.layers.get(*gid) else {
+            continue;
+        };
+        let line = editor_core::timeline::video_group_line(doc, *gid);
+        let span = line.iter().map(|l| l.2).max().unwrap_or(0)
+            - line.iter().map(|l| l.1).min().unwrap_or(0);
+        let row = ui.horizontal(|ui| {
+            ui.label(body(ui, &layer.name));
+            ui.label(hint(
+                ui,
+                format!(
+                    "{}: {}, {}{}",
+                    crate::strings::tr_en("Layers"),
+                    line.len(),
+                    span,
+                    tr(MS)
+                ),
+            ));
+        });
+        crate::view::mark(ui, row.response.rect, ids::video_group(index));
+        video_group_bars(w, ui, doc, index, &line);
+    }
     for (index, clip) in doc.timeline.videos.iter().enumerate() {
         if doc.layers.get(clip.layer).is_none() {
             continue;
@@ -369,6 +421,62 @@ fn video_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             ));
         });
         crate::view::mark(ui, row.response.rect, ids::video(index));
+    }
+}
+
+/// W16-M: a video group's line (Photopea: the layers inside a video group are
+/// placed into a single horizontal line in the timeline): one bar per layer
+/// of the group, each where that layer's bar is on the timeline, on one lane
+/// as wide as the panel; a click on a bar selects its layer.
+fn video_group_bars(
+    w: &mut Workspace,
+    ui: &mut Ui,
+    doc: &Document,
+    group: usize,
+    line: &[(LayerId, u32, u32)],
+) {
+    let t = current_tokens(ui);
+    let (lane, _) = ui.allocate_exact_size(
+        Vec2::new(ui.available_width(), ui.spacing().interact_size.y),
+        Sense::hover(),
+    );
+    let length = doc.timeline.duration_ms.max(1);
+    let x = |ms: u32| lane.left() + lane.width() * ms.min(length) as f32 / length as f32;
+    let active = doc.active_layer();
+    for (k, (child, in_ms, out_ms)) in line.iter().enumerate() {
+        let left = x(*in_ms);
+        let bar = egui::Rect::from_min_max(
+            egui::pos2(left, lane.top() + Space::Hair.pt()),
+            egui::pos2(
+                x(*out_ms).max(left + Space::Hair.pt()),
+                lane.bottom() - Space::Hair.pt(),
+            ),
+        );
+        let response = ui.interact(bar, ids::video_group_child(group, k), Sense::click());
+        if response.clicked() {
+            w.emit(Intent::SelectLayers {
+                layers: vec![*child],
+                active: Some(*child),
+            });
+        }
+        if ui.is_rect_visible(bar) {
+            let radius = rounding(Radius::Small.resolve(&t.radii, bar.height()));
+            ui.painter().rect_filled(
+                bar,
+                radius,
+                color32(t.palette.color(ColorRole::AccentSubtle)),
+            );
+            let (width, role) = if active == Some(*child) {
+                (t.borders.thick, ColorRole::Accent)
+            } else {
+                (t.borders.hairline, ColorRole::ControlStroke)
+            };
+            ui.painter().rect_stroke(
+                bar,
+                radius,
+                egui::Stroke::new(width, color32(t.palette.color(role))),
+            );
+        }
     }
 }
 
@@ -1109,5 +1217,113 @@ mod tests {
             })
             .collect();
         assert!(labels.iter().any(|t| t == "Add Media"), "{labels:?}");
+    }
+
+    /// W16-M: New Video Group (Photopea's timeline menu, labelled with
+    /// Photopea's words) is drawn beside Add Media; with a layer selected a click emits the command that puts
+    /// it in a new "Video Group 1", and once applied the panel draws the
+    /// group's row (its name, layer count and line length).
+    #[test]
+    fn new_video_group_wraps_the_selected_layer_and_draws_its_row() {
+        let mut doc = Document::new(32, 32, "Video");
+        let id = doc.layers.push_root(Layer::raster("clip.mp4")).unwrap();
+        doc.set_active_layer(Some(id)).unwrap();
+        doc.timeline.enabled = true;
+        doc.timeline.track_mut(id).out_ms = 400;
+        let mut live = Live::new(doc);
+        let add = live.rect(ids::add_media());
+        let button = live.rect(ids::new_video_group());
+        assert!(button.min.x >= add.max.x, "beside Add Media");
+        let (_, out) = live.frame(Vec::new());
+        assert!(
+            out.shapes.iter().any(|c| matches!(&c.shape,
+                egui::Shape::Text(t) if button.intersects(t.visual_bounding_rect())
+                    && t.galley.text() == "New Video Group")),
+            "the button reads Photopea's \"New Video Group\""
+        );
+        let intents = live.click(ids::new_video_group());
+        assert_eq!(live.apply(&intents), 1, "one command: {intents:?}");
+        assert_eq!(live.history.undo_depth(), 1, "one undo step");
+        let doc = &live.doc;
+        let gid = doc.layers.parent_of(id).expect("the layer is grouped");
+        assert_eq!(doc.layers.get(gid).unwrap().name, "Video Group 1");
+        assert_eq!(doc.timeline.video_groups, vec![gid]);
+        let row = live.rect(ids::video_group(0));
+        let (_, out) = live.frame(Vec::new());
+        let texts: Vec<String> = out
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Text(t) if row.intersects(t.visual_bounding_rect()) => {
+                    Some(t.galley.text().to_string())
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(texts.iter().any(|t| t == "Video Group 1"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "Layers: 1, 400 ms"), "{texts:?}");
+    }
+
+    /// W16-M: a video group's layers get bars of their own, on one line
+    /// under the group's row (Photopea: "the layers inside them will be
+    /// placed into a single horizontal line"): each bar where its layer's
+    /// bar is on the timeline, painted, and a click selects that layer.
+    #[test]
+    fn a_video_groups_layers_get_bars_on_one_line() {
+        let mut doc = Document::new(32, 32, "Video");
+        let a = doc.layers.push_root(Layer::raster("a.mp4")).unwrap();
+        let b = doc.layers.push_root(Layer::raster("b.mp4")).unwrap();
+        doc.set_active_layer(Some(a)).unwrap();
+        doc.timeline.enabled = true;
+        doc.timeline.duration_ms = 1000;
+        let wrap = editor_core::timeline::new_video_group(&doc, a).unwrap();
+        wrap.apply(&mut doc).unwrap();
+        let gid = doc.layers.parent_of(a).unwrap();
+        Command::MoveLayer {
+            layer_id: b,
+            parent: Some(gid),
+            index: 0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        (
+            doc.timeline.track_mut(a).in_ms,
+            doc.timeline.track_mut(a).out_ms,
+        ) = (0, 400);
+        (
+            doc.timeline.track_mut(b).in_ms,
+            doc.timeline.track_mut(b).out_ms,
+        ) = (400, 1000);
+        let mut live = Live::new(doc);
+        let row = live.rect(ids::video_group(0));
+        let first = live.rect(ids::video_group_child(0, 0));
+        let second = live.rect(ids::video_group_child(0, 1));
+        assert!(first.top() >= row.bottom() - 1.0, "under the group's row");
+        assert!(
+            (first.center().y - second.center().y).abs() < 0.5,
+            "one line"
+        );
+        assert!(first.right() <= second.left() + 0.5, "in time order");
+        let ratio = first.width() / second.width();
+        assert!(
+            (ratio - 400.0 / 600.0).abs() < 0.05,
+            "widths follow the bars: {ratio}"
+        );
+        let (_, out) = live.frame(Vec::new());
+        let painted = |r: egui::Rect| {
+            out.shapes.iter().any(|c| match &c.shape {
+                egui::Shape::Rect(s) => s.rect == r && s.fill != egui::Color32::TRANSPARENT,
+                _ => false,
+            })
+        };
+        assert!(painted(first) && painted(second), "both bars are painted");
+        let intents = live.click(ids::video_group_child(0, 1));
+        assert!(
+            intents.iter().any(|i| matches!(
+                i,
+                Intent::SelectLayers { layers, active: Some(l) } if *l == b && layers == &vec![b]
+            )),
+            "{intents:?}"
+        );
     }
 }

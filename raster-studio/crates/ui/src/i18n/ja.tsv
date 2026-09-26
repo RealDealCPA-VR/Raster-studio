@@ -41,7 +41,7 @@ Add Media	メディアを追加
 Add Noise…	ノイズを加える…
 Add a layer mask	レイヤーマスクを追加
 Add a smart filter mask	スマートフィルターマスクを追加
-Add a video file (MP4: H.264 or AV1) as a video layer at the playhead; audio is not read	再生ヘッドの位置にビデオファイル（MP4：H.264 または AV1）をビデオレイヤーとして追加します。音声は読み込まれません
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	画像または動画ファイルを配置します (ファイル > 埋め込みを配置)。動画は再生ヘッドの位置でビデオレイヤーになります
 Add an adjustment layer	調整レイヤーを追加
 Add another instance of this effect	この効果のインスタンスをもう 1 つ追加
 Add current colour	現在のカラーを追加
@@ -51,6 +51,7 @@ Add or remove room around the image. Pixels are not resampled.	画像の周囲�
 Add shortcut	ショートカットを追加
 Add to Selection	選択範囲に追加
 Adds one guide at a document coordinate, in pixels.	ドキュメント座標（ピクセル）にガイドを 1 本追加します。
+Adjustment	色調補正
 Adjustments	色調補正
 Advanced	詳細
 Again	再実行
@@ -539,6 +540,7 @@ File name	ファイル名
 Files that fail are listed in batch-errors.txt in the destination.	失敗したファイルは保存先の batch-errors.txt に一覧表示されます。
 Fill	塗り
 Fill Filter Mask	フィルターマスクを塗りつぶし
+Fill Layer	塗りつぶしレイヤー
 Fill Mask	マスクを塗りつぶし
 Fill Screen	画面に合わせて塗りつぶす
 Fill in File Info, or open a file that has EXIF, to embed metadata	メタデータを埋め込むには、ファイル情報を入力するか、EXIF のあるファイルを開いてください
@@ -553,6 +555,7 @@ Find Edges	輪郭検出
 First line	1 行目
 Fish	魚形
 Fisheye	魚眼レンズ
+Fit The Area	領域に合わせる
 Fit on Screen	画面サイズに合わせる
 Fit the whole image in the window	画像全体をウィンドウに合わせる
 Fixed height	固定の高さ
@@ -712,6 +715,7 @@ Layer	レイヤー
 Layer Comps	レイヤーカンプ
 Layer Edges	レイヤーエッジ
 Layer Mask	レイヤーマスク
+Layer Properties	レイヤープロパティ
 Layer Style	レイヤースタイル
 Layer knocks out drop shadow	レイヤーがドロップシャドウをノックアウト
 Layer via Copy	選択範囲をコピーしたレイヤー
@@ -768,6 +772,7 @@ Lock all	すべてをロック
 Lock pixels	ピクセルをロック
 Lock position	位置をロック
 Lock transparent pixels	透明ピクセルをロック
+Long-tap as a right click	長押しで右クリック
 Lookup table	ルックアップテーブル
 Luminance	輝度
 Luminance of the preview source; the markers are the black and white points.	プレビューのソースの輝度です。マーカーは黒点と白点です。
@@ -787,6 +792,7 @@ Maps the active layer onto a palette as one undo step; the document stays RGB.	�
 Margins	マージン
 Mark this state so you can come back to it	この状態に戻れるようにマークする
 Mask	マスク
+Mask Properties	マスクプロパティ
 Mask source	マスクのソース
 Match Color	カラーの適用
 Match Color…	カラーの適用…
@@ -847,6 +853,7 @@ New Adjustment Layer	新規調整レイヤー
 New Channel	新規チャンネル
 New Document	新規ドキュメント
 New Fill Layer	新規塗りつぶしレイヤー
+New Folder	新規フォルダー
 New Guide	新規ガイド
 New Guide Layout	新規ガイドレイアウト
 New Guide Layout…	新規ガイドレイアウト…
@@ -860,7 +867,9 @@ New Snapshot	新規スナップショット
 New Spot Channel	新規スポットカラーチャンネル
 New Spot Channel…	新規スポットカラーチャンネル…
 New Style Preset	新規スタイルプリセット
+New Video Group	新規ビデオグループ
 New channel	新規チャンネル
+New folder	新規フォルダー
 New group	新規グループ
 New layer	新規レイヤー
 New layer comp	新規レイヤーカンプ
@@ -961,6 +970,7 @@ Open a document to see its properties	ドキュメントを開くとプロパテ
 Open another document, or add another pixel layer, to match its colours.	カラーを合わせるには、別のドキュメントを開くか、別のピクセルレイヤーを追加してください。
 Open as	開く形式
 Open editor…	エディターを開く…
+Open or close the folder	フォルダーを開く/閉じる
 Open the Adjustments panel	色調補正パネルを開く
 Open…	開く…
 Operation	操作
@@ -1029,6 +1039,7 @@ Pinch…	つまむ…
 Pixel Grid	ピクセルグリッド
 Pixel dimensions	ピクセル数
 Pixel mask	ピクセルマスク
+Pixel to Pixel	ピクセル対ピクセル
 Pixelate	ピクセレート
 Pixels	ピクセル
 Place Embedded…	埋め込みを配置…
@@ -1239,6 +1250,7 @@ Select a layer to see its properties	レイヤーを選択するとプロパテ�
 Select a layer: a click on a style applies it to the active layer.	レイヤーを選択してください。スタイルをクリックするとアクティブなレイヤーに適用されます。
 Select a path first	先にパスを選択してください
 Select a text layer, or type into one: a click inserts the glyph at the caret.	テキストレイヤーを選択するか入力してください。クリックすると字形がキャレット位置に挿入されます。
+Select a text layer to edit its type	テキストレイヤーを選択して文字を編集します
 Select every pixel near one colour	1 つのカラーに近いすべてのピクセルを選択
 Selection	選択範囲
 Selection Edges	選択範囲の境界線
@@ -1262,6 +1274,7 @@ Shadows/Highlights…	シャドウ・ハイライト…
 Shape	シェイプ
 Shape Dynamics	シェイプ
 Shape Mosaic…	シェイプモザイク…
+Shape Properties	シェイププロパティ
 Sharpen	シャープ
 Sharpen Edges	シャープ（輪郭のみ）
 Sharpen More	シャープ（強）
@@ -1364,6 +1377,7 @@ TGA…	TGA…
 TIF…	TIF…
 Templates	テンプレート
 Text	テキスト
+Text Properties	テキストプロパティ
 Text overflows the box	テキストがボックスからあふれています
 Text replacement	テキストの置換
 Texture Dilation…	テクスチャの拡張…
@@ -1373,7 +1387,6 @@ The CSV ends inside a quoted field	CSV が引用符で囲まれたフィール�
 The CSV has a header but no data sets	CSV にヘッダーはありますがデータセットがありません
 The CSV is empty	CSV が空です
 The CSV names a variable that is not defined:	CSV に定義されていない変数名があります：
-The active layer has no layer style to save	アクティブなレイヤーに保存するレイヤースタイルがありません
 The active layer is not in the document	アクティブなレイヤーがドキュメントにありません
 The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	アクティブなスマートオブジェクトにソースフォルダーの各画像を順に表示し、各結果を PNG として保存先フォルダーに書き出します。
 The amount must be within	値は次の範囲内にしてください
@@ -1477,6 +1490,7 @@ Transform Layer	レイヤーを変形
 Transform Selection	選択範囲を変形
 Transparency	透明度
 Transparent Pixels	透明ピクセル
+Trim	トリミング
 Trim Away	トリミングする部分
 Trim…	トリミング…
 Tritone	トライトーン

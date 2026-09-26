@@ -152,6 +152,27 @@ pub(super) fn sources() -> Vec<String> {
             .iter()
             .map(|s| s.to_string()),
     );
+    // The Properties panel's headings (`PropertiesSubject::english_title`)
+    // and the Color panel's notation names (`ColorNotation::label`).
+    out.extend(
+        [
+            "Properties",
+            "Layer Properties",
+            "Mask Properties",
+            "Adjustment",
+            "Text Properties",
+            "Shape Properties",
+            "Smart Object",
+            "Fill Layer",
+        ]
+        .iter()
+        .map(|s| s.to_string()),
+    );
+    out.extend(
+        crate::panels::color::ColorNotation::ALL
+            .iter()
+            .map(|n| n.label().to_string()),
+    );
     // The Brushes panel's shipped presets.
     out.extend(
         crate::panels::brushes::BrushesState::default()

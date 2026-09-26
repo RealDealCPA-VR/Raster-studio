@@ -481,3 +481,292 @@ fn a_recorded_transform_decomposes_into_the_same_matrix() {
         assert!((a - b).abs() < 1e-4, "{rebuilt:?} vs {m:?}");
     }
 }
+
+/// Layer ▸ New Adjustment Layer ▸ `id` clicked on the menu bar through the
+/// chrome's own route, the command it produced applied as the shell does,
+/// and the new layer made active as a Layers-panel click leaves it.
+fn menu_adjustment_layer(ed: &mut Editor, id: ui::menu::AdjustmentId) -> layer_model::LayerId {
+    let before = ed.active().unwrap().document.layers.iter_depth_first();
+    let mut chrome = Chrome::new();
+    let menu_ctx = crate::menu_bridge::context(ed, chrome.workspace());
+    let intent = crate::menu_bridge::resolve_intent(
+        ui::menu::MenuAction::NewAdjustmentLayer(id),
+        &menu_ctx,
+        ed,
+    )
+    .expect("enabled");
+    let mut out = crate::chrome::ChromeOutput::default();
+    chrome.menu_click(intent, ed, &mut out);
+    assert!(out.menu.is_empty() && out.actions.is_empty());
+    for command in out.commands {
+        ed.apply_command(command);
+    }
+    let layer = ed
+        .active()
+        .unwrap()
+        .document
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find(|l| !before.contains(l))
+        .expect("the menu made a layer");
+    ed.set_active_layer(layer);
+    layer
+}
+
+/// The Properties panel's edit of an adjustment layer's settings.
+fn edit_adjustment(
+    ed: &mut Editor,
+    layer: layer_model::LayerId,
+    kind: layer_model::AdjustmentKind,
+) {
+    ed.apply_command(editor_core::Command::SetLayerKind {
+        layer_id: layer,
+        kind: Box::new(layer_model::LayerKind::Adjustment(
+            layer_model::AdjustmentLayer { kind },
+        )),
+    });
+}
+
+/// Every adjustment layer's `(name, kind)`, top first.
+fn adjustment_layers(ed: &Editor) -> Vec<(String, layer_model::AdjustmentKind)> {
+    let doc = &ed.active().unwrap().document;
+    doc.layers
+        .iter_depth_first()
+        .into_iter()
+        .filter_map(|id| {
+            let layer = doc.layers.get(id)?;
+            match &layer.kind {
+                layer_model::LayerKind::Adjustment(a) => Some((layer.name.clone(), a.kind.clone())),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn adjustment_layers_made_and_edited_export_as_photoshop_steps_and_replay() {
+    use layer_model::AdjustmentKind as K;
+    use ui::menu::AdjustmentId;
+    let dir = tempfile::tempdir().unwrap();
+    let mut ed = editor(dir.path(), ScriptedDialogs::new());
+    let png = halves(dir.path());
+    ed.open_path(&png).unwrap();
+    ed.open_path(&png).unwrap();
+    ed.activate(0).unwrap();
+
+    ed.start_recording();
+    // Levels: made from the menu at identity, then set in Properties.
+    let levels = menu_adjustment_layer(&mut ed, AdjustmentId::Levels);
+    edit_adjustment(
+        &mut ed,
+        levels,
+        K::Levels {
+            black: 20.0 / 255.0,
+            white: 235.0 / 255.0,
+            gamma: 1.25,
+        },
+    );
+    // Hue/Saturation colorized, Posterize and Invert, each made and set.
+    let hue = menu_adjustment_layer(&mut ed, AdjustmentId::HueSaturation);
+    edit_adjustment(
+        &mut ed,
+        hue,
+        K::HueSaturationFull {
+            hue: 0.0,
+            saturation: 0.0,
+            lightness: 0.0,
+            colorize: Some([200.0, 0.5, 0.0]),
+        },
+    );
+    let posterize = menu_adjustment_layer(&mut ed, AdjustmentId::Posterize);
+    edit_adjustment(&mut ed, posterize, K::Posterize { levels: 3 });
+    menu_adjustment_layer(&mut ed, AdjustmentId::Invert);
+    let recorded = adjustment_layers(&ed);
+    assert_eq!(recorded.len(), 4);
+    // What the four adjustment layers draw, before the shape below, which
+    // the export leaves out, covers part of it.
+    let recorded_rgba = {
+        let doc = ed.active_mut().unwrap();
+        doc.composite(doc.canvas_rect()).unwrap()
+    };
+    // A shape layer is not an empty layer: it is left out, not written as
+    // Make Layer.
+    ed.apply_command(editor_core::Command::create_layer(
+        layer_model::Layer::with_kind(
+            "Shape",
+            layer_model::LayerKind::Shape(layer_model::ShapeLayer::from_svg("M0 0 L10 0 L10 10 Z")),
+        ),
+    ));
+    let edits = ed.stop_recording().unwrap();
+    assert_eq!(edits.len(), 8, "every edit was captured");
+    // Stop keeps the recording as the default set's action.
+    assert_eq!(ed.actions().len(), 1);
+
+    let (set, left_out) = ed.action_set_as_atn(default_set(&ed)).unwrap();
+    let unwritten: Vec<String> = edits
+        .iter()
+        .filter(|e| super::atn_record::steps_for(&e.command).is_none())
+        .map(|e| format!("{:?}", e.command).chars().take(300).collect())
+        .collect();
+    assert_eq!(
+        left_out, 1,
+        "the shape layer, and only it, is left out: {unwritten:#?}"
+    );
+    let steps = &set.actions[0].steps;
+    let ops: Vec<StepOp> = steps
+        .iter()
+        .map(|s| atn::interpret(s).unwrap_or_else(|e| panic!("{}: {e}", s.name)))
+        .collect();
+    let shape: Vec<(&str, &str)> = ops
+        .iter()
+        .zip(steps)
+        .map(|(op, s)| {
+            (
+                s.event.as_str(),
+                match op {
+                    StepOp::MakeAdjustmentLayer(_) => "make adjustment layer",
+                    StepOp::SetAdjustmentLayer(_) => "set adjustment layer",
+                    _ => "other",
+                },
+            )
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            ("Mk  ", "make adjustment layer"),
+            ("setd", "set adjustment layer"),
+            ("Mk  ", "make adjustment layer"),
+            ("setd", "set adjustment layer"),
+            ("Mk  ", "make adjustment layer"),
+            ("setd", "set adjustment layer"),
+            ("Mk  ", "make adjustment layer"),
+        ],
+        "{ops:?}"
+    );
+    // Photoshop's spelling: the Type class of each adjustment.
+    let type_class = |step: &AtnStep| -> String {
+        let d = step.descriptor.as_ref().unwrap();
+        match (d.descriptor("Usng"), d.descriptor("T   ")) {
+            (Some(u), _) => u.descriptor("Type").unwrap().class_id.clone(),
+            (None, Some(t)) => t.class_id.clone(),
+            _ => panic!("no adjustment in {step:?}"),
+        }
+    };
+    assert_eq!(
+        steps.iter().map(type_class).collect::<Vec<_>>(),
+        ["Lvls", "Lvls", "HStr", "HStr", "Pstr", "Pstr", "Invr"]
+    );
+    let back = atn::parse(&atn::write(&set).unwrap()).unwrap();
+    assert_eq!(back, set, "export -> parse keeps every step");
+
+    let mut exported = back;
+    exported.name = "Exported".into();
+    ed.import_action_set(exported, "exported.atn");
+    let index = ed
+        .actions()
+        .iter()
+        .position(|a| a.set == "Exported")
+        .expect("imported");
+    ed.activate(1).unwrap();
+    let report = ed.play_action_from(index, 0).unwrap();
+    assert!(
+        report.skipped.is_empty() && report.failed.is_empty(),
+        "{report:?}"
+    );
+    assert_eq!(report.applied, 7);
+    assert_eq!(
+        adjustment_layers(&ed),
+        recorded,
+        "the same adjustment layers, with the same names and settings"
+    );
+    let doc = ed.active_mut().unwrap();
+    assert_eq!(
+        doc.composite(doc.canvas_rect()).unwrap(),
+        recorded_rgba,
+        "the replayed layers draw the recorded pixels"
+    );
+}
+
+/// A Set of an adjustment layer's settings needs the active layer to be one
+/// of that adjustment, and says so when it is not.
+#[test]
+fn setting_an_adjustment_layer_needs_one_active() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ed = editor(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&halves(dir.path())).unwrap();
+    let step = StepOp::SetAdjustmentLayer(Box::new(StepOp::Posterize { levels: 4 })).to_step();
+    ed.import_action_set(
+        AtnSet {
+            name: "S".into(),
+            expanded: true,
+            actions: vec![AtnAction {
+                name: "Set".into(),
+                steps: vec![step],
+                ..AtnAction::default()
+            }],
+        },
+        "s.atn",
+    );
+    let index = ed.actions().iter().position(|a| a.set == "S").unwrap();
+    let report = ed.play_action_from(index, 0).unwrap();
+    assert_eq!(report.applied, 0, "{report:?}");
+    assert!(
+        format!("{:?}", report.failed).contains("not a Posterize adjustment layer"),
+        "{report:?}"
+    );
+}
+
+/// A Photoshop `make` of an adjustment layer carries its settings: played
+/// alone (no Set after it), the new layer holds them, not the menu row's
+/// identity, and draws them.
+#[test]
+fn a_made_adjustment_layer_holds_the_steps_settings() {
+    use asset_store::resources::atn::{LevelsEntry, ToneChannel};
+    let dir = tempfile::tempdir().unwrap();
+    let mut ed = editor(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&halves(dir.path())).unwrap();
+    let before = {
+        let doc = ed.active_mut().unwrap();
+        doc.composite(doc.canvas_rect()).unwrap()
+    };
+    let levels = StepOp::Levels(vec![LevelsEntry {
+        channel: ToneChannel::Composite,
+        input: [60.0, 200.0],
+        gamma: 1.0,
+        output: [0.0, 255.0],
+    }]);
+    let step = StepOp::MakeAdjustmentLayer(Box::new(levels.clone())).to_step();
+    ed.import_action_set(
+        AtnSet {
+            name: "M".into(),
+            expanded: true,
+            actions: vec![AtnAction {
+                name: "Make".into(),
+                steps: vec![step],
+                ..AtnAction::default()
+            }],
+        },
+        "m.atn",
+    );
+    let index = ed.actions().iter().position(|a| a.set == "M").unwrap();
+    let report = ed.play_action_from(index, 0).unwrap();
+    assert_eq!(report.applied, 1, "{report:?}");
+    let layers = adjustment_layers(&ed);
+    assert_eq!(layers.len(), 1, "{layers:?}");
+    let Some(StepOp::Levels(entries)) = super::atn_record::adjustment_step(&layers[0].1) else {
+        panic!("not a Levels layer: {layers:?}");
+    };
+    let composite = &entries[0];
+    assert!(
+        (composite.input[0] - 60.0).abs() < 0.01 && (composite.input[1] - 200.0).abs() < 0.01,
+        "the layer holds the step's settings: {entries:?}"
+    );
+    let doc = ed.active_mut().unwrap();
+    assert_ne!(
+        doc.composite(doc.canvas_rect()).unwrap(),
+        before,
+        "the new layer draws its settings"
+    );
+}

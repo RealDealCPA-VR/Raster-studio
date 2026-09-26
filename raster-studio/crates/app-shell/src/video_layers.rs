@@ -9,17 +9,25 @@
 //!
 //! 1. The file is read (at most [`MAX_VIDEO_FILE_BYTES`]) and decoded **in
 //!    the decode worker** ([`crate::dialogs::decode_worker`], kind
-//!    `video`): OpenH264 and the AV1 decoder are native code, so a crash on
-//!    a damaged file is an error here, not the editor closing. The worker is
-//!    what `studio-desktop`'s `main` installs ([`install_video_decoder`]);
-//!    with none installed a video is refused by name.
-//! 2. Every decoded frame is cut into tiles and filed in the document's
-//!    tile store (content-addressed, so a frame that repeats costs nothing).
+//!    `video-window`): OpenH264 and the AV1 decoder are native code, so a
+//!    crash on a damaged file is an error here, not the editor closing. The
+//!    worker is what `studio-desktop`'s `main` installs
+//!    ([`install_video_decoder`]); with none installed a video is refused by
+//!    name.
+//! 2. Frames are decoded **on demand**, [`DECODE_WINDOW_FRAMES`] at a time:
+//!    opening or adding a video decodes the first window only (and learns
+//!    every frame's timing); a playhead move to a frame not decoded yet
+//!    ([`Editor::seek_timeline`] asks [`Editor::load_video_frames_at`])
+//!    decodes the window holding it; an export decodes what it renders
+//!    ([`fill_video_frames`], on its own copy of the document). Each decoded
+//!    frame is cut into tiles and filed in the document's tile store
+//!    (content-addressed, so a frame that repeats costs nothing), and stays
+//!    there, cached, for the session.
 //! 3. One undoable step adds a raster layer named after the file, a
 //!    [`editor_core::timeline::VideoClip`] naming it (start at the playhead,
-//!    every frame's duration and tiles), a bar covering the video, and the
-//!    frame at the playhead on the layer. Timeline mode is turned on, and
-//!    the timeline is made long enough to hold the video.
+//!    every frame's duration, the decoded frames' tiles), a bar covering the
+//!    video, and the frame at the playhead on the layer. Timeline mode is
+//!    turned on, and the timeline is made long enough to hold the video.
 //!
 //! From then on the timeline shows the frame at `t` ([`editor_core::timeline::seek`]),
 //! an export renders it ([`crate::timeline::render_at`] composites
@@ -28,14 +36,16 @@
 //! # Bounds
 //!
 //! The decoder's own (`raster::codec::formats::mp4::video`): at most 1000
-//! frames and 1 GiB of decoded RGBA8, checked before a frame is decoded and
-//! again on the worker's answer before a frame is read.
+//! frames in the track, and 1 GiB of decoded RGBA8 in one window (an export
+//! decodes the whole track as one window), checked before a frame is decoded
+//! and again on the worker's answer before a frame is read. A window after
+//! the first is decoded from the stream's start (a frame depends on the ones
+//! before it), so a late window costs the decode time of the frames before it.
 //!
 //! # Not here
 //!
 //! Audio (no permissively licensed pure-Rust AAC decoder; MP4 export writes
-//! no audio track), New Video Group, and frames decoded lazily per playhead
-//! position (a video is decoded once, whole, within the bounds above).
+//! no audio track).
 
 use std::io::Read;
 use std::path::Path;
@@ -43,9 +53,9 @@ use std::sync::RwLock;
 
 use editor_core::pixels::{TileDelta, TileEdit, TileMap};
 use editor_core::timeline::{self, VideoClip, DURATION_RANGE_MS, FPS_RANGE};
-use editor_core::Command;
+use editor_core::{Command, Document};
 use layer_model::{Layer, LayerId};
-use raster::codec::formats::mp4::{self, video::DecodedVideo};
+use raster::codec::formats::mp4::{self, video::VideoWindow};
 use raster::{CodecError, ImportLimits};
 
 use crate::editor::Editor;
@@ -54,8 +64,13 @@ use crate::DocumentId;
 /// The largest video file this route reads (1 GiB).
 pub const MAX_VIDEO_FILE_BYTES: u64 = 1 << 30;
 
-/// What decodes a video's bytes for a video layer.
-pub type VideoDecoder = fn(&[u8], ImportLimits) -> Result<DecodedVideo, CodecError>;
+/// How many frames one on-demand decode brings in: the window holding the
+/// frame the playhead needs.
+pub const DECODE_WINDOW_FRAMES: usize = 32;
+
+/// What decodes the frames `first..first + count` of a video's bytes for a
+/// video layer.
+pub type VideoDecoder = fn(&[u8], ImportLimits, usize, usize) -> Result<VideoWindow, CodecError>;
 
 static DECODER: RwLock<Option<VideoDecoder>> = RwLock::new(None);
 
@@ -65,10 +80,10 @@ pub fn install_video_decoder(decoder: VideoDecoder) {
     *DECODER.write().unwrap_or_else(|e| e.into_inner()) = Some(decoder);
 }
 
-fn decode(bytes: &[u8]) -> Result<DecodedVideo, CodecError> {
+fn decode(bytes: &[u8], first: usize, count: usize) -> Result<VideoWindow, CodecError> {
     let decoder = *DECODER.read().unwrap_or_else(|e| e.into_inner());
     match decoder {
-        Some(decode) => decode(bytes, ImportLimits::default()),
+        Some(decode) => decode(bytes, ImportLimits::default(), first, count),
         None => Err(CodecError::Unsupported(
             "video layers are decoded in the decode worker process, which this process has not \
              started"
@@ -94,8 +109,9 @@ pub fn is_video_path(path: &Path) -> bool {
     mp4::looks_like_video(&head[..filled])
 }
 
-/// Read and decode `path` (the file bounded by [`MAX_VIDEO_FILE_BYTES`]).
-fn read_video(path: &Path) -> Result<DecodedVideo, String> {
+/// Read `path` (bounded by [`MAX_VIDEO_FILE_BYTES`]) and decode its frames
+/// `first..first + count`.
+fn read_video(path: &Path, first: usize, count: usize) -> Result<VideoWindow, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut bytes = Vec::new();
     file.take(MAX_VIDEO_FILE_BYTES + 1)
@@ -108,29 +124,66 @@ fn read_video(path: &Path) -> Result<DecodedVideo, String> {
             MAX_VIDEO_FILE_BYTES >> 20
         ));
     }
-    decode(&bytes).map_err(|e| format!("{}: {e}", path.display()))
+    decode(&bytes, first, count).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// File every frame's tiles in `tiles`; one tile map per frame.
+/// One tile map per frame of the track: the window's frames' tiles, filed
+/// in `tiles`; an empty map for every frame outside the window (not decoded
+/// yet).
 fn frame_tiles(
-    video: &DecodedVideo,
+    window: &VideoWindow,
     tiles: &mut compositor::MemoryTileSource,
 ) -> Result<Vec<TileMap>, String> {
-    video
-        .frames
-        .iter()
-        .map(|f| {
-            let grid = raster::TileGrid::from_rgba8(video.width, video.height, &f.rgba8)
-                .map_err(|e| e.to_string())?;
-            let edits: Vec<TileEdit> = grid
-                .iter()
-                .map(|(coord, tile)| TileEdit::set(coord, tiles.insert_bytes(tile.data().to_vec())))
-                .collect();
-            let mut map = TileMap::default();
-            map.apply_delta(&TileDelta::new(edits).map_err(|e| e.to_string())?);
-            Ok(map)
-        })
-        .collect()
+    let mut maps = vec![TileMap::default(); window.durations_ms.len()];
+    for (k, f) in window.frames.iter().enumerate() {
+        let grid = raster::TileGrid::from_rgba8(window.width, window.height, &f.rgba8)
+            .map_err(|e| e.to_string())?;
+        let edits: Vec<TileEdit> = grid
+            .iter()
+            .map(|(coord, tile)| TileEdit::set(coord, tiles.insert_bytes(tile.data().to_vec())))
+            .collect();
+        let mut map = TileMap::default();
+        map.apply_delta(&TileDelta::new(edits).map_err(|e| e.to_string())?);
+        let slot = maps
+            .get_mut(window.first + k)
+            .ok_or("the decoded window lies past the video's frames")?;
+        *slot = map;
+    }
+    Ok(maps)
+}
+
+/// File `window`'s frames into `clip` (keeping the frames it has), when the
+/// window is of the clip's media (same size, frame count and timing).
+/// Answers how many frames were filed.
+fn file_window(
+    clip: &mut VideoClip,
+    window: &VideoWindow,
+    tiles: &mut compositor::MemoryTileSource,
+) -> Result<usize, String> {
+    if (clip.width, clip.height) != (window.width, window.height)
+        || clip.durations_ms != window.durations_ms
+    {
+        return Err(format!(
+            "{} changed since it was added (its size or length differs)",
+            clip.source
+        ));
+    }
+    let maps = frame_tiles(window, tiles)?;
+    clip.frames
+        .resize(clip.durations_ms.len(), TileMap::default());
+    let mut filed = 0;
+    for (i, map) in maps.into_iter().enumerate() {
+        if !map.is_empty() {
+            clip.frames[i] = map;
+            filed += 1;
+        }
+    }
+    Ok(filed)
+}
+
+/// The first frame of the decode window holding frame `index`.
+fn window_start(index: usize) -> usize {
+    index / DECODE_WINDOW_FRAMES * DECODE_WINDOW_FRAMES
 }
 
 fn file_name(path: &Path) -> String {
@@ -141,61 +194,53 @@ fn file_name(path: &Path) -> String {
 
 /// The frame rate a video suggests: its shortest frame's, in the range the
 /// timeline accepts.
-fn fps_of(video: &DecodedVideo) -> u32 {
-    let shortest = video
-        .frames
+fn fps_of(window: &VideoWindow) -> u32 {
+    let shortest = window
+        .durations_ms
         .iter()
-        .map(|f| f.duration_ms.max(1))
+        .map(|d| (*d).max(1))
         .min()
         .unwrap_or(1000);
     (1000 / shortest).clamp(*FPS_RANGE.start(), *FPS_RANGE.end())
 }
 
-/// [`Editor::reload_video_frames`] for clips whose source this session has
-/// not tried yet, so a missing or damaged source is not read again on every
-/// playhead move.
-pub(crate) fn reload_once(editor: &mut Editor) {
-    static TRIED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-    let fresh: Vec<String> = match editor.active() {
-        Some(open) => open
-            .document
-            .timeline
-            .videos
-            .iter()
-            .filter(|c| !c.frames_loaded() && !c.source.is_empty())
-            .map(|c| c.source.clone())
-            .collect(),
-        None => return,
-    };
-    if fresh.is_empty() {
-        return;
-    }
-    {
-        let mut tried = TRIED.lock().unwrap_or_else(|e| e.into_inner());
-        if fresh.iter().all(|s| tried.contains(s)) {
-            return;
-        }
-        for s in fresh {
-            if !tried.contains(&s) {
-                tried.push(s);
-            }
-        }
-    }
-    editor.reload_video_frames();
+fn media_ms(window: &VideoWindow) -> u64 {
+    window.durations_ms.iter().map(|d| u64::from(*d)).sum()
 }
+
+/// Decode, into `doc`'s clips and `tiles`, every frame an export of `doc`
+/// renders that is not decoded yet: each clip whose frames are not all
+/// here is read again from its source, whole, in one window. For an
+/// export's own copy of the document (the export runs off the interaction
+/// thread). A clip whose source is gone or changed keeps what it has.
+pub fn fill_video_frames(doc: &mut Document, tiles: &mut compositor::MemoryTileSource) {
+    for clip in doc.timeline.videos.iter_mut() {
+        if clip.frames_loaded() || clip.source.is_empty() {
+            continue;
+        }
+        if let Ok(window) = read_video(Path::new(&clip.source), 0, clip.durations_ms.len()) {
+            let _ = file_window(clip, &window, tiles);
+        }
+    }
+}
+
+/// Sources whose on-demand decode failed this session, so a missing or
+/// damaged source is not read again on every playhead move.
+static FAILED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
 impl Editor {
     /// File > Open of a video: a new document the video's size holding one
     /// video layer, Timeline mode on, as long as the video and at its frame
     /// rate. Opening is not an edit: the document is clean with nothing to
     /// undo. The file is decoded before anything changes, so a damaged or
-    /// refused file opens nothing.
+    /// refused file opens nothing. Only the first [`DECODE_WINDOW_FRAMES`]
+    /// frames are decoded now; the rest as the playhead reaches them.
     pub fn open_video_path(&mut self, path: &Path) -> Result<DocumentId, String> {
-        let video = read_video(path)?;
+        let window = read_video(path, 0, DECODE_WINDOW_FRAMES)?;
         let title = file_name(path);
         self.new_document_with(
-            video.width,
-            video.height,
+            window.width,
+            window.height,
             &title,
             crate::import::BlankBackground::Transparent,
         )
@@ -203,8 +248,8 @@ impl Editor {
         let blank = self
             .active()
             .and_then(|o| o.document.layers.root().first().copied());
-        let fps = fps_of(&video);
-        let layer = self.add_video_layer(path, &video, Some(fps), blank)?;
+        let fps = fps_of(&window);
+        let layer = self.add_video_layer(path, &window, Some(fps), blank)?;
         let open = self.active_mut().ok_or("No document is open")?;
         let _ = open.document.set_active_layer(Some(layer));
         open.history.clear();
@@ -214,24 +259,25 @@ impl Editor {
         self.set_status(format!(
             "Opened {} as a video layer ({} frames)",
             path.display(),
-            video.frames.len()
+            window.durations_ms.len()
         ));
         Ok(id)
     }
 
     /// The timeline's Add Media: `path`'s video as a new video layer in the
-    /// active document, starting at the playhead. One undo step.
+    /// active document, starting at the playhead. One undo step. Only the
+    /// first [`DECODE_WINDOW_FRAMES`] frames are decoded now.
     pub fn add_media_path(&mut self, path: &Path) -> Result<String, String> {
         if self.active().is_none() {
             return Err("No document is open".into());
         }
-        let video = read_video(path)?;
-        self.add_video_layer(path, &video, None, None)?;
+        let window = read_video(path, 0, DECODE_WINDOW_FRAMES)?;
+        self.add_video_layer(path, &window, None, None)?;
         let status = format!(
             "Added {} ({} frames, {} ms)",
             file_name(path),
-            video.frames.len(),
-            video.duration_ms()
+            window.durations_ms.len(),
+            media_ms(&window)
         );
         self.set_status(status.clone());
         Ok(status)
@@ -268,20 +314,21 @@ impl Editor {
         is_video_path(path).then(|| self.add_media_path(path))
     }
 
-    /// Add `video` as a video layer to the active document in one step. For
-    /// a document made for the video, `fps` sets the frame rate (and the
-    /// length becomes the video's) and `replace` is its blank layer, deleted.
+    /// Add `window` (the track's timing and its first decoded frames) as a
+    /// video layer to the active document in one step. For a document made
+    /// for the video, `fps` sets the frame rate (and the length becomes the
+    /// video's) and `replace` is its blank layer, deleted.
     fn add_video_layer(
         &mut self,
         path: &Path,
-        video: &DecodedVideo,
+        window: &VideoWindow,
         fps: Option<u32>,
         replace: Option<LayerId>,
     ) -> Result<LayerId, String> {
         let name = file_name(path);
         let command = {
             let open = self.active_mut().ok_or("No document is open")?;
-            let frames = frame_tiles(video, &mut open.tiles)?;
+            let frames = frame_tiles(window, &mut open.tiles)?;
             let layer = Layer::raster(&name);
             let id = layer.id;
             let create = Command::create_layer(layer);
@@ -297,7 +344,7 @@ impl Editor {
                 t.fps = fps;
             }
             let start = t.current_ms;
-            let media = u32::try_from(video.duration_ms()).unwrap_or(u32::MAX);
+            let media = u32::try_from(media_ms(window)).unwrap_or(u32::MAX);
             let end = start.saturating_add(media);
             // A document made for the video is as long as it; an existing
             // timeline only grows to hold it.
@@ -314,10 +361,10 @@ impl Editor {
                 layer: id,
                 name: name.clone(),
                 source: path.display().to_string(),
-                width: video.width,
-                height: video.height,
+                width: window.width,
+                height: window.height,
                 start_ms: start,
-                durations_ms: video.frames.iter().map(|f| f.duration_ms).collect(),
+                durations_ms: window.durations_ms.clone(),
                 frames,
             });
             let edit = timeline::set_timeline(&with_layer, "Add Media", t)
@@ -344,13 +391,67 @@ impl Editor {
         Ok(id)
     }
 
-    /// Read the frames again for every video layer of the active document
-    /// whose frames are not loaded (a document reopened from disk: the
-    /// frames' tiles are not saved), from each clip's source file. History
-    /// free, like the playhead. Answers how many clips were loaded; a clip
-    /// whose file is gone or changed size / length keeps its saved frame.
+    /// Decode, on demand, the frame each video layer of the active document
+    /// shows at `t_ms` when it is not decoded yet: the
+    /// [`DECODE_WINDOW_FRAMES`]-frame window holding it, read from the
+    /// clip's source through the decode worker, its tiles filed and kept.
+    /// History free, like the playhead. A source whose decode fails is not
+    /// read again this session (the layer keeps the frame it shows).
+    /// Answers how many frames were decoded.
+    pub fn load_video_frames_at(&mut self, t_ms: u32) -> usize {
+        let wanted: Vec<(usize, String, usize)> = match self.active() {
+            Some(open) => open
+                .document
+                .timeline
+                .videos
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| !c.source.is_empty())
+                .filter_map(|(i, c)| {
+                    let frame = c.frame_at(t_ms)?;
+                    (!c.frame_loaded(frame)).then(|| (i, c.source.clone(), window_start(frame)))
+                })
+                .collect(),
+            None => return 0,
+        };
+        let mut filed = 0;
+        for (index, source, first) in wanted {
+            if FAILED
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(&source)
+            {
+                continue;
+            }
+            let result =
+                read_video(Path::new(&source), first, DECODE_WINDOW_FRAMES).and_then(|window| {
+                    let open = self.active_mut().ok_or("No document is open")?;
+                    let clip = open
+                        .document
+                        .timeline
+                        .videos
+                        .get_mut(index)
+                        .ok_or("the video layer is gone")?;
+                    file_window(clip, &window, &mut open.tiles)
+                });
+            match result {
+                Ok(n) => filed += n,
+                Err(_) => FAILED
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(source),
+            }
+        }
+        filed
+    }
+
+    /// Read every frame again for each video layer of the active document
+    /// whose frames are not all decoded (a document reopened from disk: the
+    /// frames' tiles are not saved), from each clip's source file, whole.
+    /// History free, like the playhead. Answers how many clips were loaded;
+    /// a clip whose file is gone or changed size / length keeps its frames.
     pub fn reload_video_frames(&mut self) -> usize {
-        let wanted: Vec<(usize, String)> = match self.active() {
+        let wanted: Vec<(usize, String, usize)> = match self.active() {
             Some(open) => open
                 .document
                 .timeline
@@ -358,30 +459,24 @@ impl Editor {
                 .iter()
                 .enumerate()
                 .filter(|(_, c)| !c.frames_loaded() && !c.source.is_empty())
-                .map(|(i, c)| (i, c.source.clone()))
+                .map(|(i, c)| (i, c.source.clone(), c.durations_ms.len()))
                 .collect(),
             None => return 0,
         };
         let mut loaded = 0;
-        for (index, source) in wanted {
-            let Ok(video) = read_video(Path::new(&source)) else {
+        for (index, source, count) in wanted {
+            let Ok(window) = read_video(Path::new(&source), 0, count) else {
                 continue;
             };
             let Some(open) = self.active_mut() else {
                 break;
             };
-            let fits = open.document.timeline.videos.get(index).is_some_and(|c| {
-                (c.width, c.height) == (video.width, video.height)
-                    && c.durations_ms.len() == video.frames.len()
-            });
-            if !fits {
-                continue;
-            }
-            let Ok(frames) = frame_tiles(&video, &mut open.tiles) else {
+            let Some(clip) = open.document.timeline.videos.get_mut(index) else {
                 continue;
             };
-            open.document.timeline.videos[index].frames = frames;
-            loaded += 1;
+            if file_window(clip, &window, &mut open.tiles).is_ok() {
+                loaded += 1;
+            }
         }
         loaded
     }
@@ -398,7 +493,7 @@ pub(crate) mod tests {
     /// The in-process decoder, for these tests (the application installs
     /// the worker; `studio-desktop`'s tests drive that one).
     pub(crate) fn use_in_process_decoder() {
-        install_video_decoder(video::decode_in_this_process);
+        install_video_decoder(video::decode_window_in_this_process);
     }
 
     fn editor(dir: &Path) -> Editor {
@@ -644,12 +739,7 @@ pub(crate) mod tests {
 
     /// The real menu route: File > Open of an MP4 opens a video layer and
     /// Place Embedded (what the timeline's Add Media asks for) adds one.
-    /// Ignored until `Editor::open_resource_file` (editor_open_any.rs) calls
-    /// [`Editor::open_video_file`] and `Editor::place_path` (editor.rs)
-    /// calls [`Editor::place_video_file`]: both files are outside W16-M's
-    /// file list. Run with `--ignored` to see the route's state.
     #[test]
-    #[ignore = "W16-M: needs the two routing hooks outside this agent's files"]
     fn file_open_and_place_route_an_mp4_to_a_video_layer() {
         use_in_process_decoder();
         let dir = tempfile::tempdir().unwrap();
@@ -662,13 +752,100 @@ pub(crate) mod tests {
             Box::new(ScriptedDialogs::new().opening(&path).placing(&path)),
         );
         use ui::menu::MenuAction;
-        crate::menu_bridge::perform(MenuAction::Open, &mut ed).unwrap();
+        // File > Open is a shell action (the menu row maps to Action::Open).
+        ed.dispatch(crate::action::Action::Open).unwrap();
         ed.poll_imports();
         let doc = &ed.active().expect("File > Open opened the MP4").document;
         assert_eq!(doc.timeline.videos.len(), 1, "a video layer");
         assert_eq!(doc.timeline.videos[0].frames.len(), 3);
         crate::menu_bridge::perform(MenuAction::PlaceEmbedded, &mut ed).unwrap();
         assert_eq!(ed.active().unwrap().document.timeline.videos.len(), 2);
+    }
+
+    /// A `w x h` H.264 clip of `n` frames of `ms` each whose left half is a
+    /// different colour in every frame (any `n` up to 40).
+    fn write_long_clip(path: &Path, w: u32, h: u32, n: usize, ms: u32) -> Vec<Vec<u8>> {
+        let px: Vec<Vec<u8>> = (0..n)
+            .map(|i| {
+                let c = (i * 6) as u8;
+                let mut p = Vec::with_capacity((w * h * 4) as usize);
+                for _ in 0..h {
+                    for x in 0..w {
+                        if x < w / 2 {
+                            p.extend_from_slice(&[c, 255 - c, 80, 255]);
+                        } else {
+                            p.extend_from_slice(&[128, 128, 128, 255]);
+                        }
+                    }
+                }
+                p
+            })
+            .collect();
+        let frames: Vec<Mp4Frame<'_>> = px
+            .iter()
+            .map(|p| Mp4Frame {
+                rgba8: p,
+                duration_ms: ms,
+            })
+            .collect();
+        std::fs::write(path, mp4::encode(w, h, &frames, 95).unwrap()).unwrap();
+        px
+    }
+
+    /// Frames decode on demand: opening decodes the first window only; a
+    /// playhead move to a frame past it decodes the window holding it, and
+    /// the canvas and the render at that time show that frame.
+    #[test]
+    fn frames_decode_on_demand_for_the_timeline_time() {
+        use_in_process_decoder();
+        let dir = tempfile::tempdir().unwrap();
+        let (w, h) = (32, 32);
+        let path = dir.path().join("long.mp4");
+        let px = write_long_clip(&path, w, h, 40, 50);
+        let mut ed = editor(dir.path());
+        ed.open_video_path(&path).unwrap();
+        let clip = ed.active().unwrap().document.timeline.videos[0].clone();
+        assert_eq!(clip.durations_ms.len(), 40, "every frame's timing");
+        assert_eq!(clip.loaded_frames(), DECODE_WINDOW_FRAMES, "one window");
+        assert!(!clip.frame_loaded(35));
+        let t = 35 * 50 + 10;
+        assert!(ed.seek_timeline(t));
+        let open = ed.active().unwrap();
+        let clip = &open.document.timeline.videos[0];
+        assert!(clip.frame_loaded(35), "the seek decoded frame 35");
+        assert_eq!(clip.loaded_frames(), 40, "the window 32..40");
+        assert_eq!(
+            open.document.layer_tiles(clip.layer),
+            Some(&clip.frames[35]),
+            "the canvas shows frame 35"
+        );
+        let rgba = crate::timeline::render_at(&open.document, &open.tiles, t).unwrap();
+        let (got, want) = (pixel(&rgba, w, 6, 16), pixel(&px[35], w, 6, 16));
+        assert!(close(got, want, 8), "{got:?} vs frame 35 {want:?}");
+    }
+
+    /// An export renders frames that were never decoded for the playhead:
+    /// it decodes them into its own copy of the document.
+    #[test]
+    fn an_export_decodes_the_frames_it_renders() {
+        use_in_process_decoder();
+        let dir = tempfile::tempdir().unwrap();
+        let (w, h) = (32, 32);
+        let path = dir.path().join("long.mp4");
+        let px = write_long_clip(&path, w, h, 40, 50);
+        let mut ed = editor(dir.path());
+        ed.open_video_path(&path).unwrap();
+        let open = ed.active().unwrap();
+        assert!(!open.document.timeline.videos[0].frame_loaded(36));
+        let frames = crate::timeline::export_frames(&open.document, &open.tiles).unwrap();
+        assert_eq!(frames.len(), 40, "2 s at 20 fps");
+        let (got, want) = (pixel(&frames[36].rgba8, w, 6, 16), pixel(&px[36], w, 6, 16));
+        assert!(close(got, want, 8), "{got:?} vs frame 36 {want:?}");
+        assert_eq!(
+            ed.active().unwrap().document.timeline.videos[0].loaded_frames(),
+            DECODE_WINDOW_FRAMES,
+            "the open document is left as it was"
+        );
     }
 
     /// A reopened document (frames not saved) reads its frames again from

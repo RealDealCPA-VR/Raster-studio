@@ -317,6 +317,28 @@ fn styles_export_as_asl_reads_back_through_the_asl_importer() {
     assert_eq!(overlay.color, [1.0, 0.0, 0.0, 1.0]);
 }
 
+/// Swatches > Open .ACO… runs File > Open, and the swatches of the file it
+/// picks join the Swatches panel.
+#[test]
+fn swatches_open_aco_adds_the_files_swatches_to_the_panel() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("brand.aco");
+    let written = vec![
+        ("Brand Teal".to_string(), [0.0, 0.5019608, 0.5019608, 1.0]),
+        ("Brand Sand".to_string(), [0.8, 0.7019608, 0.5019608, 1.0]),
+    ];
+    std::fs::write(&file, asset_store::resources::aco::write(&written)).unwrap();
+    let mut ed = editor_with(dir.path(), ScriptedDialogs::new().opening(&file));
+    let mut win = Window::new(PanelId::Swatches);
+    let before = win.chrome.workspace().swatches.len();
+    let _ = win.menu(&mut ed, PanelId::Swatches, "open");
+    win.settle(&mut ed);
+    let swatches = win.chrome.workspace().swatches.swatches().to_vec();
+    assert_eq!(swatches.len(), before + 2, "status {:?}", ed.status());
+    let names: Vec<&str> = swatches[before..].iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["Brand Teal", "Brand Sand"]);
+}
+
 /// Styles > Name Change and Delete act on the style last clicked, in the
 /// preset store (and so the preferences file).
 #[test]
