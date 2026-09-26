@@ -45,13 +45,16 @@ wired, with the gaps listed below by name.** Nothing is claimed here unless it
 is implemented, tested and reachable from the UI. Documentation is a claim,
 and claims get checked against the code.
 
-Thirteen waves have landed on `main` since the last spec was closed: six fix
+Fifteen waves have landed on `main` since the last spec was closed: six fix
 waves (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727` + `7bb295a`, `b477a09`,
-`0e4a6fd`), then seven Photopea-parity waves (wave 7 `8b6c399`, wave 8
+`0e4a6fd`), then eight Photopea-parity waves (wave 7 `8b6c399`, wave 8
 `f9329d0`, wave 9 `9a61faa`, wave 10 `05ec9b1`, wave 11 `fe978d3`, wave 13
-`06abd74`, wave 13X `25b66e0`; there is no wave 12). Wave 14, this
-documentation pass and the File ▸ Export… menu row, is not committed yet.
-The labels W7-A … W13X-9 below name the wave that brought a feature. The
+`06abd74`, wave 13X `25b66e0`, wave 15 `44afe56`; there is no wave 12) and
+wave 14's documentation pass (`2392753`). Wave 16 (W16-A … W16-N, the
+final parity audit's items) is on the branch `wip/wave16-partial`
+(`409728a` … `1c34b9c`), reviewed pair by pair but not merged into `main`,
+and CI does not run on that branch; this README describes that branch.
+The labels W7-A … W16-N below name the wave that brought a feature. The
 [CHANGELOG](CHANGELOG.md) says what each wave changed. The row-by-row state lives
 in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
 [`docs/REMAINING.md`](raster-studio/docs/REMAINING.md) is the historical
@@ -111,7 +114,9 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   whether the pages open as artboards in one document or as separate
   documents; several such files opened at once (a drop, the command
   line) ask in turn; File > Revert reads back the same pages at the same
-  resolution. A one-page file opens straight away (up to 100 pages are
+  resolution. A one-page `.ai` opens straight away, and since W16-K a
+  one-page `.pdf` that does not read as layers asks through the same
+  dialog (up to 100 pages are
   listed; encrypted PDFs are refused by name). WMF and EMF draw their common GDI records
   (pens, brushes, shapes, polygons, Béziers, EMF paths, world transforms,
   text, DIB bitmaps) through `resvg`; arcs, clipping, dash styles and EMF+
@@ -327,8 +332,9 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   and free-transforms the copy; Shift+[ / Shift+] step the brush hardness by
   25%; the number keys set the painting tool's opacity (1 = 10% … 0 = 100%,
   two quick digits an exact value).
-- **Paint** with the 68 tools of a grouped, Photopea-ordered palette (69
-  counting Free Transform, which is `Ctrl+T` and a menu item, not a button),
+- **Paint** with the 69 tools of a grouped, Photopea-ordered palette (70
+  `ToolId`s counting Free Transform, which is `Ctrl+T` and a menu item, not
+  a button; `tools::ToolId::ALL`),
   including brush, pencil (Auto Erase), eraser, background and magic eraser
   (W13-H: Brush, Pencil and Eraser Symmetry, mirroring every dab Vertical,
   Horizontal, Dual Axis, Diagonal, Radial or Mandala about the canvas
@@ -554,7 +560,8 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   layer, one undo step) and Layer ▸ Matting ▸ Remove Black / White Matte
   (partly transparent pixels un-mixed from a black or white matte, one undo
   step); the layer row's right-click menu (W16-D: the right-click selects
-  the row first) has Photopea's rows in its order, with its separators:
+  the row first) follows Photopea's row order and separators, with the
+  gaps named below:
   Blending Options, Select Pixels | Duplicate Layer (a copy at once, no
   dialog), Duplicate Into… (the dialog with the destination document),
   Delete | Convert to Smart Object, on a smart object New Smart Obj. via
@@ -1047,21 +1054,20 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   `render_at`, and so MP4 export), and the layer's bar trims it (the
   middle stays put on the timeline). The frames are not saved in the
   `.rstudio` package: a reopened document decodes them again from the
-  source file as the playhead reaches them. **Not reachable yet:** File ▸ Open, Open Recent and drag-and-drop
-  still refuse a video by name, and the Animation panel's new Add Media
-  button asks for File ▸ Place Embedded, whose route still refuses one:
-  the routing branches are written (`Editor::open_video_file` for
-  `Editor::open_resource_file`'s table in `editor_open_any.rs`, which every
-  open route asks first, and `Editor::place_video_file` for the top of
-  `Editor::place_path` in `editor.rs`) but those two call sites are
-  outside this change's files, so nothing calls them yet (the route test
-  `file_open_and_place_route_an_mp4_to_a_video_layer` is `#[ignore]`d
-  until they do). No audio: an audio track is ignored (no
+  source file as the playhead reaches them. The routes: every open route
+  asks `Editor::open_video_file` first (`Editor::open_resource_file`,
+  `editor_open_any.rs`), and `Editor::place_path` asks
+  `Editor::place_video_file` first (`editor.rs`), which the Animation
+  panel's Add Media button reaches through File ▸ Place Embedded; the
+  Open and Place pickers offer `.mp4`, `.m4v` and `.mov`
+  (`dialogs::VIDEO_EXTENSIONS`); the route test
+  `video_layers::tests::file_open_and_place_route_an_mp4_to_a_video_layer`
+  opens one through `Action::Open` and places one. No audio: an audio track is ignored (no
   permissively licensed pure-Rust AAC decoder; symphonia is MPL-2.0) and
   MP4 export writes none. HEVC, VP9 and other codecs are refused by name.
   The Animation panel's New Video Group button (Photopea's timeline menu
-  item and its words, `ui.animation.new_video_group`; English only in the
-  language tables so far) puts the selected layer in a new "Video Group N" group where
+  item and its words, `ui.animation.new_video_group`, translated in all
+  twelve language tables) puts the selected layer in a new "Video Group N" group where
   the layer was, recorded in `DocumentTimeline::video_groups`, its bar
   spanning its layers' line, one undo step; the panel lists each video
   group with its layer count and line length, and under it the group's
@@ -1216,7 +1222,7 @@ matrix, each with its reason there:
 | --- | --- |
 | ICC-accurate CMYK, spot colours, Lab files | Since W7-D: Image ▸ Mode ▸ Lab / CMYK / Indexed convert (one undo step each; CMYK on a documented naive ink model, not an ICC press profile; Indexed through its own dialog); File ▸ Export… and Export As write a CMYK document as CMYK JPEG/TIFF and an Indexed one as a palette PNG (GIF keeps its colours) — since W8-B the palette PNG always writes: an image past 256 RGBA colours (a soft stroke painted after the conversion) is re-quantised with 1-bit alpha, as Photoshop's Indexed stores it; Export As says when a format writes the document as RGB instead (always, for Lab), and since W8-B File ▸ Export… says so in the status line; Info adds a Lab or CMYK row for a document in that mode, and since W8-B the Color panel switches to Lab / CMYK / Gray (K%) notation when the document is in that mode (the user can still pick another); since W8-B Image ▸ Adjustments ▸ Levels and Curves on a Lab document list Lightness / a / b (no composite row; they open on Lightness, so a first move keeps greys neutral) and preview and apply on those channels, and since W10-H so does a Levels/Curves *adjustment layer* in a Lab document; since W10-H Indexed Color flattens a layered document (one undo step, and the status line says so), Image ▸ Mode ▸ Bitmap… (threshold, pattern / diffusion dither, halftone screen) and Duotone… (1-4 inks with curves, baked into the pixels) convert from Grayscale, and Image ▸ Apply Image… / Calculations… exist; View ▸ Proof Colors and Gamut Warning are enabled and change the canvas. Still missing: a press profile (since W13X-4 a document can carry spot channels, composited as ink and written to `.psd` as spot channels), a Lab file other than `.psd` (since W16-B a Lab, CMYK, Indexed, Duotone or Bitmap `.psd` opens in its own mode and Save as PSD writes Lab, CMYK, Indexed and Grayscale back in their mode; the flat export routes still write Lab as RGB and say so), and re-editable duotone inks (a Duotone `.psd` opens with its inks baked in and saves as RGB). |
 | Proprietary camera RAW files; EPS text in its own fonts, smooth shading and patterns; Paint.NET layers; Sketch / XD / Figma symbols, gradients and effects | W13-C: DNG opens, but CR2 / CR3 / NEF / ARW / RAF / ORF / RW2 are refused by name (no permissively licensed reader exists; convert to DNG); W13-D: PDF / AI pages open (see Open above), W15-E: EPS artwork opens through a bounded PostScript interpreter, but its text is set in a fallback system font with estimated spacing (embedded Type 1 / Type 42 / CFF outlines are not rasterised) and smooth shading (`shfill`), patterns, `charpath` and masked images (ImageType 3 / 4) are named in the status line, not drawn; W13X-7: Paint.NET files open as layers when this build's reader can follow their object graph (else their thumbnail, saying why). W13X-8: Sketch / XD / Figma open as layers (see Open above), but symbol / component instances are not expanded, gradient and image fills (other than a bitmap), effects, non-union boolean operations, per-run text styles, blend modes and masks are reported and not kept, only the first page opens, and a Figma `VECTOR` that stores no outline is drawn as its bounding box. |
-| Video layers, audio, H.264 | W13-L added the video timeline (per-layer in/out bars, opacity, position, scale and rotation keyframes with per-key Linear / Ease In / Ease Out / Hold interpolation (W13X-9), a playhead whose scrub and playback move the canvas live with no history step, saved in `.rstudio`) and MP4 export (W15-B: H.264 by default through OpenH264 built from source, AV1 as the Codec option; File ▸ Export As ▸ MP4), see Video timeline and MP4 export above. W16-M: video layers from an H.264 / AV1 MP4, decoded in the decode worker (`Editor::open_video_path`, `Editor::add_media_path`; the frame at the playhead shows, exports and trims). Still missing: the File ▸ Open / Place / drop call sites (in `editor_open_any.rs` and `editor.rs`, outside W16-M's files) for the written branches `Editor::open_video_file` / `place_video_file`, so a video picked there is still refused by name, audio (no permissive pure-Rust AAC decoder), the Cut operation. Frames decode on demand, 32 at a time (the window holding the playhead's frame; an export decodes what it renders). W16-M New Video Group: the Animation panel's button groups the selected layer as a video group (`editor_core::timeline::new_video_group`, one undo step), and the panel draws the group's layers as bars on one line under it. |
+| Video layers, audio, H.264 | W13-L added the video timeline (per-layer in/out bars, opacity, position, scale and rotation keyframes with per-key Linear / Ease In / Ease Out / Hold interpolation (W13X-9), a playhead whose scrub and playback move the canvas live with no history step, saved in `.rstudio`) and MP4 export (W15-B: H.264 by default through OpenH264 built from source, AV1 as the Codec option; File ▸ Export As ▸ MP4), see Video timeline and MP4 export above. W16-M: video layers from an H.264 / AV1 MP4, decoded in the decode worker and reached from File ▸ Open, drops, Open Recent, the command line, File ▸ Place and the timeline's Add Media (`Editor::open_video_file`, `Editor::place_video_file`; the frame at the playhead shows, exports and trims). Still missing: audio (no permissive pure-Rust AAC decoder), the Cut operation, and saving the decoded frames (a reopened document decodes them again from the source file). Frames decode on demand, 32 at a time (the window holding the playhead's frame; an export decodes what it renders). W16-M New Video Group: the Animation panel's button groups the selected layer as a video group (`editor_core::timeline::new_video_group`, one undo step), and the panel draws the group's layers as bars on one line under it. |
 | Collaboration, cloud storage, sharing online, mobile | Non-goals: this is a local-first desktop application whose own code makes no network calls, so nothing that needs a server is offered. |
 | Licensing and auto-update | Dropped from the workspace: neither crate exists. Entitlement checks and update feeds belong to a shipped product's release engineering, not this build. |
 | Perfect PSD round-tripping | The target is a correct reopen in Photoshop and Photopea, not byte fidelity. |
@@ -1537,7 +1543,7 @@ the workflow.
 ```bash
 cd raster-studio
 cargo check --workspace --all-targets   # type-check everything
-cargo test  --workspace                 # 5,946 #[test] functions
+cargo test  --workspace                 # 6,323 #[test] functions
 cargo run   -p studio-desktop           # launch
 ```
 

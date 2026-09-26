@@ -11,8 +11,9 @@ names what changed and, where it matters, how it was verified.
 ## [Unreleased]
 
 Six fix waves (0-5), each from a fresh adversarial audit of the commit
-before it, then the Photopea-parity waves 7-11, 13 and 13X, each from an
-audit of Photopea's features against this build. Every entry below is taken
+before it, then the Photopea-parity waves 7-11, 13, 13X, 15 and 16, each
+from an audit of Photopea's features against this build, and the docs
+pass of wave 14. Every entry below is taken
 from its commit message and checked against the code; where a wave left
 something open, its "Known gaps" says so, and the parity matrix
 (`raster-studio/docs/parity-matrix.md`) carries the row-by-row detail. The
@@ -29,9 +30,98 @@ green (`8b6c399` 35931490726, `f9329d0` 35939564122, `9a61faa` 35957810847,
 below ended that: `c52c407` (run 36051745607) was still red on macOS, as was
 the docs commit `6e0287d` (run 36052957676), and `22e31a7` (run
 36054206009) is green. Wave 13 (`06abd74`, run 36084801672) is
-green. Wave 13X (`25b66e0`, run 36102799475) is green (the release job is skipped on every run: no tag).
+green. Wave 13X (`25b66e0`, run 36102799475), wave 14 (`2392753`, run
+36109214171) and wave 15 (`44afe56`, run 36123487476) are green (the
+release job is skipped on every run: no tag). Wave 16 is on the branch
+`wip/wave16-partial` (`409728a` … `1c34b9c`), where CI does not run.
 
-### Wave 16 (uncommitted)
+### Wave 16 — the final parity audit's items (branch `wip/wave16-partial`, not on `main`)
+
+Fourteen doer/reviewer pairs, W16-A … W16-N, one per group of findings of
+a final audit of Photopea's features against this build. The first run was
+stopped by the weekly usage limit and committed unreviewed as `409728a`
+(seven pairs finished, seven cut off mid-work); `14883e2`, `75da72f` and
+`7d2b206` undid the reviewers' abandoned mutations and fixed the lint,
+gate and test failures; the resume, `1c34b9c`, finished the seven cut-off
+pairs and reviewed all fourteen: 13 passed, and the one failure (W16-M, a
+reachability gap: video layers had no File ▸ Open / Place route) was
+closed by the orchestrator (`Editor::open_resource_file` asks
+`Editor::open_video_file` first, `Editor::place_path` asks
+`Editor::place_video_file` first). `1c34b9c`'s message records 6312 tests
+passing with clippy `-D warnings`, rustfmt and `cargo audit` clean on the
+local machine; CI has not run on this branch (the workflow runs on pushes
+to `main` and on pull requests). The bullets below are one per pair, with
+each pair's stated gaps.
+
+- W16-A: **selection tools follow Photopea's gestures.** A drag inside the
+  selection with any selection tool (New mode, no modifier) moves the
+  outline only, live, as one undo step (Shift: 45 degrees; Escape puts it
+  back). The polygonal and magnetic lassos close on Enter, a double-click
+  or a click on the start, Backspace / Delete remove the last point; the
+  magnetic lasso is click-then-move, laying anchors pulled onto the
+  strongest edge within Width; Alt while dragging the lasso draws straight
+  segments. Still missing: a Frequency control in the options bar (the tool
+  answers `frequency`, the registry does not offer it), a timed
+  double-click (a second press on the same spot with no travel counts), and
+  a live preview of the snapped path between magnetic anchors.
+
+- W16-B: **every Photoshop colour mode opens.** CMYK, Lab (8/16-bit), Indexed, Duotone, 1-bit Bitmap and Multichannel `.psd` / `.psb` files open instead of being refused (`psd::colour_modes`): each layer's and the composite's samples are decoded with this build's own CMYK ink model and CIELAB, and the document opens in the matching mode (Multichannel, which has no document mode, as RGB or Grayscale, a note counting the further channels left out); Save as PSD writes CMYK, Lab, Indexed (flat, with a palette and transparent index) and Grayscale documents in their own mode, so a CMYK or Lab file comes back within one code for separations this ink model makes, a 16-bit Greyscale document is written back at 16 bits (its luma is no longer taken through 8 bits), and an Indexed composite's channel past the index opens as its transparency. Not done: Bitmap saves as Grayscale and Duotone as RGB (no 1-bit or duotone writer), a 16-bit CMYK / Lab file is edited at 8-bit precision, a rich-black style ink split is re-separated, and the duotone ink-record layout is not yet checked against a Photoshop-written file.
+
+- W16-C: **options-bar units, the bucket's Fill, the Commit check.** The options bar shows and accepts Photopea's numbers (Tolerance 0-255, Opacity / Flow / Hardness / Exposure / Spacing and the other 0-1 fractions in %, the Blur / Sharpen Strength in % of the tool's top, sizes and the Parametric Shape's Corner Radius / Width in px, the brush tip angle in degrees; `tools::registry::float_display`) while each tool keeps its stored value, so typing 32 into Tolerance stores 32/255 instead of clamping to 1 and selecting everything; the Paint Bucket gains Fill: Foreground / Pattern (the active pattern); a Commit check beside the tool name confirms a pending Free Transform, crop box or pen path as Enter does. Not done: the Cancel cross (no intent reaches the shell's Escape route yet), the Commit check for Type, Perspective Crop and Puppet Warp sessions (not published to the workspace), and a pattern picker on the bar.
+
+- W16-D: **the Layers panel behaves as Photopea's.** A double-click on a
+  row opens Layer Style (a text row still enters the text), on a smart
+  object's thumbnail opens its contents and on a fill or adjustment
+  layer's thumbnail its own dialog; a styled layer lists its effects under
+  its row, each with an eye (one undo step each way, the parameters kept),
+  a double-click opening Layer Style on that effect's page (Layer ▸ Layer
+  Style ▸ <effect> now opens on its page too) and an fx arrow folding the
+  list; effect rows, the "Effects" row and layer rows dragged onto the
+  trash are deleted; Alt-click on an eye solos the layer; the row menu follows
+  Photopea's row order and separators (Duplicate Layer at once,
+  Duplicate Into…, Rasterize Layer Style, Convert to Shape, the smart-object
+  rows, a rule of its own under the clipping row and one after Clear Layer
+  Style, where Photopea's Layer Style submenu ends); the panel menu has
+  Photopea's toggles Filter, Blending Options and Lock (each hides its
+  header row), Long-tap as a right click (600 ms), Add "copy" to copied
+  layers, − / + Thumbnail Size down to none and Thumbnails by Layer /
+  Document, saved in the preferences (the filter row stays shown by
+  default, unlike Photopea's, because the options arrow lives in it). Still missing: an effect hidden by its eye is kept for the
+  session only (saved absent), four thumbnail sizes rather than
+  Photopea's pixel steps, the by-layer thumbnail is a crop of the
+  document thumbnail, Photopea's submenus are flat rows (no Stack Mode,
+  Turn into JPG), the merge row reads Merge Down over one layer where
+  Photopea's reads Merge Layers, and the Duplicate Into… dialog ignores the
+  copy option.
+
+- W16-E: **Photopea's panel menus.** Brushes and Styles, in the order of
+  Photopea's gallery menu: Define New (left off Styles, as Photopea's
+  menu does), Tiles/List, Open and Export as .ABR / .ASL, Name Change,
+  Delete. Swatches, in the order of Photopea's folder list menu: Open
+  .ACO, Export as .ACO, Name Change, Delete, Tiles/List, Define New, New
+  Folder. New `aco::write` and `abr::write_abr` writers; the exports
+  read back through File > Open. Photopea's bundled library files are
+  not listed. Swatches folders, as in Photopea's Swatches list: New
+  Folder (names it "New folder" and opens Name Change), folder headers that open and close, swatches dragged onto a
+  folder go in and dragged onto a loose swatch come out, and Name Change,
+  Delete (with its swatches) and Export act on a clicked folder. Folders
+  do not nest, sit after the loose swatches and last for the session (the
+  saved palette has no folders); Brushes and Styles do not draw
+  Photopea's "Group/Name" headers.
+  Channels: Load, New and Delete in the
+  footer and the panel menu act on the current channel, Ctrl+click loads
+  any channel (the composite as luminosity), spot rows get options and
+  delete. History: Clear History, New Snapshot. Mask popups: Delete /
+  Apply, and a vector-mask menu. Layer Comps: per-comp Visibility /
+  Position / Appearance flags that Apply honours, and a Last Document
+  State row. Notes: Author. Navigator: Angle. Still missing: brush names
+  and dynamics in an exported `.abr`, blending options and pattern pixels
+  in an exported `.asl`, a spot channel's eye (a spot channel has no
+  visibility of its own in `editor_core::spot::SpotChannel`, and the
+  compositor always lays its ink), Photopea's exact Brushes/Styles
+  labels "Load .ABR" / "Load .ASL" and "Thumbnails / List" (those rows
+  say "Open .ABR…" / "Open .ASL…" and "Tiles/List"), and the Open and
+  Export rows keep a trailing "…" Photopea does not show.
 
 - W16-F: **transforms and paths follow Photopea's gestures.** Free
   Transform reads Ctrl: Ctrl + a side skews, Ctrl + a corner distorts,
@@ -53,27 +143,7 @@ green. Wave 13X (`25b66e0`, run 36102799475) is green (the release job is skippe
   per-component boolean operation is stored (a shape layer keeps one SVG
   path and one fill rule, so Combine still merges the whole path).
 
-- **Twelve interface languages and Glass Menus** (W16-N). Window ▸ Language
-  (Photopea's More ▸ Language) switches the interface live between English,
-  Deutsch, Español, Français, Italiano, Polski, Português (Brasil), Türkçe,
-  Русский, Українська, 简体中文, 日本語 and 한국어, stored in preferences. Each
-  language is a table in `crates/ui/src/i18n/` keyed by the English source;
-  `every_language_table_translates_every_catalogue_string` holds all twelve to
-  every catalogue string, every menu title and row, the panel tabs, blend
-  modes, Adjustments buttons, Info rows, Character choices, the Properties
-  heading, the Color panel's Gray, brush preset and history-step names. CJK draws with a bundled Noto Sans CJK SC subset (OFL).
-  Window ▸ Appearance ▸ Glass Menus (Photopea's More ▸ Themes ▸ Glass Menus)
-  draws menus on a translucent fill, without blur. `app-shell/tests/w16n_language.rs`
-  and `w16n_panels.rs` read the drawn menu bar and panels back in the chosen
-  language. Not done: strings outside the catalogue (unrouted dialog text,
-  `format!` status messages, disabled-row reasons, `src/canvas`, the tool
-  options bar, the Properties panel's Layer / Mask switch and Transform
-  header, the Navigator's Fit, a blank document's first `Layer 1`,
-  Layer ▸ New ▸ Group's `Group`) stay English; Glass Menus is not in the Preferences dialog; and
-  Photopea's other languages are not offered.
-
-- **Live shapes, Photopea's Parametric Shape, the Vector Gradient tool**
-  (W16-G). A drawn rectangle, rounded rectangle, ellipse, star (Star tool)
+- W16-G: **Live shapes, Photopea's Parametric Shape, the Vector Gradient tool.** A drawn rectangle, rounded rectangle, ellipse, star (Star tool)
   or line (with its arrowheads, `LiveShape::Line::arrows`, append-only)
   keeps its parameters (`ShapeLayer::live`, append-only);
   `tools::shape::live_shape_of` counts it live only while they still
@@ -112,91 +182,7 @@ green. Wave 13X (`25b66e0`, run 36102799475) is green (the release job is skippe
   Photopea's Sides default of 5 (6 kept: an existing wired-controls test
   pins it).
 
-- **More formats open** (W16-L). JPEG 2000 (`hayro-jpeg2000` 0.3.1, pure
-  Rust), Valve VTF, FITS (auto-stretched to 16 bits), DICOM (uncompressed /
-  RLE, windowed) and ASCII DXF (as vector layers: a group per DXF layer) open as
-  documents; Clip Studio `.clip`, zipped Pixelmator Pro `.pxd`, CorelDRAW
-  `.cdr` and InDesign `.indd` open as their embedded previews (layers not
-  read); Affinity and SAI files are refused by name. `raster` reads a
-  Krita file's layer tree and RGBA paint layers (`kra::layers`), and File >
-  Open opens a `.kra` as those layers and groups (name, opacity,
-  visibility, blend); File > Revert of a `.kra` / `.dxf` is still flat. `.acv`
-  becomes a Curves layer, `.3dl` / `.look` a Color Lookup layer, and
-  `.woff` / `.woff2` fonts load for text (`wuff`).
-
-- **Video layers from an MP4, decoded in the decode worker** (W16-M).
-  The editor API `Editor::open_video_path` and `Editor::add_media_path`
-  (reached from File ▸ Open, drops, Open Recent, the command line, File ▸ Place and the timeline's Add Media) decode an H.264 (OpenH264's decoder) or 8-bit AV1 MP4 in the
-  worker process (`--decode-worker video`; at most 1000 frames / 1 GiB,
-  checked before decoding and on the answer's header), file every frame's
-  tiles, and add a raster layer plus an `editor_core::timeline::VideoClip`
-  in one undo step; the layer shows the frame at the playhead, exports in
-  MP4, and its bar trims it. The Animation panel's Timeline mode has an
-  Add Media button, a New Video Group button (Photopea's words; the
-  selected layer into a new "Video Group N", one undo step; `timeline::new_video_group`) and one row
-  per video layer and video group, each group's layers drawn as bars on
-  one line under it. Frames decode on demand, 32 at a time (the window
-  holding the playhead's frame, `Editor::load_video_frames_at`; an export
-  decodes what it renders), through the worker's `video-window` kind. Not yet: the frames
-  are not saved (re-read from the source on reopen), and no audio (no permissive pure-Rust AAC decoder; export stays silent).
-  Verified by `mp4::video::tests`, `timeline::video::tests`,
-  `app_shell::timeline::video_layers::tests` and `studio-desktop`'s
-  `w16m_video_worker` (the real binary as the worker; malformed files are
-  errors and the editor stays).
-- W16-E: **Photopea's panel menus.** Brushes and Styles, in the order of
-  Photopea's gallery menu: Define New (left off Styles, as Photopea's
-  menu does), Tiles/List, Open and Export as .ABR / .ASL, Name Change,
-  Delete. Swatches, in the order of Photopea's folder list menu: Open
-  .ACO, Export as .ACO, Name Change, Delete, Tiles/List, Define New, New
-  Folder. New `aco::write` and `abr::write_abr` writers; the exports
-  read back through File > Open. Photopea's bundled library files are
-  not listed. Swatches folders, as in Photopea's Swatches list: New
-  Folder (names it "New folder" and opens Name Change), folder headers that open and close, swatches dragged onto a
-  folder go in and dragged onto a loose swatch come out, and Name Change,
-  Delete (with its swatches) and Export act on a clicked folder. Folders
-  do not nest, sit after the loose swatches and last for the session (the
-  saved palette has no folders); Brushes and Styles do not draw
-  Photopea's "Group/Name" headers.
-  Channels: Load, New and Delete in the
-  footer and the panel menu act on the current channel, Ctrl+click loads
-  any channel (the composite as luminosity), spot rows get options and
-  delete. History: Clear History, New Snapshot. Mask popups: Delete /
-  Apply, and a vector-mask menu. Layer Comps: per-comp Visibility /
-  Position / Appearance flags that Apply honours, and a Last Document
-  State row. Notes: Author. Navigator: Angle. Still missing: brush names
-  and dynamics in an exported `.abr`, blending options and pattern pixels
-  in an exported `.asl`, a spot channel's eye (a spot channel has no
-  visibility of its own in `editor_core::spot::SpotChannel`, and the
-  compositor always lays its ink), Photopea's exact Brushes/Styles
-  labels "Load .ABR" / "Load .ASL" and "Thumbnails / List" (those rows
-  say "Open .ABR…" / "Open .ASL…" and "Tiles/List"), and the Open and
-  Export rows keep a trailing "…" Photopea does not show.
-- W16-D: **the Layers panel behaves as Photopea's.** A double-click on a
-  row opens Layer Style (a text row still enters the text), on a smart
-  object's thumbnail opens its contents and on a fill or adjustment
-  layer's thumbnail its own dialog; a styled layer lists its effects under
-  its row, each with an eye (one undo step each way, the parameters kept),
-  a double-click opening Layer Style on that effect's page (Layer ▸ Layer
-  Style ▸ <effect> now opens on its page too) and an fx arrow folding the
-  list; effect rows, the "Effects" row and layer rows dragged onto the
-  trash are deleted; Alt-click on an eye solos the layer; the row menu has
-  Photopea's rows, order and separators (Duplicate Layer at once,
-  Duplicate Into…, Rasterize Layer Style, Convert to Shape, the smart-object
-  rows, a rule of its own under the clipping row and one after Clear Layer
-  Style, where Photopea's Layer Style submenu ends); the panel menu has
-  Photopea's toggles Filter, Blending Options and Lock (each hides its
-  header row), Long-tap as a right click (600 ms), Add "copy" to copied
-  layers, − / + Thumbnail Size down to none and Thumbnails by Layer /
-  Document, saved in the preferences (the filter row stays shown by
-  default, unlike Photopea's, because the options arrow lives in it). Still missing: an effect hidden by its eye is kept for the
-  session only (saved absent), four thumbnail sizes rather than
-  Photopea's pixel steps, the by-layer thumbnail is a crop of the
-  document thumbnail, Photopea's submenus are flat rows (no Stack Mode,
-  Turn into JPG), the merge row reads Merge Down over one layer where
-  Photopea's reads Merge Layers, and the Duplicate Into… dialog ignores the
-  copy option.
-
-- W16-B: CMYK, Lab (8/16-bit), Indexed, Duotone, 1-bit Bitmap and Multichannel `.psd` / `.psb` files open instead of being refused (`psd::colour_modes`): each layer's and the composite's samples are decoded with this build's own CMYK ink model and CIELAB, and the document opens in the matching mode (Multichannel, which has no document mode, as RGB or Grayscale with its extra channels named); Save as PSD writes CMYK, Lab, Indexed (flat, with a palette and transparent index) and Grayscale documents in their own mode, so a CMYK or Lab file comes back within one code for separations this ink model makes, a 16-bit Greyscale document is written back at 16 bits (its luma is no longer taken through 8 bits), and an Indexed composite's channel past the index opens as its transparency. Not done: Bitmap saves as Grayscale and Duotone as RGB (no 1-bit or duotone writer), a 16-bit CMYK / Lab file is edited at 8-bit precision, a rich-black style ink split is re-separated, and the duotone ink-record layout is not yet checked against a Photoshop-written file.
+- W16-H: **Actions play and export more of Photoshop's steps.** An imported `.atn` now plays Levels, Curves, Hue/Saturation, Color Balance, Black & White, Vibrance, Exposure, Threshold, Posterize, Gradient Map, Photo Filter, Channel Mixer, Crop, Trim, Mode / bit depth, Free Transform and Move of the layer or selection, Duplicate, Delete, Merge Down / Visible, Flatten, Group, layer name / opacity / blend / visibility, Arrange, Select layer, Color Range, Feather / Expand / Contract / Border / Smooth, Stroke, Copy / Paste / Cut, Layer via Copy / Cut, Add Noise, Motion Blur, High Pass, Smart Sharpen, Save As / Export (the export dialog), and Layer ▸ New Adjustment Layer / an edit of the active adjustment layer (`make` / `set` of an `adjustmentLayer`, holding any of those adjustments or Brightness/Contrast or Invert) with their Photoshop parameters, each through its menu or dialog route (`atn_more`, `atn_play_more`); Export writes every recorded command that carries its parameters as its Photoshop descriptor (`atn_record`), an adjustment layer made or edited included; a new text / shape / fill / smart-object layer is no longer written as Make Layer (it replayed as an empty layer) but left out and counted. Not done: a brush stroke or a filter / adjustment applied through its dialog records pixels, not settings, so it is left out of an export (counted), as are a mask selection, a layer restack and a 90° canvas turn; single-range Hue/Saturation, preset Levels / Curves / Color Range, an angled crop, a Selective Color / Color Lookup adjustment layer and a fill (content) layer are skipped on play with the reason.
 
 - W16-I: **SVG, EPS, one-page PDF-compatible `.ai` files and one-page
   `.pdf` files of paths and text open as layers**, as Photopea opens them
@@ -222,24 +208,7 @@ green. Wave 13X (`25b66e0`, run 36102799475) is green (the release job is skippe
   blends in linear light (an SVG viewer blends in sRGB); text-layer
   baselines are placed by an estimated 0.8 em ascent.
 
-- W16-K: **menus, chords, bars and vector export from the final parity audit.** View ▸ Mode (Fullscreen / Standard / Menu Bar and Canvas), Layer ▸ New ▸ Artboard and the Artboard bar's + buttons (a neighbour of the same size 100 px away, one undo step), Layer ▸ Text ▸ Warp Style ▸ Custom; Fill is Shift+F5 and Camera Raw Shift+Ctrl+A. File ▸ Export As ▸ PDF / EMF / DXF (`raster::codec::export_vector`): a PDF is one page per artboard with shapes and text as vector paths (other layers as images, a blended stack as one image), an EMF the first page as GDI paths (images flattened onto white), a DXF its paths as R12 polylines (no pixels). A one-page `.pdf` of paths and text opens as layers (W16-I's route), any other one-page `.pdf` through the import dialog instead of at 72 dpi; a flat open decodes once (a HEIC / AVIF open started two decode workers). File ▸ Script lists demos and saved scripts (`<config>/scripts`). Options bars: Pixel to Pixel and Fit The Area (Zoom), Angle and Reset (Rotate View), Refine Edge (every selection tool) / Select Subject (Magic Wand, Quick Selection, Object Selection), Warp / Convert (Type), a brush-preset picker, Crop by (cropping at once rather than setting the box), Pencil pressure toggles (a quarter-pressure press paints lighter with Opacity from Pressure on). Not done: View ▸ Show ▸ Paths (left out of the menu: the path overlay is drawn from `chrome.rs`, outside W16-K's files, and reads no flag, so the row would tick and hide nothing), the Zoom bar's Zoom In / Zoom Out toggle and Photopea's All Documents box (Zoom, Hand), Crop by setting the box first, the Artboard + drawn on the canvas, EMF / DXF past the first page, PDF text as selectable text.
-
-- W16-H: Actions: an imported `.atn` now plays Levels, Curves, Hue/Saturation, Color Balance, Black & White, Vibrance, Exposure, Threshold, Posterize, Gradient Map, Photo Filter, Channel Mixer, Crop, Trim, Mode / bit depth, Free Transform and Move of the layer or selection, Duplicate, Delete, Merge Down / Visible, Flatten, Group, layer name / opacity / blend / visibility, Arrange, Select layer, Color Range, Feather / Expand / Contract / Border / Smooth, Stroke, Copy / Paste / Cut, Layer via Copy / Cut, Add Noise, Motion Blur, High Pass, Smart Sharpen, Save As / Export (the export dialog), and Layer ▸ New Adjustment Layer / an edit of the active adjustment layer (`make` / `set` of an `adjustmentLayer`, holding any of those adjustments or Brightness/Contrast or Invert) with their Photoshop parameters, each through its menu or dialog route (`atn_more`, `atn_play_more`); Export writes every recorded command that carries its parameters as its Photoshop descriptor (`atn_record`), an adjustment layer made or edited included; a new text / shape / fill / smart-object layer is no longer written as Make Layer (it replayed as an empty layer) but left out and counted. Not done: a brush stroke or a filter / adjustment applied through its dialog records pixels, not settings, so it is left out of an export (counted), as are a mask selection, a layer restack and a 90° canvas turn; single-range Hue/Saturation, preset Levels / Curves / Color Range, an angled crop, a Selective Color / Color Lookup adjustment layer and a fill (content) layer are skipped on play with the reason.
-
-- W16-A: **selection tools follow Photopea's gestures.** A drag inside the
-  selection with any selection tool (New mode, no modifier) moves the
-  outline only, live, as one undo step (Shift: 45 degrees; Escape puts it
-  back). The polygonal and magnetic lassos close on Enter, a double-click
-  or a click on the start, Backspace / Delete remove the last point; the
-  magnetic lasso is click-then-move, laying anchors pulled onto the
-  strongest edge within Width; Alt while dragging the lasso draws straight
-  segments. Still missing: a Frequency control in the options bar (the tool
-  answers `frequency`, the registry does not offer it), a timed
-  double-click (a second press on the same spot with no travel counts), and
-  a live preview of the snapped path between magnetic anchors.
-
-- **Save as PSD keeps smart filters live, linked smart objects linked,
-  and never writes an empty adjustment layer** (W16-J). A smart object's
+- W16-J: **Save as PSD keeps smart filters live, linked smart objects linked, and never writes an empty adjustment layer.** A smart object's
   filters are written as Photoshop's `filterFX` descriptor on its `SoLd`
   (`psd::placed::smart_filters`) for Average, Blur, Blur More, Box Blur,
   Gaussian Blur, Motion Blur, Surface Blur, Sharpen, Sharpen More, Sharpen
@@ -256,9 +225,60 @@ green. Wave 13X (`25b66e0`, run 36102799475) is green (the release job is skippe
   follows Photopea's writer and is not yet checked against a
   Photoshop-written file.
 
-- W16-C: the options bar shows and accepts Photopea's numbers (Tolerance 0-255, Opacity / Flow / Hardness / Exposure / Spacing and the other 0-1 fractions in %, the Blur / Sharpen Strength in % of the tool's top, sizes and the Parametric Shape's Corner Radius / Width in px, the brush tip angle in degrees; `tools::registry::float_display`) while each tool keeps its stored value, so typing 32 into Tolerance stores 32/255 instead of clamping to 1 and selecting everything; the Paint Bucket gains Fill: Foreground / Pattern (the active pattern); a Commit check beside the tool name confirms a pending Free Transform, crop box or pen path as Enter does. Not done: the Cancel cross (no intent reaches the shell's Escape route yet), the Commit check for Type, Perspective Crop and Puppet Warp sessions (not published to the workspace), and a pattern picker on the bar.
+- W16-K: **menus, chords, bars and vector export from the final parity audit.** View ▸ Mode (Fullscreen / Standard / Menu Bar and Canvas), Layer ▸ New ▸ Artboard and the Artboard bar's + buttons (a neighbour of the same size 100 px away, one undo step), Layer ▸ Text ▸ Warp Style ▸ Custom; Fill is Shift+F5 and Camera Raw Shift+Ctrl+A. File ▸ Export As ▸ PDF / EMF / DXF (`raster::codec::export_vector`): a PDF is one page per artboard with shapes and text as vector paths (other layers as images, a blended stack as one image), an EMF the first page as GDI paths (images flattened onto white), a DXF its paths as R12 polylines (no pixels). A one-page `.pdf` of paths and text opens as layers (W16-I's route), any other one-page `.pdf` through the import dialog instead of at 72 dpi; a flat open decodes once (a HEIC / AVIF open started two decode workers). File ▸ Script lists demos and saved scripts (`<config>/scripts`). Options bars: Pixel to Pixel and Fit The Area (Zoom), Angle and Reset (Rotate View), Refine Edge (every selection tool) / Select Subject (Magic Wand, Quick Selection, Object Selection), Warp / Convert (Type), a brush-preset picker, Crop by (cropping at once rather than setting the box), Pencil pressure toggles (a quarter-pressure press paints lighter with Opacity from Pressure on). Not done: View ▸ Show ▸ Paths (left out of the menu: the path overlay is drawn from `chrome.rs`, outside W16-K's files, and reads no flag, so the row would tick and hide nothing), the Zoom bar's Zoom In / Zoom Out toggle and Photopea's All Documents box (Zoom, Hand), Crop by setting the box first, the Artboard + drawn on the canvas, EMF / DXF past the first page, PDF text as selectable text.
 
-### Wave 15 — the last engineering gaps named in the parity matrix (uncommitted)
+- W16-L: **More formats open.** JPEG 2000 (`hayro-jpeg2000` 0.3.1, pure
+  Rust), Valve VTF, FITS (auto-stretched to 16 bits), DICOM (uncompressed /
+  RLE, windowed) and ASCII DXF (as vector layers: a group per DXF layer) open as
+  documents; Clip Studio `.clip`, zipped Pixelmator Pro `.pxd`, CorelDRAW
+  `.cdr` and InDesign `.indd` open as their embedded previews (layers not
+  read); Affinity and SAI files are refused by name. `raster` reads a
+  Krita file's layer tree and RGBA paint layers (`kra::layers`), and File >
+  Open opens a `.kra` as those layers and groups (name, opacity,
+  visibility, blend); File > Revert of a `.kra` / `.dxf` is still flat. `.acv`
+  becomes a Curves layer, `.3dl` / `.look` a Color Lookup layer, and
+  `.woff` / `.woff2` fonts load for text (`wuff`).
+
+- W16-M: **Video layers from an MP4, decoded in the decode worker.** The editor API `Editor::open_video_path` and `Editor::add_media_path`
+  (reached from File ▸ Open, drops, Open Recent, the command line, File ▸ Place and the timeline's Add Media) decode an H.264 (OpenH264's decoder) or 8-bit AV1 MP4 in the
+  worker process (`--decode-worker video`; at most 1000 frames / 1 GiB,
+  checked before decoding and on the answer's header), file every frame's
+  tiles, and add a raster layer plus an `editor_core::timeline::VideoClip`
+  in one undo step; the layer shows the frame at the playhead, exports in
+  MP4, and its bar trims it. The Animation panel's Timeline mode has an
+  Add Media button, a New Video Group button (Photopea's words; the
+  selected layer into a new "Video Group N", one undo step; `timeline::new_video_group`) and one row
+  per video layer and video group, each group's layers drawn as bars on
+  one line under it. Frames decode on demand, 32 at a time (the window
+  holding the playhead's frame, `Editor::load_video_frames_at`; an export
+  decodes what it renders), through the worker's `video-window` kind. Not yet: the frames
+  are not saved (re-read from the source on reopen), and no audio (no permissive pure-Rust AAC decoder; export stays silent).
+  Verified by `mp4::video::tests`, `timeline::video::tests`,
+  `app_shell::timeline::video_layers::tests` and `studio-desktop`'s
+  `w16m_video_worker` (the real binary as the worker; garbage and truncated
+  files are errors, bit-flipped ones come back as results, and the process
+  survives all 46).
+
+- W16-N: **Twelve interface languages and Glass Menus.** Window ▸ Language
+  (Photopea's More ▸ Language) switches the interface live between English,
+  Deutsch, Español, Français, Italiano, Polski, Português (Brasil), Türkçe,
+  Русский, Українська, 简体中文, 日本語 and 한국어, stored in preferences. Each
+  language is a table in `crates/ui/src/i18n/` keyed by the English source;
+  `every_language_table_translates_every_catalogue_string` holds all twelve to
+  every catalogue string, every menu title and row, the panel tabs, blend
+  modes, Adjustments buttons, Info rows, Character choices, the Properties
+  heading, the Color panel's Gray, brush preset and history-step names. CJK draws with a bundled Noto Sans CJK SC subset (OFL).
+  Window ▸ Appearance ▸ Glass Menus (Photopea's More ▸ Themes ▸ Glass Menus)
+  draws menus on a translucent fill, without blur. `app-shell/tests/w16n_language.rs`
+  and `w16n_panels.rs` read the drawn menu bar and panels back in the chosen
+  language. Not done: strings outside the catalogue (unrouted dialog text,
+  `format!` status messages, disabled-row reasons, `src/canvas`, the tool
+  options bar, the Properties panel's Layer / Mask switch and Transform
+  header, the Navigator's Fit, a blank document's first `Layer 1`,
+  Layer ▸ New ▸ Group's `Group`) stay English; Glass Menus is not in the Preferences dialog; and
+  Photopea's other languages are not offered.
+
+### Wave 15 — the last engineering gaps named in the parity matrix — `44afe56`
 
 #### Added
 
@@ -350,7 +370,9 @@ green. Wave 13X (`25b66e0`, run 36102799475) is green (the release job is skippe
   Still missing: CABAC and B-frames (the bindings have no switch), H.264
   past 3840x2160 (OpenH264's limit; AV1 takes it). Built and tested on
   Windows / MSVC only so far; the Linux and macOS CI builds of the C++
-  source have not been observed yet.
+  source have not been observed yet. (Since observed: CI run 36123487476 on
+  `44afe56` built and tested it in its `test (ubuntu-latest)` and
+  `test (macos-latest)` jobs, both green.)
 - **Photopea's exact Dark Grey and White themes** (W15-D). `design::Theme`
   gains `DarkGrey` and `White`, appended (`design::tokens::photopea_themes::
   DARK_GREY_ROLES` / `WHITE_ROLES`), so all seven of Photopea's themes
@@ -387,7 +409,7 @@ green. Wave 13X (`25b66e0`, run 36102799475) is green (the release job is skippe
   dragged Custom mesh exported and re-imported with the same outline within
   1 px), red with the export or the import half taken out.
 
-### Wave 14 — docs honesty after waves 13 and 13X (uncommitted)
+### Wave 14 — docs honesty after waves 13 and 13X — `2392753`
 
 #### Added
 

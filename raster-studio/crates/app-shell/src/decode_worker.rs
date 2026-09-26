@@ -1,5 +1,8 @@
 //! W15-A: the decode worker - AVIF and HEIC decoded in a child process, so a
-//! decoder panic cannot close the editor.
+//! decoder panic cannot close the editor. W16-M: and the video track of an
+//! MP4 for a video layer (the `video` and `video-window:<first>:<count>`
+//! kinds, below the picture kinds in this file), with the same spawn,
+//! deadline and crash handling.
 //!
 //! Declared from [`crate::dialogs`] (with `#[path]`), the open route's
 //! module, and reached as `app_shell::dialogs::decode_worker`.

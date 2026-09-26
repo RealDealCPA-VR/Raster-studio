@@ -241,7 +241,8 @@ pub enum ImportFormat {
     /// one, and the user was told "could not identify the image format".
     Psd,
     /// W9-N: an SVG, rasterised at its own size by `resvg` (see
-    /// `svg_import`). Recognised by content as well as by extension.
+    /// `svg_import`). Recognised by content as well as by extension. W16-I:
+    /// the application opens it as layers (`svg_import::layers`).
     Svg,
     /// W10-F: Netpbm PBM / PGM / PPM, ASCII and binary ([`formats::pnm`]).
     Pnm,
@@ -265,7 +266,8 @@ pub enum ImportFormat {
     Icns,
     /// W11-H: Amiga IFF ILBM / PBM ([`formats::iff`]).
     Iff,
-    /// W11-H: Krita `.kra`, its merged image ([`formats::kra`]).
+    /// W11-H: Krita `.kra`, its merged image ([`formats::kra`]). W16-L: the
+    /// application opens its layers (`formats::kra::layers`).
     Kra,
     /// W13-C: Adobe DNG, developed to a 16-bit sRGB surface
     /// ([`formats::raw`]).
@@ -282,12 +284,14 @@ pub enum ImportFormat {
     /// ([`formats::vector_docs`]); W16-I: the application opens it as
     /// vector layers.
     Eps,
-    /// W13-D: Paint.NET `.pdn`: its flattened thumbnail only
-    /// ([`formats::vector_docs`]).
+    /// W13-D: Paint.NET `.pdn`: here its flattened thumbnail
+    /// ([`formats::vector_docs`]); W13X-7: the application opens its layers.
     Pdn,
-    /// W13-D: Sketch: its saved preview PNG ([`formats::vector_docs`]).
+    /// W13-D: Sketch: here its saved preview PNG ([`formats::vector_docs`]);
+    /// W13X-8: the application opens its layers.
     Sketch,
-    /// W13-D: Adobe XD: its preview PNG ([`formats::vector_docs`]).
+    /// W13-D: Adobe XD: here its preview PNG ([`formats::vector_docs`]);
+    /// W13X-8: the application opens its layers.
     Xd,
     /// W13-D: Figma `.fig`: a ZIP-packaged file's thumbnail; a bare
     /// `fig-kiwi` canvas is refused by name ([`formats::vector_docs`]).
@@ -310,7 +314,8 @@ pub enum ImportFormat {
     Fits,
     /// W16-L: DICOM, uncompressed or RLE, windowed.
     Dicom,
-    /// W16-L: AutoCAD DXF (ASCII), its entities drawn.
+    /// W16-L: AutoCAD DXF (ASCII), its entities drawn here; the application
+    /// opens them as vector layers (`more_formats_w16::dxf::layers`).
     Dxf,
     /// W16-L: CorelDRAW `.cdr`: its embedded thumbnail only.
     Cdr,
@@ -1370,7 +1375,9 @@ pub enum ExportFormat {
     /// option. 8-bit 4:2:0, no alpha (flattened onto white), at least 16x16.
     /// A still export writes one frame shown for a second; an animated export
     /// (`raster::animation::encode_animation`) writes every frame with its own
-    /// duration. Write-only: there is no video decoder.
+    /// duration. Write-only in this facade: W16-M decodes an MP4's video
+    /// track only for a video layer, in the application's decode worker
+    /// (`formats::mp4::video`), never through the decode entry points here.
     Mp4(u8),
     /// W15-B: MP4 with **AV1** (`rav1e`, pure Rust) instead of H.264: the
     /// codec option on an MP4 row in Export As. Same quality range, alpha
@@ -2434,8 +2441,8 @@ mod tests {
                     let mean = total / px.len() as i64;
                     assert!(mean <= 64, "{format:?} drifted by {mean} on average");
                 }
-                // W13-L: MP4 is write-only (no video decoder), so not in
-                // `ALL`; `formats::mp4` reads its box structure back.
+                // W13-L: MP4 is write-only in this facade, so not in `ALL`;
+                // `formats::mp4` reads its box structure back.
                 ExportFormat::Mp4(_) | ExportFormat::Mp4Av1(_) => {
                     unreachable!("MP4 is not in ExportFormat::ALL")
                 }

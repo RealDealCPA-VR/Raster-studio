@@ -136,8 +136,36 @@ solidity 0-100 and the coverage as a `Selection`; changed through
 `Command::SetSpotChannels`). A text layer's warp gained the appended
 `WarpStyle::Custom` and its `TextWarp::mesh` (W13X-5: the 4x4 Bezier control
 mesh, 16 points; no `mesh` key is written while it is `None`, and a warp
-stored before reads back with none). File Info (XMP) and Image ▸ Variables
-are kept for the session only and are not saved.
+stored before reads back with none).
+
+Wave 16 (branch `wip/wave16-partial`) appended, still within version 4 and
+each absent from an older file:
+
+- `ShapeLayer::live` (W16-G: `layer_model::LiveShape`, the parameters a
+  rectangle, rounded rectangle, ellipse, star or line was drawn with,
+  `#[serde(default, skip_serializing_if = "Option::is_none")]`; a line's
+  arrowheads in `LiveShape::Line::arrows`, likewise skipped when `None`).
+  It is treated as live only while it still regenerates the layer's
+  `path_svg` exactly (`tools::shape::live_shape_of`), so a file whose path
+  was edited by hand reads back as a plain path.
+- `DocumentTimeline::videos` and `DocumentTimeline::video_groups` (W16-M:
+  `editor_core::timeline::VideoClip` — the layer it shows on, the media's
+  name and source path, frame size, `start_ms` and every frame's duration —
+  and the layer groups made by New Video Group; both omitted while empty).
+  A clip's decoded frames (`VideoClip::frames`) are `#[serde(skip)]`: the
+  package keeps only the frame that was on the layer when it was saved (the
+  layer's own tiles), and a reopened document decodes the frames again from
+  `source`; when that file has moved or gone, the layer keeps its saved
+  frame and no other.
+- In `extras` (W16-E): each layer comp's `flags` (`CompFlags`: Visibility,
+  Position, Appearance, all on by default, so an older comp applies as it
+  did) and `DocumentExtras::last_document_state` (the Layer Comps panel's
+  Last Document State, `None` until a comp is first applied). The notes'
+  `author` field was already stored; W16-E made it editable.
+
+Spot channels are the `spot_channels` record above (W13X-4). File Info
+(XMP) and Image ▸ Variables are kept for the session only and are not
+saved.
 
 ## Integrity: what the seal proves
 

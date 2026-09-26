@@ -6,7 +6,7 @@ file covers only what you need to build and work inside the workspace.
 ```bash
 # from this directory
 cargo check --workspace --all-targets   # type-check everything
-cargo test  --workspace                 # 5,946 #[test] functions
+cargo test  --workspace                 # 6,323 #[test] functions
 cargo run   -p studio-desktop           # launch
 cargo run   -p studio-desktop -- img.png
 ```
