@@ -88,16 +88,51 @@ fn read_bounded<R: Read>(source: R) -> Result<Vec<u8>, CodecError> {
 }
 
 /// The system fonts, loaded once per process: `<text>` in an SVG draws with
-/// what this machine has installed, as a browser would.
+/// what this machine has installed, as a browser would. The bundled DejaVu
+/// Sans is always there too, and stands in for any generic family the
+/// machine cannot supply (a Linux box with no fonts installed): text is then
+/// drawn in DejaVu rather than dropped.
 fn fonts() -> Arc<usvg::fontdb::Database> {
     static FONTS: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
     FONTS
         .get_or_init(|| {
             let mut db = usvg::fontdb::Database::new();
             db.load_system_fonts();
+            db.load_font_data(dejavu::sans::regular().to_vec());
+            db.load_font_data(dejavu::sans::bold().to_vec());
+            fall_back_to_dejavu(&mut db);
             Arc::new(db)
         })
         .clone()
+}
+
+/// Point every generic family (serif, sans-serif, cursive, fantasy,
+/// monospace) the database cannot resolve at the bundled DejaVu Sans.
+fn fall_back_to_dejavu(db: &mut usvg::fontdb::Database) {
+    use usvg::fontdb::{Family, Query};
+    let resolves = |db: &usvg::fontdb::Database, family: Family<'_>| {
+        db.query(&Query {
+            families: &[family],
+            ..Query::default()
+        })
+        .is_some()
+    };
+    const DEJAVU: &str = "DejaVu Sans";
+    if !resolves(db, Family::SansSerif) {
+        db.set_sans_serif_family(DEJAVU);
+    }
+    if !resolves(db, Family::Serif) {
+        db.set_serif_family(DEJAVU);
+    }
+    if !resolves(db, Family::Monospace) {
+        db.set_monospace_family(DEJAVU);
+    }
+    if !resolves(db, Family::Cursive) {
+        db.set_cursive_family(DEJAVU);
+    }
+    if !resolves(db, Family::Fantasy) {
+        db.set_fantasy_family(DEJAVU);
+    }
 }
 
 /// Inflate a gzip-compressed SVG, refusing once the *output* passes
@@ -448,5 +483,25 @@ mod tests {
         assert!(!looks_like_svg(b"<html><body></body></html>"));
         assert!(!looks_like_svg(b"\x89PNG<svg"));
         assert!(!looks_like_svg(b""));
+    }
+}
+
+#[cfg(test)]
+mod font_fallback_tests {
+    /// A machine with no fonts installed (the Linux CI runner): with only
+    /// the bundled DejaVu loaded, text asking for "Arial" still finds a face
+    /// through the serif fallback usvg appends to every family list.
+    #[test]
+    fn a_machine_without_fonts_still_resolves_text_through_dejavu() {
+        use super::usvg::fontdb::{Database, Family, Query};
+        let mut db = Database::new();
+        db.load_font_data(dejavu::sans::regular().to_vec());
+        let arial_or_serif = [Family::Name("Arial"), Family::Serif];
+        let query = Query {
+            families: &arial_or_serif,
+            ..Query::default()
+        };
+        super::fall_back_to_dejavu(&mut db);
+        assert!(db.query(&query).is_some(), "text would be dropped");
     }
 }

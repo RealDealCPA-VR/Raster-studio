@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# Bundled DejaVu Sans: the vector importers' fallback face when the machine
+# has no font for a family (already a workspace dependency elsewhere).
+dejavu = "2.37"
 # W15-E: PostScript `search` finds a substring in place in constant extra
 # space (MIT OR Unlicense; already in the graph through `regex`/`image`).
 memchr = "2.7"
