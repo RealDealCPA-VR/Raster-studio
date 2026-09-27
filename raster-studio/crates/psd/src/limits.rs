@@ -100,6 +100,12 @@ pub struct WriteOptions {
     /// [`crate::model::PsdFile::merged`] from its own renderer, which skips the
     /// fallback flattener entirely.
     pub max_flatten_bytes: u64,
+    /// W18-G: Photopea's Save PSD/PSB "Blank preview image": the merged
+    /// composite is written as blank paper (white, transparent alpha)
+    /// instead of the document's image, so the file is smaller. Every
+    /// layer is still written; a reader that composites the layers sees the
+    /// document, one that shows the preview sees blank paper.
+    pub blank_preview: bool,
 }
 
 impl Default for WriteOptions {
@@ -109,6 +115,7 @@ impl Default for WriteOptions {
             merged_compression: crate::codec::Compression::Rle,
             synthesize_resolution: true,
             max_flatten_bytes: 2 << 30, // 2 GiB
+            blank_preview: false,
         }
     }
 }

@@ -2,6 +2,41 @@
 # the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
 # Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
 @name	简体中文
+Artboards	画板
+No Slices	无切片
+All Slices	所有切片
+User Slices	用户切片
+Put the file into ZIP	将文件放入 ZIP
+16 Bits	16 位
+8 Bits	8 位
+AVIF…	AVIF…
+Blank preview image	空白预览图像
+Byte Order	字节顺序
+Depth	深度
+Duplicate Into…	复制到…
+Guides from Layer	从图层创建参考线
+Minify the file	压缩文件
+Nothing under the pointer for this row	指针下没有此项的对象
+Make Work Path	建立工作路径
+RAW…	RAW…
+Remove Anchor Point	删除锚点
+Remove Path	删除路径
+Make Selection	建立选区
+Divide…	划分…
+Right-click on an anchor point of the path	请右键单击路径的锚点
+Right-click inside a path	请在路径内部右键单击
+Save PSD/PSB	保存 PSD/PSB
+Save PSD/PSB…	保存 PSD/PSB…
+Select or draw a path first	请先选择或绘制路径
+Right-click on a text layer	请右键单击文字图层
+Right-click inside a slice	请在切片内部右键单击
+Divide Slices	划分切片
+N equal parts	N 等份
+N pixels per part	每份 N 像素
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	将右键单击的切片（若没有则为画布）切分为切片网格。
+Tick Horizontally or Vertically	请勾选水平方向或垂直方向
+These settings make no cut: raise N or pick a smaller pixel count	这些设置不会产生切分：请增大 N 或选择更少的像素
  fps	 帧/秒
  frames	 帧
  ms	 毫秒
@@ -291,6 +326,10 @@ Columns	列
 Columns and rows with gutters between them, inside optional margins, in pixels.	带间隔的列和行，位于可选边距内，单位为像素。
 Combine Shapes	合并形状
 Commit (Enter)	提交（Enter）
+Cancel (Esc)	取消 (Esc)
+All Documents	所有文档
+Select Source	选择源
+Alt	Alt
 Commit Contents	提交内容
 Composite	复合
 Condensed	窄体
@@ -857,7 +896,6 @@ New Folder	新建文件夹
 New Guide	新建参考线
 New Guide Layout	新建参考线版面
 New Guide Layout…	新建参考线版面…
-New Guides from Shape	通过形状新建参考线
 New Guide…	新建参考线…
 New Layer	新建图层
 New Layer Based Slice	新建基于图层的切片
@@ -1494,6 +1532,7 @@ Trim	裁切
 Trim Away	裁切掉
 Trim…	裁切…
 Tritone	三色调
+Turn into JPG	转换为 JPG
 Turn on Resample to change the pixel count.	打开“重新采样”才能更改像素数量。
 Twirl…	旋转扭曲…
 Twist	扭转
@@ -1587,6 +1626,7 @@ Written with the document's palette.	使用文档的调色板写入。
 Yellow	黄色
 Yellow / Blue	黄色 / 蓝色
 Yellows	黄色
+ZIP for pixel data	像素数据使用 ZIP
 ZigZag…	水波…
 Zoom In	放大
 Zoom Out	缩小
@@ -1621,3 +1661,17 @@ vector mask thumbnail — click to edit the vector mask	矢量蒙版缩览图—
 {path} is a {space} profile; an RGB document takes an RGB profile	{path} 是 {space} 配置文件；RGB 文档需使用 RGB 配置文件
 {path} is {len} bytes, larger than any colour profile	{path} 为 {len} 字节，比任何颜色配置文件都大
 {reason}; this one is {space}	{reason}；此文档为 {space}
+a	a
+b	b
+Open a document to see its memory	打开文档以查看其内存
+Image data	图像数据
+{undo} undo / {redo} redo steps	{undo} 步撤销 / {redo} 步重做
+Holds copied pixels	包含已复制的像素
+{size} ({tiles} tiles)	{size}（{tiles} 个图块）
+Empty	空
+Purge Clipboard	清除剪贴板
+Purge Histories	清除历史记录
+Purge All	全部清除
+Make	建立
+There is no path; draw one or select it in the Paths panel	没有路径；请绘制一个，或在路径面板中选择
+Reverse pages	反转页面顺序

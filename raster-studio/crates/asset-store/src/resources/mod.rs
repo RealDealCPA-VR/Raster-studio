@@ -17,6 +17,7 @@
 //! | `.ase` | Adobe Swatch Exchange (`ASEF`) | [`ase`] |
 //! | `.icc`, `.icm` | an ICC colour profile | [`icc`] |
 //! | `.atn` | a Photoshop action set, version 16 (W13-E) | [`atn`] |
+//! | `.tpl` | Photoshop tool presets (`8BTP`), W18-H: **parsed only**, not yet routed by File > Open | [`tpl`] |
 //!
 //! # Untrusted input
 //!
@@ -38,6 +39,8 @@ pub mod csh;
 pub mod grd;
 pub mod icc;
 pub mod pat;
+/// W18-H: Photoshop tool presets (`.tpl`): the reader only (no route yet).
+pub mod tpl;
 
 #[cfg(test)]
 mod tests;

@@ -326,7 +326,7 @@ pub fn write_abr(tips: &[AbrBrush]) -> Result<Vec<u8>, AbrError> {
         // The identifier: a Pascal string of 36 characters, then the
         // subversion 2 header's remaining bytes, zeroed.
         let mut body = Vec::with_capacity(301 + 19 + tip.alpha8.len());
-        let id = format!("$raster-studio-brush-{index:015}");
+        let id = presets_w18::tip_id(index);
         body.push(id.len() as u8);
         body.extend_from_slice(id.as_bytes());
         body.resize(301, 0);
@@ -365,6 +365,11 @@ pub fn write_abr(tips: &[AbrBrush]) -> Result<Vec<u8>, AbrError> {
     file.extend_from_slice(&samp);
     Ok(file)
 }
+
+// W18-I: the `desc` section — brush names and dynamics.
+#[path = "abr_presets_w18.rs"]
+mod presets_w18;
+pub use presets_w18::{parse_abr_presets, write_abr_presets, AbrDynamics, AbrPreset};
 
 /// Test support: a v6 `.abr` holding `tips` (raw when `rle` is false,
 /// PackBits otherwise). Public so the application's own tests can build a

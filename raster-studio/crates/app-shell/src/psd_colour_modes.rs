@@ -14,12 +14,18 @@
 //! * **Lab** — `color::model` (CIELAB, D65), 8 or 16 bits.
 //! * **Indexed** — the palette and transparent index in the file; saving
 //!   writes the document's own colours as the palette (median cut past 256).
-//! * **Bitmap** — 1-bit black and white; saved as Greyscale (the `psd`
-//!   writer does not pack bits).
+//! * **Bitmap** — 1-bit black and white; W18-H: saved as a 1-bit Bitmap
+//!   file (flat: the layers are merged; mid-grey luma is the threshold).
 //! * **Duotone** — the greyscale base printed through the file's inks
 //!   (`color::duotone`), when the ink record can be read; the greyscale base
-//!   otherwise. Saved as RGB with the inks applied: the ink record is not
-//!   written back.
+//!   otherwise. W18-H: saved as a Duotone file — the grey base each colour
+//!   is printed from, and the ink record — when the document's colours are
+//!   the prints of a known set of inks: the inks of a Duotone `.psd` opened
+//!   in this session, or the Duotone dialog's default inks of any type. The
+//!   document keeps no ink record of its own (the inks are baked into its
+//!   tiles), so a document whose colours no known set of inks prints (inks
+//!   picked in the dialog, or edits in colours the inks cannot print) is
+//!   saved as RGB with its inks applied, and the report says so.
 //! * **Multichannel** — no document mode here: its first three inks show as
 //!   C, M, Y in an RGB document (one ink as Greyscale); further channels are
 //!   left out and named in the report.
@@ -28,6 +34,7 @@
 //! grey sources), so a 16-bit CMYK / Lab file converts at 8-bit precision; the
 //! report says so.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use editor_core::color_mode::mode;
@@ -84,6 +91,100 @@ fn ink_rgb(color: psd::colour_modes::InkColor) -> Option<[u8; 3]> {
     })
 }
 
+thread_local! {
+    /// W18-H: the ink records of the Duotone files opened on this thread,
+    /// newest last, so Save as PSD can write a Duotone document back with
+    /// its inks (see the module docs).
+    static OPENED_DUOTONES: RefCell<Vec<psd::colour_modes::DuotoneRecord>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// The most ink records [`OPENED_DUOTONES`] keeps.
+const MAX_OPENED_DUOTONES: usize = 32;
+
+/// W18-H: the print table of an ink record (a colour-book ink shows as the
+/// stand-in colour it opens with).
+fn record_spec(record: &psd::colour_modes::DuotoneRecord) -> color::duotone::DuotoneSpec {
+    color::duotone::DuotoneSpec {
+        inks: record
+            .inks
+            .iter()
+            .enumerate()
+            .map(|(i, ink)| color::duotone::DuotoneInk {
+                color: ink_rgb(ink.color).unwrap_or(color::duotone::DEFAULT_INKS[i.min(3)]),
+                curve: ink.curve.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// W18-H: a dialog spec as the ink record a Duotone file carries: its inks
+/// as 16-bit RGB, its curves sampled at the record's thirteen tints.
+fn spec_record(spec: &color::duotone::DuotoneSpec) -> psd::colour_modes::DuotoneRecord {
+    use psd::colour_modes::{DuotoneInkRecord, InkColor, DUOTONE_CURVE_TINTS};
+    psd::colour_modes::DuotoneRecord {
+        inks: spec
+            .inks
+            .iter()
+            .enumerate()
+            .map(|(i, ink)| DuotoneInkRecord {
+                color: InkColor::Rgb(ink.color.map(|v| u16::from(v) * 257)),
+                name: format!("Ink {}", i + 1),
+                curve: DUOTONE_CURVE_TINTS
+                    .iter()
+                    .map(|t| {
+                        let t = f32::from(*t) / 100.0;
+                        [t, ink.amount(t).clamp(0.0, 1.0)]
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+/// W18-H: the ink record whose prints are every colour of `composite_rgba8`
+/// (each opaque pixel within one code of a print), and for each colour the
+/// grey it is printed from; `None` when no known set of inks prints them.
+fn known_inks(
+    composite_rgba8: &[u8],
+) -> Option<(psd::colour_modes::DuotoneRecord, HashMap<[u8; 3], u8>)> {
+    let mut candidates: Vec<psd::colour_modes::DuotoneRecord> =
+        OPENED_DUOTONES.with(|o| o.borrow().iter().rev().cloned().collect());
+    for kind in color::duotone::DuotoneType::ALL {
+        candidates.push(spec_record(&color::duotone::DuotoneSpec::of_type(kind)));
+    }
+    let colours: std::collections::HashSet<[u8; 3]> = composite_rgba8
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| p[3] > 0)
+        .map(|p| [p[0], p[1], p[2]])
+        .collect();
+    'candidate: for record in candidates {
+        let lut = record_spec(&record).lut();
+        let mut grey_of = HashMap::with_capacity(colours.len());
+        for rgb in &colours {
+            let (g, d) = lut
+                .iter()
+                .enumerate()
+                .map(|(g, p)| {
+                    let d = (0..3)
+                        .map(|c| i32::from(p[c]).abs_diff(i32::from(rgb[c])))
+                        .max()
+                        .unwrap_or(0);
+                    (g as u8, d)
+                })
+                .min_by_key(|(_, d)| *d)?;
+            if d > 1 {
+                continue 'candidate;
+            }
+            grey_of.insert(*rgb, g);
+        }
+        return Some((record, grey_of));
+    }
+    None
+}
+
 /// The Duotone print table for a file's ink record, or the reason there is
 /// none (the document then opens as its greyscale base).
 fn duotone_lut(file: &psd::PsdFile, notes: &mut PsdNotes) -> Option<[[u8; 3]; 256]> {
@@ -97,6 +198,14 @@ fn duotone_lut(file: &psd::PsdFile, notes: &mut PsdNotes) -> Option<[[u8; 3]; 25
             return None;
         }
     };
+    // W18-H: remembered, so Save as PSD can write the inks back.
+    OPENED_DUOTONES.with(|o| {
+        let mut opened = o.borrow_mut();
+        opened.retain(|r| *r != record);
+        opened.push(record.clone());
+        let over = opened.len().saturating_sub(MAX_OPENED_DUOTONES);
+        opened.drain(..over);
+    });
     let mut inks = Vec::with_capacity(record.inks.len());
     for (i, ink) in record.inks.iter().enumerate() {
         let colour = ink_rgb(ink.color).unwrap_or_else(|| {
@@ -191,11 +300,12 @@ pub(super) fn save_in_mode(
     match document.meta.color_mode {
         mode::GRAYSCALE => from_working_rgb(file, Separation::Grayscale)?,
         mode::BITMAP => {
-            notes.push(
-                "a Bitmap document is saved as Grayscale (its black and white pixels kept): this \
-                 build does not write 1-bit .psd files",
-            );
-            from_working_rgb(file, Separation::Grayscale)?;
+            // W18-H: a 1-bit Bitmap file, flat as Photoshop keeps one.
+            if !file.layers.is_empty() {
+                notes.push("a Bitmap .psd holds one flat image: the layers were merged into it");
+                file.layers.clear();
+            }
+            from_working_rgb(file, Separation::Bitmap)?;
         }
         mode::CMYK => {
             // One exact separation per distinct colour: the solve costs tens
@@ -211,10 +321,26 @@ pub(super) fn save_in_mode(
         }
         mode::LAB => from_working_rgb(file, Separation::Lab(&rgb_to_lab))?,
         mode::INDEXED => save_indexed(composite_rgba8, file, notes)?,
-        mode::DUOTONE => notes.push(
-            "a Duotone document is saved as RGB with its inks applied: the ink record is not \
-             written back",
-        ),
+        mode::DUOTONE => match known_inks(composite_rgba8) {
+            // W18-H: the grey base and the ink record (see the module docs).
+            Some((record, greys)) => {
+                let mut grey_of = |rgb: [u8; 3]| match greys.get(&rgb) {
+                    Some(g) => *g,
+                    None => psd::colour_modes::luma601(rgb),
+                };
+                from_working_rgb(
+                    file,
+                    Separation::Duotone {
+                        grey_of: &mut grey_of,
+                        record: &record,
+                    },
+                )?;
+            }
+            None => notes.push(
+                "a Duotone document is saved as RGB with its inks applied: its colours are not \
+                 the prints of any inks this build knows (the document keeps no ink record)",
+            ),
+        },
         _ => {}
     }
     Ok(())

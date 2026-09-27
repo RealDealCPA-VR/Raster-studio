@@ -2,6 +2,41 @@
 # the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
 # Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
 @name	Türkçe
+Artboards	Çalışma Yüzeyleri
+No Slices	Dilim Yok
+All Slices	Tüm Dilimler
+User Slices	Kullanıcı Dilimleri
+Put the file into ZIP	Dosyayı ZIP'e koy
+16 Bits	16 bit
+8 Bits	8 bit
+AVIF…	AVIF…
+Blank preview image	Boş önizleme görüntüsü
+Byte Order	Bayt sırası
+Depth	Derinlik
+Duplicate Into…	Şuraya çoğalt…
+Guides from Layer	Katmandan kılavuzlar
+Minify the file	Dosyayı küçült
+Nothing under the pointer for this row	İşaretçinin altında bu öğe için bir şey yok
+Make Work Path	Çalışma Yolu Oluştur
+RAW…	RAW…
+Remove Anchor Point	Bağlantı Noktasını Kaldır
+Remove Path	Yolu Kaldır
+Make Selection	Seçim Oluştur
+Divide…	Böl…
+Right-click on an anchor point of the path	Yolun bir bağlantı noktasına sağ tıklayın
+Right-click inside a path	Bir yolun içine sağ tıklayın
+Save PSD/PSB	PSD/PSB kaydet
+Save PSD/PSB…	PSD/PSB kaydet…
+Select or draw a path first	Önce bir yol seçin veya çizin
+Right-click on a text layer	Bir metin katmanına sağ tıklayın
+Right-click inside a slice	Bir dilimin içine sağ tıklayın
+Divide Slices	Dilimleri Böl
+N equal parts	N eşit parça
+N pixels per part	Parça başına N piksel
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Sağ tıkladığınız dilimi, yoksa tuvali, bir dilim ızgarasına böler.
+Tick Horizontally or Vertically	Yatay olarak veya Dikey olarak seçeneğini işaretleyin
+These settings make no cut: raise N or pick a smaller pixel count	Bu ayarlar kesim yapmaz: N’yi artırın veya daha az piksel seçin
  fps	 fps
  frames	 kare
  ms	 ms
@@ -291,6 +326,10 @@ Columns	Sütunlar
 Columns and rows with gutters between them, inside optional margins, in pixels.	Aralarında oluklar olan sütunlar ve satırlar, isteğe bağlı kenar boşlukları içinde, piksel cinsinden.
 Combine Shapes	Şekilleri Birleştir
 Commit (Enter)	Uygula (Enter)
+Cancel (Esc)	İptal (Esc)
+All Documents	Tüm belgeler
+Select Source	Kaynak seç
+Alt	Alt
 Commit Contents	İçeriği Onayla
 Composite	Bileşik
 Condensed	Dar
@@ -857,7 +896,6 @@ New Folder	Yeni Klasör
 New Guide	Yeni Kılavuz
 New Guide Layout	Yeni Kılavuz Düzeni
 New Guide Layout…	Yeni Kılavuz Düzeni…
-New Guides from Shape	Şekilden Yeni Kılavuzlar
 New Guide…	Yeni Kılavuz…
 New Layer	Yeni Katman
 New Layer Based Slice	Katman Tabanlı Yeni Dilim
@@ -1494,6 +1532,7 @@ Trim	Kırp
 Trim Away	Kırp
 Trim…	Kırp…
 Tritone	Üç Ton
+Turn into JPG	JPG'ye dönüştür
 Turn on Resample to change the pixel count.	Piksel sayısını değiştirmek için Yeniden Örnekle'yi açın.
 Twirl…	Döndür…
 Twist	Bük
@@ -1587,6 +1626,7 @@ Written with the document's palette.	Belgenin paletiyle yazıldı.
 Yellow	Sarı
 Yellow / Blue	Sarı / Mavi
 Yellows	Sarılar
+ZIP for pixel data	Piksel verisi için ZIP
 ZigZag…	Zikzak…
 Zoom In	Yakınlaştır
 Zoom Out	Uzaklaştır
@@ -1621,3 +1661,17 @@ vector mask thumbnail — click to edit the vector mask	vektör maskesi küçük
 {path} is a {space} profile; an RGB document takes an RGB profile	{path} bir {space} profili; bir RGB belgesi RGB profili alır
 {path} is {len} bytes, larger than any colour profile	{path} {len} bayt, herhangi bir renk profilinden büyük
 {reason}; this one is {space}	{reason}; bu {space}
+a	a
+b	b
+Open a document to see its memory	Belleğini görmek için bir belge açın
+Image data	Görüntü verisi
+{undo} undo / {redo} redo steps	{undo} geri al / {redo} yinele
+Holds copied pixels	Kopyalanan pikselleri tutuyor
+{size} ({tiles} tiles)	{size} ({tiles} döşeme)
+Empty	Boş
+Purge Clipboard	Panoyu temizle
+Purge Histories	Geçmişleri temizle
+Purge All	Tümünü temizle
+Make	Oluştur
+There is no path; draw one or select it in the Paths panel	Yol yok; bir yol çizin veya Yollar panelinde seçin
+Reverse pages	Sayfaları ters çevir

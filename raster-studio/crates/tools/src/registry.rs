@@ -933,6 +933,10 @@ const TOOLS: &[ToolInfo] = &[
         Some('l'),
         &[
             SELECTION_MODE,
+            // W18-F: Photopea's magnetic bar: Feather and Anti-alias after
+            // the mode, the shared selection finish (`SelectionOptions`).
+            f("feather", "Feather", 0.0, 250.0, 0.0),
+            b("antialias", "Anti-alias", true),
             i("search_radius", "Width", 1, 256, 24),
             f("edge_weight", "Contrast", 0.0, 4.0, 1.0),
         ],
@@ -1208,6 +1212,9 @@ const TOOLS: &[ToolInfo] = &[
             f("size", "Size", 1.0, 1000.0, 1.0),
             f("opacity", "Opacity", 0.0, 1.0, 1.0),
             f("spacing", "Spacing", 0.01, 10.0, 0.1),
+            // W18-F: Photopea's Smooth on the Pencil bar (`smth`, 0 as it
+            // starts), the brush smoothing the Brush's bar carries.
+            f("smoothing", "Smoothing", 0.0, 0.99, 0.0),
             // W4-G: a stroke that starts on the foreground paints the
             // background (`crate::pencil::PencilTool`).
             b(crate::pencil::AUTO_ERASE_KEY, "Auto Erase", false),
@@ -1730,7 +1737,8 @@ const TOOLS: &[ToolInfo] = &[
         Some('u'),
         shape_opts!(
             c("pshape", "Shape", crate::shape::PARAMETRIC_SHAPE_CHOICES, 0),
-            i("sides", "Sides", 3, 100, 6),
+            // W18-F: Photopea starts a polygon on five sides.
+            i("sides", "Sides", 3, 100, 5),
             f("inner_ratio", "Inner Radius", 0.01, 1.0, 0.4),
             f("corner_radius", "Corner Radius", 0.0, 50.0, 0.0),
             f("weight", "Width", 0.0, 100.0, 5.0),
@@ -1909,6 +1917,38 @@ const TOOLS: &[ToolInfo] = &[
         ],
     ),
 ];
+
+/// W18-F: the options bar's shell-side facts and requests (the pending
+/// edit, Cancel, Crop by, the pattern pick, the view toggles, the clone
+/// source picks); see the module docs.
+#[path = "registry_w18.rs"]
+pub mod bar_w18;
+
+/// W18-F: Photopea's Parametric Shape bar shows only the shape's own keys
+/// (its `aKZ` table): Polygon its Sides and Corner Radius, Star those and the
+/// Inner Radius, Arrow the width and the arrowhead set, Grid its Rows,
+/// Columns and Border, Spiral its Length. `pshape` is the Shape choice's
+/// index; every key that is not a shape parameter always shows.
+pub fn parametric_option_shown(key: &str, pshape: usize) -> bool {
+    const OWN: [&[&str]; 5] = [
+        &["sides", "corner_radius"],
+        &["sides", "inner_ratio", "corner_radius"],
+        &[
+            "weight",
+            "head_start",
+            "head_end",
+            "head_width",
+            "head_length",
+            "concavity",
+        ],
+        &["rows", "cols", "border"],
+        &["length"],
+    ];
+    if !OWN.iter().any(|keys| keys.contains(&key)) {
+        return true;
+    }
+    OWN.get(pshape).is_some_and(|keys| keys.contains(&key))
+}
 
 /// Every tool, in palette order.
 pub fn all() -> &'static [ToolInfo] {
@@ -2577,5 +2617,61 @@ mod tests {
             let _ = tool.on_pointer_down(&mut ctx, PointerEvent::at(4.0, 4.0));
             tool.cancel(&mut ctx);
         }
+    }
+}
+
+/// W18-F: the registry halves of the options-bar parity items.
+#[cfg(test)]
+mod w18f_tests {
+    use super::*;
+
+    fn spec(tool: ToolId, key: &str) -> Option<OptionSpec> {
+        info(tool)?.options.iter().copied().find(|o| o.key == key)
+    }
+
+    #[test]
+    fn the_parametric_bar_keys_follow_the_picked_shape() {
+        let own = |pshape: usize| -> Vec<&str> {
+            crate::shape::PARAMETRIC_KEYS
+                .iter()
+                .copied()
+                .filter(|k| *k != "pshape" && parametric_option_shown(k, pshape))
+                .collect()
+        };
+        assert_eq!(own(0), vec!["sides", "corner_radius"]);
+        assert_eq!(own(1), vec!["sides", "inner_ratio", "corner_radius"]);
+        assert_eq!(
+            own(2),
+            vec![
+                "weight",
+                "head_start",
+                "head_end",
+                "head_width",
+                "head_length",
+                "concavity"
+            ]
+        );
+        assert_eq!(own(3), vec!["rows", "cols", "border"]);
+        assert_eq!(own(4), vec!["length"]);
+        for key in ["mode", "from_center", "fill", "stroke_width"] {
+            assert!((0..5).all(|p| parametric_option_shown(key, p)), "{key}");
+        }
+    }
+
+    #[test]
+    fn polygon_sides_start_at_five_and_the_new_keys_are_declared() {
+        assert!(matches!(
+            spec(ToolId::Polygon, "sides").map(|s| s.kind),
+            Some(OptionKind::Int { default: 5, .. })
+        ));
+        assert_eq!(
+            crate::shape::ParametricOptions::default().sides,
+            5,
+            "the tool starts where the bar does"
+        );
+        for key in ["feather", "antialias"] {
+            assert!(spec(ToolId::MagneticLasso, key).is_some(), "{key}");
+        }
+        assert!(spec(ToolId::Pencil, "smoothing").is_some());
     }
 }

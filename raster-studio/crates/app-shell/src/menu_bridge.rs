@@ -127,6 +127,14 @@ pub(crate) mod w16k;
 #[path = "menu_w16k_tests.rs"]
 mod w16k_tests;
 
+// W18-G: Turn into JPG, Save PSD/PSB with its options (src/layer_ops_w18.rs).
+#[path = "layer_ops_w18.rs"]
+pub(crate) mod w18g;
+
+// W18-I: the library exports and the swatch folders (src/library_w18.rs).
+#[path = "library_w18.rs"]
+pub(crate) mod library_w18;
+
 /// Shown on an item the shared menu model allows but this build cannot perform.
 ///
 /// Kept as the *fallback* only. Every item this build genuinely cannot do now
@@ -272,7 +280,13 @@ pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
     // W10-E: and a running Batch / Convert Formats reports its progress.
     crate::automate::poll(editor);
     // W16-E: and what a panel menu asked of the application last frame.
+    // W18-I: Export as .ABR / .ASL with names, dynamics, blending options and
+    // patterns; every other panel request goes on to W16-E's handler.
+    library_w18::poll(editor);
     panel_menus_w16::poll(editor);
+    // W18-C: the Channels panel's selected colour components are the write
+    // mask of every pixel edit (`edit_target::channel_edit_w18`).
+    crate::edit_target::channel_edit_w18::sync(editor, &workspace.channels);
     let recent_files = editor
         .recent()
         .entries()
@@ -870,6 +884,8 @@ pub fn draw(
     w13n_ops::frame(ctx, editor, on_click);
     // W16-E: the Navigator's Angle field reads the document camera.
     panel_menus_w16::publish(ctx, editor);
+    // W18-I: the Swatches list's folders are kept across sessions.
+    library_w18::sync_swatch_folders(ctx, editor);
 }
 
 fn entries(
@@ -1553,13 +1569,24 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         MenuAction::NewArtboard => w16k::add_artboard(editor, None),
         MenuAction::ArtboardNeighbour(side) => w16k::add_artboard(editor, Some(side)),
         MenuAction::CropToLayer => w16k::crop_to_layer(editor),
+        // W18-G.
+        MenuAction::TurnIntoJpg => w18g::turn_into_jpg(editor),
+        MenuAction::SavePsdPsb => w18g::save_psd_psb(editor),
+        // A click resolves to Duplicate Layer's intent (the dialog with the
+        // destination); performed directly it is Duplicate Layer.
+        MenuAction::DuplicateInto => crate::layer_ops::duplicate_layer(
+            editor,
+            crate::dialog_host::take_confirmed_duplicate_name(),
+        ),
         MenuAction::ExportLayers => editor.export_layers(),
         // W4-H: one file per committed Slice-tool region.
-        MenuAction::ExportSlices => crate::slices_export::export_slices(editor),
+        // W18-G: or an Export As job parked with Photopea's Slices option.
+        MenuAction::ExportSlices => w18g::export_slices(editor),
         // W10-A: the Slice Options dialog's parked answer.
         MenuAction::SliceOptions => crate::slices_export::perform_slice_options(editor),
         // W8-C: one file per artboard.
-        MenuAction::ExportArtboards => crate::artboard_export::export_artboards(editor),
+        // W18-G: or an Export As job parked with Photopea's Artboards option.
+        MenuAction::ExportArtboards => w18g::export_artboards(editor),
         MenuAction::PlaceEmbedded => editor.place_from_dialog(false),
         MenuAction::PlaceLinked => editor.place_from_dialog(true),
         MenuAction::Print => editor.print_pdf(),
@@ -1759,7 +1786,10 @@ pub fn perform(action: MenuAction, editor: &mut Editor) -> Result<String, String
         // ---- Edit ----------------------------------------------------------
         // W10-A: with the Slice Select tool and a picked slice, the key
         // deletes the slice rather than clearing pixels.
+        // W18-E: with Path Select / Direct Selection and selected path
+        // components / knots, the key deletes them rather than pixels.
         MenuAction::ClearPixels => crate::slices_export::delete_picked_slice(editor)
+            .or_else(|| crate::paths_w18::delete_selected_path_parts(editor))
             .unwrap_or_else(|| clear_selection(editor)),
         MenuAction::FillDialog => fill_selection(editor),
         MenuAction::StrokeDialog => stroke_selection(editor),
@@ -2255,7 +2285,12 @@ pub(crate) fn edit_active_pixels(
         crate::fade::remember(doc.id(), layer, label, &before, &after);
         pixels::write_layer(doc, layer, &after, label)?
     };
+    // W18-C: only the Channels panel's selected components are written,
+    // and Edit > Fade records what was written.
+    let fade = crate::edit_target::channel_edit_w18::fade_before(editor, layer);
+    let command = crate::edit_target::channel_edit_w18::masked(editor, command);
     editor.apply_command(command);
+    crate::edit_target::channel_edit_w18::refresh_fade(editor, layer, label, fade);
     Ok(())
 }
 
@@ -3015,7 +3050,12 @@ fn remap_active_layer(
             pixels::write_layer(doc, layer, &after, label)?
         }
     };
+    // W18-C: only the Channels panel's selected components are written,
+    // and Edit > Fade records what was written.
+    let fade = crate::edit_target::channel_edit_w18::fade_before(editor, layer);
+    let command = crate::edit_target::channel_edit_w18::masked(editor, command);
     editor.apply_command(command);
+    crate::edit_target::channel_edit_w18::refresh_fade(editor, layer, label, fade);
     Ok(format!("{label} applied"))
 }
 
@@ -3135,6 +3175,8 @@ fn clear_selection(editor: &mut Editor) -> Result<String, String> {
             pixels::write_layer(doc, layer, &after, "Clear")?
         }
     };
+    // W18-C: only the Channels panel's selected components are cleared.
+    let command = crate::edit_target::channel_edit_w18::masked(editor, command);
     editor.apply_command(command);
     Ok("Cleared".to_string())
 }
@@ -3405,7 +3447,12 @@ pub(crate) fn fill_selection_painting(
             pixels::write_layer(doc, layer, &after, "Fill")?
         }
     };
+    // W18-C: only the Channels panel's selected components are filled,
+    // and Edit > Fade records what was written.
+    let fade = crate::edit_target::channel_edit_w18::fade_before(editor, layer);
+    let command = crate::edit_target::channel_edit_w18::masked(editor, command);
     editor.apply_command(command);
+    crate::edit_target::channel_edit_w18::refresh_fade(editor, layer, "Fill", fade);
     Ok(format!(
         "Filled with {} at {}% opacity, {} mode",
         if matches!(spec.contents, ui::dialogs::FillContents::Pattern(_)) {

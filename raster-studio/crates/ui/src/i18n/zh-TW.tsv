@@ -1,0 +1,1677 @@
+# Raster Studio interface strings, zh-TW. One row per line: the English source, a TAB,
+# the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
+# Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
+@name	繁體中文
+ fps	 fps
+ frames	 影格
+ ms	 毫秒
+ px	 像素
+0 bytes	0 位元組
+16 Bits/Channel	16 位元/色版
+16 bit	16 位元
+32 Bits/Channel	32 位元/色版
+3D	3D
+50% Grey	50% 灰色
+50% Threshold	50% 臨界值
+8 Bits/Channel	8 位元/色版
+8 bit	8 位元
+90° Clockwise	順時針 90°
+90° Counter Clockwise	逆時針 90°
+A CSV row has the wrong number of fields, at line	CSV 某一列的欄位數目錯誤，行號
+A blank canvas at any size	任意尺寸的空白畫布
+A colour channel cannot be deleted	無法刪除色彩色版
+A layered raster editor	分層點陣圖編輯器
+A palette holds 2 to 256 colours	調色盤可容納 2 至 256 種顏色
+A saved selection already has that name	已有同名的已儲存選取範圍
+A saved selection: click to open Select > Load Selection, then choose it by name there	已儲存的選取範圍：按一下以開啟「選取 > 載入選取範圍」，再依名稱選擇
+A slice needs a name	切片需要名稱
+AV1 (smaller, newer players)	AV1（檔案較小，需較新播放器）
+About Raster Studio	關於 Raster Studio
+Absolute Colorimetric	絕對公制色度
+Action sets	動作組合
+Actions	動作
+Adaptive (median cut)	適應性（中位數切割）
+Add "copy" to copied layers	為拷貝的圖層加上「拷貝」
+Add Artboard Above	在上方新增工作區域
+Add Artboard Below	在下方新增工作區域
+Add Artboard Left	在左側新增工作區域
+Add Artboard Right	在右側新增工作區域
+Add Filter Mask	新增過濾遮罩
+Add Media	新增媒體
+Add Noise…	增加雜訊…
+Add a layer mask	新增圖層遮色片
+Add a smart filter mask	新增智慧型濾鏡遮色片
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	置入影像或視訊檔案（檔案 > 置入嵌入的物件）；視訊會在播放頭位置成為視訊圖層
+Add an adjustment layer	新增調整圖層
+Add another instance of this effect	新增此效果的另一個例項
+Add current colour	新增目前顏色
+Add export	新增轉存
+Add frame	新增影格
+Add or remove room around the image. Pixels are not resampled.	在影像周圍增加或移除空間。像素不會重新取樣。
+Add shortcut	新增快速鍵
+Add to Selection	增加至選取範圍
+Adds one guide at a document coordinate, in pixels.	在文件座標上新增一條參考線，單位為像素。
+Adjustment	調整
+Adjustments	調整
+Advanced	進階
+Again	重複
+Again with Copy	再次並拷貝
+Aliased (pencil)	鋸齒（鉛筆）
+Align	對齊
+Align the bottom edge to the canvas	將下緣對齊畫布
+Align the left edge to the canvas	將左緣對齊畫布
+Align the right edge to the canvas	將右緣對齊畫布
+Align the top edge to the canvas	將上緣對齊畫布
+Align with layer	圖層對齊
+All	全部
+All Caps	全部大寫
+All Caps shapes every lowercase letter as its capital; Small Caps shapes it as a capital at 70 % size. The stored text keeps the case you typed.	全部大寫會將每個小寫字母顯示為大寫；小型大寫字母則顯示為 70 % 大小的大寫。儲存的文字仍保留您輸入的大小寫。
+All Layers	全部圖層
+Alpha	Alpha
+Already used by	已被下列項目使用：
+Alt Tag	Alt 標記
+Amount	數量
+An export needs at least one output	轉存至少需要一個輸出
+An image or project from this computer	此電腦上的影像或專案
+Angle	角度
+Angle (degrees)	角度（度）
+Angle jitter	角度快速變換
+Animation	動畫
+Another slice already has this name	另一個切片已使用此名稱
+Appearance	外觀
+Applied	已套用
+Apply	套用
+Apply Guides	套用參考線
+Apply Image	套用影像
+Apply Image…	套用影像…
+Apply Mask	套用遮色片
+Apply Style	套用樣式
+Apply Style 1	套用樣式 1
+Apply Style Preset…	套用樣式預設集…
+Apply the next comp	套用下一個構圖
+Apply the previous comp	套用上一個構圖
+Apply this mask	套用此遮色片
+Approximate. The composited result is what the canvas shows.	近似值。合成結果即畫布所顯示的內容。
+Arbitrary…	任意…
+Arc	弧
+Arc Lower	下弧形
+Arc Upper	上弧形
+Arch	弓形
+Arrange	排列圖層
+Artboard	畫板
+Artboard from Layers	圖層畫板
+Artboards in one document	一份文件中的工作區域
+Artboards to Files…	工作區域轉存為檔案…
+Assign Profile	指定描述檔
+Assigned {name}: the pixel numbers are unchanged, so the colours look different	已指定 {name}：像素數值不變，因此顏色看起來不同
+Author	作者
+Auto Color	自動色彩
+Auto Contrast	自動對比
+Auto Tone	自動色調
+Auto leading	自動行距
+Auto-Align Layers…	自動對齊圖層…
+Auto-Blend Layers…	自動混合圖層…
+Automate	自動化
+Autosaves of never-saved documents go here; empty uses the default	從未儲存過的文件會自動儲存到這裡；留空則使用預設位置
+Average	平均模糊
+BMP…	BMP…
+Back to the colour this opened on	回到開啟時的顏色
+Background — double-click for the picker	背景 — 按兩下開啟檢色器
+Based On	依據
+Baseline shift	基線偏移
+Baseline to baseline. Auto leading follows the type size.	基線到基線的距離。自動行距會隨字體大小調整。
+Batch	批次處理
+Batch…	批次處理…
+Bend	扭曲效果 彎曲變形
+Bevel	斜角
+Bevel & Emboss	斜角和浮雕
+Bevel & Emboss…	斜角和浮雕…
+Bind a text replacement variable to a text layer, or a visibility variable to any layer.	將文字取代變數繫結至文字圖層，或將可見度變數繫結至任何圖層。
+Bitmap	點陣圖
+Bitmap…	點陣圖…
+Black	黑
+Black & White	黑白
+Black & White…	黑白…
+Black to Transparent	黑色到透明
+Black to White	黑色到白色
+Black to white through the inks	經由油墨從黑色到白色
+Blacks	黑色
+Blend If	混合範圍
+Blend Mode: Color	混合模式：顏色
+Blend Mode: Color Burn	混合模式：加深顏色
+Blend Mode: Color Dodge	混合模式：加亮顏色
+Blend Mode: Darken	混合模式：變暗
+Blend Mode: Difference	混合模式：差異化
+Blend Mode: Dissolve	混合模式：溶解
+Blend Mode: Exclusion	混合模式：排除
+Blend Mode: Hard Light	混合模式：實光
+Blend Mode: Hard Mix	混合模式：實色疊印混合
+Blend Mode: Hue	混合模式：色相
+Blend Mode: Lighten	混合模式：變亮
+Blend Mode: Linear Burn	混合模式：線性加深
+Blend Mode: Linear Dodge (Add)	混合模式：線性加亮（增加）
+Blend Mode: Linear Light	混合模式：線性光源
+Blend Mode: Luminosity	混合模式：明度
+Blend Mode: Multiply	混合模式：色彩增值
+Blend Mode: Normal	混合模式：正常
+Blend Mode: Overlay	混合模式：覆蓋
+Blend Mode: Pin Light	混合模式：小光源
+Blend Mode: Saturation	混合模式：飽和度
+Blend Mode: Screen	混合模式：濾色
+Blend Mode: Soft Light	混合模式：柔光
+Blend Mode: Vivid Light	混合模式：強烈光源
+Blending	混合
+Blending Options	混合模式
+Blending Options…	混合模式…
+Blending options	混合選項
+Blends a source document, layer or channel into the active layer as one step.	將來源文件、圖層或色版混合到作用中圖層，一次完成。
+Blends one channel of each of two sources into a new channel, a selection or a new document.	將兩個來源各一個色版混合成新色版、選取範圍或新文件。
+Blue	藍
+Blues	藍色
+Blur	模糊
+Blur Gallery	模糊收藏館
+Blur More	更多模糊
+Bold	粗體
+Border Selection	邊界選取範圍
+Border…	邊框…
+Both axes	兩軸
+Bottom	底部
+Bottom Edges	底部邊緣
+Bottom Left	底部左側
+Bottom Right	底部右側
+Bottom Right Pixel Color	右下角像素顏色
+Bottom left	左下
+Bottom right	右下
+Box Blur…	方框模糊…
+Box height	方框高度
+Brightness	亮度
+Brightness jitter	亮度快速變換
+Brightness/Contrast	亮度 / 對比
+Brightness/Contrast…	亮度 / 對比…
+Bring Forward	上移一層
+Bring to Front	移至最上層
+Brush Editor	筆刷編輯器
+Brush: Background	筆刷：背景
+Brush: Foreground	筆刷：前景
+Brushes	筆刷
+Bulge	凸起
+Butt	平頭
+CMYK Color	CMYK 色彩
+Calculations	運算
+Calculations…	運算…
+Camera Raw…	Camera Raw…
+Canvas Size	畫布尺寸
+Canvas Size…	畫布尺寸…
+Canvas extension	畫布延伸
+Caps	端點
+Carries the XMP; the source's EXIF goes into JPEG only	包含 XMP；來源的 EXIF 只會寫入 JPEG
+Cell size (pixels)	儲存格大小（像素）
+Center	中心
+Center horizontally on the canvas	在畫布上水平居中
+Center vertically on the canvas	在畫布上垂直居中
+Centimeters	公分
+Centre	中央
+Centre the view on this note	將檢視居中於此附註
+Change Bit Depth	變更位元深度
+Change Colour Mode	變更色彩模式
+Change Layer Properties	變更圖層屬性
+Change how many pixels the document has, or how large it prints.	變更文件的像素數量或列印尺寸。
+Channel	色版
+Channel Mixer	通道混合器
+Channel Mixer…	通道混合器…
+Channel thumbnail	色版縮圖
+Channels	通道
+Character	文字
+Character Style	字元樣式
+Character Styles	字元樣式
+Checkerboard	棋盤格
+Choose 2 to 256 colours	選擇 2 至 256 種顏色
+Choose a colour profile	選擇色彩描述檔
+Choose a destination folder	選擇目的地資料夾
+Choose a source folder	選擇來源資料夾
+Choose at least one page to open	至少選擇一頁來開啟
+Choose at least one side to trim	至少選擇一側來修剪
+Choose the Action to play	選擇要播放的動作
+Choose the open grayscale document each channel of the new RGB document comes from.	選擇新 RGB 文件的每個色版要取自哪一份已開啟的灰階文件。
+Choose the pages to open, their resolution and how they open.	選擇要開啟的頁面、解析度以及開啟方式。
+Choose the source and the destination folders.	選擇來源與目的地資料夾。
+Choose…	選擇…
+Clear	清除
+Clear All	全部清除
+Clear Guides	清除參考線
+Clear History	清除步驟記錄
+Clear Layer Style	清除圖層樣式
+Clear Slices	清除切片
+Clear Strokes	清除筆觸
+Clear existing guides	清除現有參考線
+Clear the {noun} from the active text layer	從作用中文字圖層清除{noun}
+Cleared {n} slice(s)	已清除 {n} 個切片
+Click an item in the panel first	請先按一下面板中的項目
+Click anywhere to sample a colour	按一下任意位置以取樣顏色
+Click anywhere to sample a colour, or press Escape.	按一下任意位置以取樣顏色，或按 Escape。
+Click the graph to add a point, drag a point to bend the curve, drag it off the graph to remove it	按一下圖表以新增點，拖移點以彎曲曲線，將點拖出圖表即可移除
+Click the preview to sample a colour from it	按一下預視以從中取樣顏色
+Click the preview to sample the colour to replace	按一下預視以取樣要取代的顏色
+Click the ramp to edit its stops.	按一下漸層條以編輯其色標。
+Clip to layer below	剪裁至下方圖層
+Clipboard	剪貼簿
+Clipping	剪裁
+Close	關閉
+Close All	全部關閉
+Close Alpha Channel	關閉 Alpha 色版
+Close Others	關閉其他
+Close panel	關閉面板
+Clouds	雲彩
+Codec	編解碼器
+Color	顏色
+Color Balance	色彩平衡
+Color Balance…	色彩平衡…
+Color Burn	加深顏色
+Color Dodge	加亮顏色
+Color Dynamics	動態顏色
+Color Halftone…	彩色網屏…
+Color Intensity	色彩強度
+Color Label	顏色標籤
+Color Lookup	顏色查詢
+Color Lookup Tables…	顏色查詢表格…
+Color Lookup…	顏色查詢…
+Color Overlay	顏色疊加
+Color Overlay…	顏色疊加…
+Color Picker	色彩選擇
+Color Range	顏色範圍
+Color Range…	顏色範圍…
+Color fringe cleanup: pulls the boundary pixels' color toward the nearby interior ink — a separate edit from mask refinement.	色彩邊緣清理：將邊界像素的顏色拉向附近的內部油墨 — 這是與遮色片調整分開的編輯。
+Color to Alpha…	將顏色轉為透明…
+Colors	色彩
+Colour	顏色
+Colour varies once per stroke.	每個筆觸變換一次顏色。
+Colours	顏色
+Colours must be 1 to 64, the tolerance above 0 and the corner length at least 1	顏色數必須為 1 至 64，容許度大於 0，轉角長度至少為 1
+Columns	欄
+Columns and rows with gutters between them, inside optional margins, in pixels.	欄與列及其間距，位於選用的邊界內，單位為像素。
+Combine Shapes	組合形狀
+Commit (Enter)	確認（Enter）
+Commit Contents	確認內容
+Composite	合成
+Condensed	窄體
+Cone	圓錐
+Constant	常數
+Constrain proportions	強制等比例
+Content-Aware	內容感知
+Content-Aware Scale	內容感知比率
+Contour	輪廓
+Contract Selection	縮減選取範圍
+Contract by	縮減量
+Contract…	對比…
+Contrast	對比
+Conversion Options	轉換選項
+Convert Formats	轉換格式
+Convert Formats…	轉換格式…
+Convert for Smart Filters	轉換為智慧型濾鏡
+Convert to Layers	轉換為圖層
+Convert to Linked…	轉換為連結的物件…
+Convert to Paragraph Text	轉換為段落文字
+Convert to Point Text	轉換為錨點文字
+Convert to Profile	轉換為描述檔
+Convert to Profile works on 8- and 16-bit documents	「轉換為描述檔」適用於 8 位元和 16 位元文件
+Convert to Profile…	轉換為描述檔…
+Convert to Shape	轉換成圖形
+Convert to Smart Object	轉換成智慧物件
+Converted to {name} ({intent}): the numbers changed so the colours look the same	已轉換為 {name}（{intent}）：數值已變更，使顏色看起來相同
+Cool	冷色
+Copper	紅銅
+Copy	複製
+Copy Layer Style	拷貝圖層樣式
+Copy Merged	合併複製
+Copyright Notice	版權聲明
+Corner length	轉角長度
+Corner radius	轉角半徑
+Corner radius applies to rectangles; this path has no corners to round	轉角半徑適用於矩形；此路徑沒有可圓化的轉角
+Corners	轉折角
+Count jitter	數量快速變換
+Create Clipping Mask	建立剪裁遮色片
+Create Layer	建立圖層
+Create Layers	建立圖層
+Crop	裁剪
+Crop and Straighten Photos	裁切並拉直相片
+Crops the canvas to the content, judged by the basis below.	依下方的基準將畫布裁切至內容。
+Crystallize…	結晶化…
+Current Layer	目前圖層
+Current Path	當前路徑
+Curve tolerance	曲線容許度
+Curves	曲線
+Curves…	曲線…
+Custom	自定義
+Custom Brush	自訂筆刷
+Custom: with the Move tool, drag the 16 mesh handles on the canvas	自訂：使用移動工具，在畫布上拖移 16 個網格控點
+Custom…	自定義…
+Cut	剪下
+Cyan	青色
+Cyan / Red	青色 / 紅色
+Cyans	青色
+DDS…	DDS…
+DXF…	DXF…
+Dark	深色
+Dark Blue	深藍色
+Dark Grey	深灰色
+Darken	變暗
+Darker Color	顏色變暗
+Dash	虛線
+Data Set	資料組
+Data Sets	資料組
+Data Sets…	資料組…
+Default	預設
+Default colours  (D)	預設顏色  (D)
+Default colours (D)	預設顏色 (D)
+Define	定義
+Define Brush Preset…	定義筆刷預設集…
+Define Custom Shape…	定義自訂形狀…
+Define New	定義新的
+Define Pattern…	定義圖樣…
+Define…	定義…
+Delete	刪除
+Delete Filter Mask	刪除過濾遮罩
+Delete Layer	刪除圖層
+Delete Mask	刪除遮色片
+Delete Vector Mask	移除向量遮罩
+Delete action	刪除動作
+Delete channel	刪除色版
+Delete frame	刪除影格
+Delete path	刪除路徑
+Delete selected layers	刪除選取的圖層
+Delete set and its actions	刪除組合及其動作
+Delete stop	刪除色標
+Delete the applied comp	刪除已套用的構圖
+Delete the selected keyframe	刪除選取的關鍵影格
+Delete the selected tool preset	刪除選取的工具預設集
+Delete the selected {noun}	刪除選取的{noun}
+Delete the smart filter mask	刪除智慧型濾鏡遮色片
+Delete this note	刪除此附註
+Delete this smart filter	刪除此智慧型濾鏡
+Delete this spot channel	刪除此特別色色版
+Density	密度
+Dents…	凹痕…
+Desaturate	去飽和度
+Description	說明
+Deselect	取消選取
+Deselect Layers	取消選取圖層
+Despeckle	去除斑點
+Destination	目的地
+Destination Space	目標空間
+Detail	細部
+Detail scales	細節層級
+Diamond	鑽石
+Difference	差異化
+Difference Clouds	差值分層雲彩
+Diffuse…	擴散…
+Diffusion	擴散
+Diffusion Dither	擴散混色
+Disable / Enable Filter Mask	停用 / 啟用濾鏡遮色片
+Disable / Enable Mask	停用 / 啟用遮色片
+Disable / Enable Vector Mask	停用 / 啟用向量圖遮色片
+Disable Mask	停用遮色片
+Disable Vector Mask	停用向量遮罩
+Displace…	更換…
+Dissolve	溶解
+Distance	距離
+Distort	扭曲濾鏡
+Distribute	均分
+Dither	仿色
+Dither…	仿色…
+Divide	分割
+Dock this panel here	將此面板停駐於此
+Document	文件
+Document Bounds	頁面邊界
+Document Info	文件資訊
+Document Title	文件標題
+Document size	文件尺寸
+Double-click to edit in Layer Style; drag to the trash to delete	按兩下以在圖層樣式中編輯；拖移至垃圾桶以刪除
+Double-click to edit this filter's settings	按兩下以編輯此濾鏡的設定
+Double-click to rename	按兩下以重新命名
+Drag a line with the Ruler first	請先用尺標工具拖移出一條線
+Drag to zoom the view	拖移以縮放檢視
+Drop Shadow	陰影
+Drop Shadow…	陰影…
+Duotone	雙色調
+Duotone Options	雙色調選項
+Duotone…	雙色調…
+Duplicate	複製
+Duplicate Layer	複製圖層
+Duplicate Layer…	複製圖層…
+Duplicate frame	複製影格
+Dust & Scratches…	汙點與刮痕…
+EMF…	EMF…
+EXIF and XMP writing is not implemented — only ICC is embedded	尚未實作 EXIF 和 XMP 的寫入 — 只會嵌入 ICC
+EXR…	EXR…
+Ease In	緩入
+Ease Out	緩出
+Edge Glow	邊緣光亮化
+Edge refinement: feather, shift, smooth, and contrast over the mask's existing coverage — not subject recognition.	邊緣調整：在遮色片既有的覆蓋範圍上羽化、位移、平滑化並增加對比 — 並非主體辨識。
+Edges	邊緣
+Edit	編輯
+Edit Adjustment	編輯調整
+Edit Adjustment…	編輯調整…
+Edit Alpha Channel	編輯 Alpha 色版
+Edit Contents…	編輯內容…
+Edit Document Records	編輯文件記錄
+Edit Fill	編輯填色
+Edit Filter Mask	編輯濾鏡遮色片
+Edit Generator	編輯產生器
+Edit Group	編輯群組
+Edit Guides	編輯參考線
+Edit Raster	編輯點陣
+Edit Saved Selection	編輯已儲存的選取範圍
+Edit Shape	編輯形狀
+Edit Slices	編輯切片
+Edit Smart object	編輯智慧型物件
+Edit Text	編輯文字
+Edit Timeline	編輯時間軸
+Edit brush…	編輯筆刷…
+Edit fill	編輯填色
+Edit gradient stops — click to open the editor	編輯漸層色標 — 按一下以開啟編輯器
+Edit in Quick Mask Mode	以快速遮色片模式編輯
+Edit this ramp	編輯此漸層條
+Effects	效果
+Effects apply to the whole layer and undo as one step.	效果會套用到整個圖層，並可一次還原。
+Embed EXIF and XMP	嵌入 EXIF 和 XMP
+Embed Linked	嵌入連結的物件
+Embed colour profile	嵌入色彩描述檔
+Embedded source	嵌入的來源
+Emboss…	浮雕…
+Enable / disable the smart filter mask	啟用 / 停用智慧型濾鏡遮色片
+Enable Mask	啟用遮色片
+Enable Vector Mask	啟用向量遮罩
+Enable at least one export	請至少啟用一個轉存
+Enabled	已啟用
+Enlarge smaller images	放大較小的影像
+Enter a colour like #3366CC	輸入顏色，例如 #3366CC
+Entropy	熵
+Equalize	均勻分配
+Essentials	基本功能
+Every enabled row is written when you export.	轉存時會寫入每一個已啟用的列。
+Every image in the source folder is fitted into the box and written to the destination folder in its own format.	來源資料夾中的每張影像都會縮放至方框內，並以其原本格式寫入目的地資料夾。
+Every parameter is at its neutral value — there is nothing to clean	所有參數都是中性值 — 沒有需要清理的
+Every parameter is at its neutral value — there is nothing to refine	所有參數都是中性值 — 沒有需要調整的
+Every variable needs a name	每個變數都需要名稱
+Exact	精確
+Exclude Overlapping Shapes	排除重疊形狀
+Exclusion	排除
+Expand Selection	擴張選取範圍
+Expand by	擴張量
+Expand the dock	展開停駐區
+Expanded	寬體
+Expand…	擴展…
+Export	轉存
+Export As	轉存為
+Export Color Lookup	轉存顏色查詢表
+Export Contents…	轉存內容…
+Export Diagnostics…	轉存診斷資訊…
+Export Layers…	匯出圖層…
+Export PDF	轉存 PDF
+Export as .ABR…	轉存為 .ABR…
+Export as .ACO…	轉存為 .ACO…
+Export as .ASL…	轉存為 .ASL…
+Export set as .atn	將組合轉存為 .atn
+Export…	轉存…
+Exposure	曝光
+Exposure…	曝光…
+Extra Bold	特粗體
+Extra Condensed	特窄體
+Extra Expanded	特寬體
+Extra Light	特細體
+Extras	顯示額外內容
+Extrude…	擠壓…
+Eyedropper	滴管
+Face	字面
+Facet	彩塊化
+Fade	淡化
+Fade…	淡化…
+Family	字體系列
+Feather	羽化
+Feather Selection	羽化選取範圍
+Feather radius	羽化半徑
+Feather…	羽化…
+Fibers…	纖維…
+Field Blur…	景色模糊…
+File	檔案
+File Info	檔案資訊
+File Info…	檔案資訊…
+File name	檔案名稱
+Files that fail are listed in batch-errors.txt in the destination.	失敗的檔案會列在目的地的 batch-errors.txt 中。
+Fill	填滿
+Fill Filter Mask	填滿濾鏡遮色片
+Fill Layer	填色圖層
+Fill Mask	填滿遮色片
+Fill Screen	填滿螢幕
+Fill in File Info, or open a file that has EXIF, to embed metadata	請填寫檔案資訊，或開啟含有 EXIF 的檔案，以嵌入中繼資料
+Fill path with the foreground colour, on a new shape layer	以前景色填滿路徑，於新的形狀圖層上
+Fill type	填滿類型
+Fills the active selection with the chosen contents.	以所選內容填滿作用中的選取範圍。
+Fill…	填滿…
+Filter	濾鏡
+Filter Gallery	濾鏡庫
+Filter Gallery…	濾鏡庫…
+Find Edges	尋找邊緣
+First line	首行
+Fish	魚
+Fisheye	魚眼
+Fit The Area	按螢幕大小縮放
+Fit on Screen	顯示全頁
+Fit the whole image in the window	在視窗中顯示整張影像
+Fixed height	固定高度
+Flag	旗標
+Flame…	火焰…
+Flat Angled 40	平角 40
+Flatten Image	影像平面化
+Flip Canvas Horizontal	水平翻轉版面
+Flip Canvas Vertical	垂直翻轉版面
+Flip Horizontal	水平翻轉
+Flip Vertical	垂直翻轉
+Flip View Horizontal	水平翻轉檢視
+Flip View Vertical	垂直翻轉檢視
+Flow jitter	流量快速變換
+Folders	資料夾
+Font: 	字體： 
+Foreground strokes mark what to keep, background strokes what to drop; Preview shows the cut.	前景筆觸標記要保留的部分，背景筆觸標記要捨棄的部分；預視會顯示剪下的結果。
+Foreground — double-click for the picker	前景 — 按兩下開啟檢色器
+Foreground/background jitter	前景/背景快速變換
+Format	格式
+Fourier	傅立葉
+Fourier Transform	傅立葉轉換
+Fragment	殘影
+Frame	影格
+Frames	影格
+Free Transform	自由變換
+Free Transform a Copy	任意變形拷貝
+From Transparency	來自透明選取範圍
+Fullscreen	全螢幕
+Fuzziness	模糊度
+GIF…	GIF…
+Gamma	Gamma
+Gamut Warning	色域警告
+Gaussian	高斯
+Gaussian Blur…	高斯模糊…
+Generate Mockups	產生模型
+Generate Mockups…	產生模型…
+Give the brush a name	為筆刷命名
+Give the export a file name	為轉存指定檔案名稱
+Glass Menus	玻璃選單
+Global light	整體光源
+Glyphs	字符
+Gradient	漸層
+Gradient Editor	漸變編輯器
+Gradient Map	漸層地圖
+Gradient Map…	漸層地圖…
+Gradient Overlay	漸變疊加
+Gradient Overlay…	漸變疊加…
+Gradient…	漸層…
+Gray	灰
+Grayscale	灰階
+Green	綠
+Greens	綠色
+Grid	格線
+Grid points	格點
+Group	群組
+Group Layers	群組圖層
+Grow	擴大選取
+Guide Guy	Guide Guy
+Guides	參考線
+Gutter	間距
+H	高
+H.264 (plays everywhere)	H.264（到處都能播放）
+HDR Toning	HDR 色調
+HDR Toning…	HDR 色調…
+HSB/HSL…	HSB/HSL…
+Halftone Screen	半色調網屏
+Hard Light	實光
+Hard Mix	實色疊印混合
+Hard Round 24	實邊圓形 24
+Hard Round 4	實邊圓形 4
+Hard edges, no blending. Pixel art only — it aliases on downscale.	硬邊、不混合。僅適用於像素藝術 — 縮小時會出現鋸齒。
+Harder Brush	較硬筆刷
+Height	高
+Height to 110%	高度調為 110%
+Height to 125%	高度調為 125%
+Height to 80%	高度調為 80%
+Height to 90%	高度調為 90%
+Help	幫助
+Hide All	全部隱藏
+Hide Layers	隱藏圖層
+Hide Selection	隱藏選取範圍
+Hide the source layer	隱藏來源圖層
+High Contrast	高對比
+High Pass…	高反差保留…
+Highlights	加強亮度
+Histogram	長條圖
+Histories	步驟記錄
+History	歷史紀錄
+Hold	保持
+Horizontal Centers	水平居中
+Horizontal Distortion	水平變形
+Horizontal center guide	水平中央參考線
+Horizontal scale, in percent: widens or narrows the glyphs and their spacing	水平縮放（百分比）：加寬或縮窄字符及其間距
+Horizontally	水平
+Hue	色相
+Hue jitter	色相快速變換
+Hue/Saturation	色相 / 飽和度
+Hue/Saturation…	色相 / 飽和度…
+ICC profile	ICC 描述檔
+ICO…	ICO…
+Image	影像
+Image Options	影像選項
+Image Rotation	影像旋轉
+Image Size	圖片尺寸
+Image Size…	圖片尺寸…
+Image size	影像尺寸
+Import CSV…	匯入 CSV…
+Import PDF	匯入 PDF
+Import a CSV of data sets first	請先匯入資料組的 CSV
+Import a CSV: the first row names the variables, every further row is one data set.	匯入 CSV：第一列為變數名稱，其後每一列為一個資料組。
+In use	使用中
+Inches	英寸
+Indexed Color	索引色
+Indexed Color…	索引色…
+Inflate	膨脹
+Info	資訊
+Ink	油墨
+Ink Color	油墨顏色
+Ink printed at 0, 25, 50, 75 and 100% tint	以 0、25、50、75 和 100% 濃度列印的油墨
+Inner Glow	內發光
+Inner Glow…	內發光…
+Inner Radius	內半徑
+Inner Shadow	內陰影
+Inner Shadow…	內陰影…
+Inside	內部
+Intent	方式
+Intersect Shape Areas	形狀區域相交
+Intersect with Selection	與選取範圍相交
+Inverse	反轉選取
+Inverse Fourier Transform	反傅立葉轉換
+Invert	反相
+Invert coverage	反轉覆蓋範圍
+Invert has no parameters	負片效果沒有參數
+Iris Blur…	光圈模糊…
+Italic	斜體
+JPEG carries the XMP and the source's EXIF	JPEG 包含 XMP 和來源的 EXIF
+JPG…	JPG…
+Justify	左右對齊
+Kaleidoscope…	萬花筒…
+Keep as it was	保持原樣
+Kept when a comp is first applied	在第一次套用構圖時保留
+Kerning	字距微調
+Keyboard Shortcut Sheet…	鍵盤快速鍵一覽表…
+Keyboard Shortcuts…	快速鍵…
+Keywords	關鍵字
+Kind	種類
+Kurtosis	峰度
+Lab Color	Lab 色彩
+Landscape	橫向
+Language	語言
+Large	大
+Last Document State	最後的文件狀態
+Last Filter	最後一個濾鏡
+Last line	末行
+Layer	圖層
+Layer Comps	圖層構圖
+Layer Edges	圖層邊緣
+Layer Mask	圖層遮色片
+Layer Properties	圖層屬性
+Layer Style	圖層樣式
+Layer knocks out drop shadow	圖層去底陰影
+Layer via Copy	拷貝的圖層
+Layer via Cut	剪下的圖層
+Layers	圖層
+Layers panel options	圖層面板選項
+Left	左側
+Left Edges	左緣
+Left indent	左邊縮排
+Length	長
+Lens Blur…	鏡頭模糊…
+Lens Correction…	鏡頭校正…
+Lens Flare…	反光效果…
+Level	色階
+Levels	色階
+Levels…	色階…
+Light	光源
+Light Grey	淺灰色
+Lighten	變亮
+Lighter Color	顏色變亮
+Lighting Effects…	光源效果…
+Lightness	亮度
+Line	線
+Linear	線性
+Linear Burn	線性加深
+Linear Dodge (Add)	線性加亮（增加）
+Linear Light	線性光源
+Link / Unlink Mask	連結 / 取消連結遮色片
+Link Layers	連結圖層
+Link selected layers	連結選取的圖層
+Link with layer	與圖層連結
+Linked	已連結
+Linked file	連結的檔案
+Liquify…	液化…
+Live Shape	即時形狀
+Live preview	即時預視
+Live preview is off.	即時預視已關閉。
+Load	載入
+Load .atn	載入 .atn
+Load .cube file…	載入 .cube 檔案…
+Load Selection	載入選取範圍
+Load Selection…	載入選取範圍…
+Load actions	載入動作
+Load channel as selection	將色版載入為選取範圍
+Load path as a selection	將路徑載入為選取範圍
+Loaded file	已載入的檔案
+Lock	鎖定
+Lock All	全部鎖定
+Lock Guides	鎖定參考線
+Lock Image Pixels	鎖定影像像素
+Lock Position	鎖定位置
+Lock Transparent Pixels	鎖定透明像素
+Lock all	全部鎖定
+Lock pixels	鎖定像素
+Lock position	鎖定位置
+Lock transparent pixels	鎖定透明像素
+Long-tap as a right click	長按視為按右鍵
+Lookup table	查詢表格
+Luminance	明度
+Luminance of the preview source; the markers are the black and white points.	預視來源的明度；標記為黑點和白點。
+Luminosity	明度
+MP4…	MP4…
+Magenta	品紅
+Magenta / Green	洋紅 / 綠色
+Magentas	洋紅
+Magic Cut	魔術裁剪
+Magic Cut…	魔術裁剪…
+Make Frames	製作影格
+Make a selection first	請先建立選取範圍
+Make work path from selection	從選取範圍建立工作路徑
+Manual	手動
+Maps every colour onto one palette. The document keeps RGBA pixels; GIF and PNG export write this palette.	將每個顏色對應到一個調色盤。文件保留 RGBA 像素；轉存 GIF 和 PNG 時會寫入此調色盤。
+Maps the active layer onto a palette as one undo step; the document stays RGB.	將作用中圖層對應到調色盤，一次可還原；文件仍為 RGB。
+Margins	邊界
+Mark this state so you can come back to it	標記此狀態以便回到這裡
+Mask	遮罩
+Mask Properties	遮色片屬性
+Mask source	遮色片來源
+Match Color	顏色匹配
+Match Color…	顏色匹配…
+Matting	修邊
+Maximum	最大值
+Maximum…	最大值…
+Mean	平均值
+Median	中間值
+Median…	中間值…
+Medium	中
+Memory	記憶體
+Menu Bar and Canvas	選單列和畫布
+Merge	合併
+Merge Channels	合併色版
+Merge Channels…	合併色版…
+Merge Down	向下合併
+Merge Layers	合併圖層
+Merge Visible	合併可見圖層
+Merged	合併
+Method	方法
+Metrics	公制
+Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.	公制會使用字體本身的成對字距；0 會關閉字距微調；手動會在目前文字的每對字元之間套用同一個量（1/1000 em），之後輸入的字元則從未微調開始；它至少需要兩個字元，因此較短的文字和文字工具的預設值不提供此選項。排版引擎沒有視覺字距微調，因此不提供該模式。
+Mezzotint…	網線銅版…
+Midtones	中間調
+Millimeters	毫米
+Min diameter	最小直徑
+Min roundness	最小圓度
+Min size	最小尺寸
+Minimal	最小
+Minimum	最小值
+Minimum size only applies when pressure controls size.	最小尺寸只在壓力控制尺寸時才有效。
+Minimum…	最小值…
+Miter	尖角
+Mode	模式
+Modify	修改
+Monochrome	單色
+Monotone	單色調
+More readouts	更多讀數
+More tabs	更多標籤
+Mosaic…	馬賽克…
+Motion Blur…	動態模糊…
+Move Layer	移動圖層
+Move a control first: these settings would change nothing	請先移動某個控制項：這些設定不會產生任何變更
+Move this panel	移動此面板
+Move this panel within its dock	在停駐區內移動此面板
+Move to	移至
+Move with the layer	隨圖層移動
+Multiply	色彩增值
+Name	名稱
+Name Change	重新命名
+Name the channel first.	請先為色版命名。
+Navigator	導覽
+Nearest Neighbour	最接近像素
+Neutralize	中和
+Neutrals	中性色
+New	新增
+New Adjustment Layer	新增調整圖層
+New Channel	新增色版
+New Document	新增文件
+New Fill Layer	新增填充圖層
+New Folder	新增資料夾
+New Guide	新增參考線
+New Guide Layout	新增參考線版面
+New Guide Layout…	新增參考線版面…
+New Guide…	新增參考線…
+New Layer	新增圖層
+New Layer Based Slice	新增圖層式切片
+New Selection	新增選取範圍
+New Smart Object via Copy	拷貝為新智慧型物件
+New Snapshot	新增快照
+New Spot Channel	新增特別色色版
+New Spot Channel…	新增特別色色版…
+New Style Preset	新增樣式預設集
+New Video Group	新增視訊群組
+New channel	新增色版
+New folder	新增資料夾
+New group	新增群組
+New layer	新增圖層
+New layer comp	新增圖層構圖
+New note at the centre of the view	在檢視中央新增附註
+New path (saves the Work Path when it is selected)	新增路徑（選取工作路徑時會將其儲存）
+New set	新增組合
+New size	新尺寸
+New style from the active layer	從作用中圖層建立新樣式
+New tool preset from the active tool	從作用中工具建立新工具預設集
+New {noun} from the active text layer	從作用中文字圖層建立新{noun}
+New…	新增…
+Next Blend Mode	下一個混合模式
+No Color	無顏色
+No character styles yet. New records the active text layer's font, size and look.	尚無字元樣式。「新增」會記錄作用中文字圖層的字體、大小和外觀。
+No command loads a channel as the selection in this build; the Select menu's Load Selection restores a saved selection instead	此版本中沒有將色版載入為選取範圍的指令；「選取」選單的「載入選取範圍」會改為還原已儲存的選取範圍
+No commands to bind	沒有可繫結的指令
+No document	無文件
+No document is open	沒有開啟的文件
+No export selected	未選取轉存
+No faces listed for this family name	此字體系列名稱沒有列出字面
+No frames yet. Add frame makes an _a_ layer: each one is a frame, bottom first.	尚無影格。「新增影格」會建立 _a_ 圖層：每個圖層就是一個影格，由下往上。
+No guide crosses the canvas	沒有參考線穿過畫布
+No installed family matches	沒有符合的已安裝字體系列
+No layer comps yet. New Layer Comp records every layer's visibility, position and appearance.	尚無圖層構圖。「新增圖層構圖」會記錄每個圖層的可見度、位置和外觀。
+No layers yet. Add one with the + button below.	尚無圖層。請用下方的 + 按鈕新增一個。
+No layers yet: each top-level layer gets a bar on the timeline.	尚無圖層：每個最上層的圖層都會在時間軸上有一條軌道。
+No notes yet. Click the canvas with the Note tool (I), or New Note pins one at the centre of the view; notes are saved with the document and never exported.	尚無附註。用附註工具（I）按一下畫布，或用「新增附註」在檢視中央釘上一則；附註會隨文件儲存，且絕不會被轉存。
+No open document is the same size as this one	沒有與此文件尺寸相同的已開啟文件
+No paragraph styles yet. New records the active text layer's alignment, indents and spacing.	尚無段落樣式。「新增」會記錄作用中文字圖層的對齊、縮排和間距。
+No pattern chosen — the overlay paints nothing.	未選擇圖樣 — 覆蓋不會繪製任何內容。
+No patterns are defined yet	尚未定義圖樣
+No profile file was chosen	未選擇描述檔
+No recent files yet	尚無最近使用的檔案
+No selection has been saved	尚未儲存任何選取範圍
+No source recorded for this object	此物件沒有記錄來源
+No stop selected	未選取色標
+No style presets yet. Define one with Layer > Layer Style > Define Style Preset, or add a Photoshop library with File > Open (.asl).	尚無樣式預設集。可用「圖層 > 圖層樣式 > 定義樣式預設集」來定義，或用「檔案 > 開啟舊檔（.asl）」加入 Photoshop 樣式庫。
+No styles yet. The + button saves the active layer's style; File > Open loads an .asl style library.	尚無樣式。+ 按鈕會儲存作用中圖層的樣式；「檔案 > 開啟舊檔」可載入 .asl 樣式庫。
+No such command	沒有此指令
+No tool presets yet. New Tool Preset saves the active tool with its current options.	尚無工具預設集。「新增工具預設集」會儲存作用中工具及其目前選項。
+Noise	雜訊
+None	無
+Normal	正常
+Normal Map…	法線貼圖…
+Not a hex colour	不是十六進位顏色
+Not installed — shaping with	未安裝 — 改用以下字體排版：
+Not saved yet	尚未儲存
+Notes	備註
+Nothing has changed	沒有任何變更
+Nothing in this submenu is available right now	此子選單中目前沒有可用的項目
+Nothing is left to learn the background from: paint over it with the background brush.	已沒有可學習背景的區域：請用背景筆刷塗抹背景。
+Nothing to measure yet — paint or place something on this layer first	目前沒有可測量的內容 — 請先在此圖層上繪製或置入內容
+Nothing to preview.	沒有可預視的內容。
+OK	確定
+Oblique	傾斜
+Off: the wheel pans the view and Ctrl+wheel zooms	關閉：滾輪會平移檢視，Ctrl+滾輪會縮放
+Offset…	偏移…
+Oil Paint…	油畫…
+One page holding the flattened image; no vector content.	單頁包含平面化的影像；不含向量內容。
+Onion skin	洋蔥皮
+Only English is available in this build	此版本僅提供英文
+Only a mask channel can be loaded as a selection here	此處只能將遮色片色版載入為選取範圍
+Only web-safe colours	僅網頁安全色
+Opacity	透明度
+Opacity 10%	不透明度 10%
+Opacity 100%	不透明度 100%
+Opacity 20%	不透明度 20%
+Opacity 30%	不透明度 30%
+Opacity 40%	不透明度 40%
+Opacity 50%	不透明度 50%
+Opacity 60%	不透明度 60%
+Opacity 70%	不透明度 70%
+Opacity 80%	不透明度 80%
+Opacity 90%	不透明度 90%
+Opacity jitter	不透明度快速變換
+Opacity key	不透明度關鍵影格
+Opacity must be between 0% and 100%	不透明度必須介於 0% 和 100% 之間
+Opacity scales the layer and its effects; Fill scales the layer's own pixels only.	不透明度會縮放圖層及其效果；填滿只會縮放圖層本身的像素。
+Opacity stops sit above the bar, colour stops below it.	不透明度色標位於漸層條上方，顏色色標位於下方。
+Open	開啟
+Open .ABR…	開啟 .ABR…
+Open .ACO…	開啟 .ACO…
+Open .ASL…	開啟 .ASL…
+Open Recent	最近使用的檔案
+Open a document first	請先開啟文件
+Open a document to animate it.	開啟文件以製作動畫。
+Open a document to apply styles to its layers.	開啟文件以將樣式套用到其圖層。
+Open a document to insert glyphs into its text.	開啟文件以將字符插入其文字。
+Open a document to keep text styles in it.	開啟文件以在其中保存文字樣式。
+Open a document to lay guides out on it.	開啟文件以在其上配置參考線。
+Open a document to pin notes on it.	開啟文件以在其上釘選附註。
+Open a document to record layer comps.	開啟文件以記錄圖層構圖。
+Open a document to see its CSS	開啟文件以查看其 CSS
+Open a document to see its facts.	開啟文件以查看其資訊。
+Open a document to see its histogram	開啟文件以查看其色階分佈圖
+Open a document to see its history	開啟文件以查看其步驟記錄
+Open a document to see its properties	開啟文件以查看其屬性
+Open another document, or add another pixel layer, to match its colours.	開啟另一份文件，或新增另一個像素圖層，以符合其顏色。
+Open as	開啟為
+Open editor…	開啟編輯器…
+Open or close the folder	開啟或關閉資料夾
+Open the Adjustments panel	開啟調整面板
+Open…	開啟…
+Operation	運算方式
+Orange	橘
+Other	其他
+Out of gamut	超出色域
+Outer Glow	外發光
+Outer Glow…	外發光…
+Outline the path	描繪路徑外框
+Output	輸出
+Output channel	輸出色版
+Outside	外部
+Overlay	覆蓋
+PBM…	PBM…
+PDF Presentation…	PDF 簡報…
+PDF…	PDF…
+PGM…	PGM…
+PNG…	PNG…
+PPM…	PPM…
+Page	頁面
+Page {n}	第 {n} 頁
+Page {page} opens at {w} x {h} px	第 {page} 頁以 {w} x {h} 像素開啟
+Pages	網頁
+Paint	繪製
+Paint Filter Mask	繪製濾鏡遮色片
+Paint Mask	繪製遮色片
+Paint over the part to keep with the foreground brush first.	請先用前景筆刷塗抹要保留的部分。
+Paint over what to keep and over what to drop	塗抹要保留和要捨棄的部分
+Paint the inside of the path	填塗路徑內部
+Painting	繪畫
+Paints a band along the active selection's border.	沿著作用中選取範圍的邊界繪製一條色帶。
+Pair kerning	成對字距
+Palette	調色盤
+Paragraph	段落
+Paragraph Style	段落樣式
+Paragraph Styles	段落樣式
+Particles…	粒子…
+Paste	貼上
+Paste Into	貼入範圍內
+Paste Layer Style	貼上圖層樣式
+Paste Outside	貼至範圍外
+Paste Special	選擇性貼上
+Paste in Place	貼在原處
+Path	路徑
+Path Blur…	路徑模糊…
+Path editing lives in the Paths panel	路徑編輯位於路徑面板
+Paths	路徑
+Pattern	圖樣
+Pattern Dither	圖樣混色
+Pattern Overlay	材質疊加
+Pattern Overlay…	材質疊加…
+Pattern Preview	圖樣預覽
+Pattern…	圖樣…
+Pencil 1px	鉛筆 1px
+Percent	百分比
+Perceptual	感應式
+Perspective	透視
+Perspective Warp	透視彎曲
+Photo Filter	圖片濾鏡
+Photo Filter…	圖片濾鏡…
+Photography	攝影
+Picas	派卡
+Pick a filter; it applies at its default settings.	選擇濾鏡；會以預設設定套用。
+Pin Light	小光源
+Pinch…	掐"內縮和外擴"…
+Pixel Grid	像素格點
+Pixel dimensions	像素尺寸
+Pixel mask	像素遮色片
+Pixel to Pixel	像素到像素
+Pixelate	像素濾鏡
+Pixels	像素
+Place Embedded…	置入嵌入的物件…
+Place Linked…	置入連結的物件…
+Play	播放
+Play from step	從步驟播放
+Play selection	播放選取項目
+Play this step (unchecked steps are passed over)	播放此步驟（未勾選的步驟會被略過）
+Plays a recorded Action on every image in the source folder and saves each result to the destination.	在來源資料夾中的每張影像上播放錄製的動作，並將每個結果儲存到目的地。
+Pointer	指標
+Pointillize…	點狀化…
+Points	點
+Polar Coordinates…	極座標…
+Position	位置
+Position is locked — unlock it in the Layers panel to move or resize	位置已鎖定 — 請在圖層面板中解除鎖定以移動或調整大小
+Position key	位置關鍵影格
+Posterize	色調分離
+Posterize…	色調分離…
+Precise Cursor	精確游標
+Preferences…	選項…
+Preserve Transparency	保持透明度
+Preserve luminosity	保留明度
+Preset Manager…	預設值管理器…
+Press a key…	按下按鍵…
+Pressure controls flow	壓力控制流量
+Pressure controls size	壓力控制尺寸
+Preview	預覽
+Preview against	預視背景
+Preview is off.	預視已關閉。
+Previewed on the active layer; applied to its pixels as one undoable step.	在作用中圖層上預視；以一次可還原的步驟套用至其像素。
+Previous Blend Mode	上一個混合模式
+Print Size	列印尺寸
+Print as PDF…	列印為 PDF…
+Print size	列印尺寸
+Prints the grayscale image through one to four inks, each through its own curve. The inks are applied to the pixels when the mode changes.	以一至四種油墨列印灰階影像，每種油墨各有其曲線。模式變更時會將油墨套用至像素。
+Print…	列印…
+Profile	顏色配置
+Profile from File…	從檔案載入描述檔…
+Profiles are assigned to RGB documents	描述檔只能指定給 RGB 文件
+Profiles are converted between in RGB documents	描述檔只能在 RGB 文件中互相轉換
+Profiles belong to RGB documents; convert to RGB first	描述檔屬於 RGB 文件；請先轉換為 RGB
+Proof Colors	校樣色彩
+Properties	屬性
+Puppet Warp	布偶彎曲
+Purge	清除記憶體
+Purple	紫
+Quadtone	四色調
+Quality	品質
+Quick Export Layer as PNG…	快速將圖層轉存為 PNG…
+Quit	結束
+RGB Color	RGB 色彩
+Radial Blur…	圓形模糊…
+Radius	半徑
+Radius (px)	強度（像素）
+Range	範圍
+Raster Studio Help	Raster Studio 說明
+Rasterize	柵格化
+Reassign anyway	仍然重新指定
+Recent	最近使用
+Record	記錄
+Record Source Size	記錄來源尺寸
+Record an Action in the Actions panel first	請先在動作面板中錄製動作
+Record an edit, then replay the whole sequence on any document with at least as many layers.	錄製一項編輯，再於任何圖層數量至少相同的文件上重播整個序列。
+Record into set	錄製到組合
+Recording: every edit is captured until Stop	錄製中：每項編輯都會被記錄，直到按下停止
+Red	紅
+Redefine the selected {noun} from the active text layer, restyling every layer that uses it	從作用中文字圖層重新定義選取的{noun}，並重新設定所有使用它的圖層的樣式
+Redo	重做
+Reds	紅色
+Reduce Colors	減少顏色
+Reduce Colors changed nothing: the layer already uses only colours of that palette	「減少顏色」沒有變更任何內容：圖層已只使用該調色盤的顏色
+Reduce Colors: the layer now uses at most {n} colours	減少顏色：圖層現在最多使用 {n} 種顏色
+Reduce Colors…	減少顏色…
+Reduce Noise…	減少雜色…
+Reduces the grayscale image to pure black and white. The layers are flattened into one, over white.	將灰階影像簡化為純黑白。圖層會在白色背景上平面化為一個。
+Reference point: Bottom	參考點：下
+Reference point: Bottom Left	參考點：左下
+Reference point: Bottom Right	參考點：右下
+Reference point: Centre	參考點：中央
+Reference point: Left	參考點：左
+Reference point: Right	參考點：右
+Reference point: Top	參考點：上
+Reference point: Top Left	參考點：左上
+Reference point: Top Right	參考點：右上
+Refine	調整
+Refine Edge…	調整邊緣…
+Refine Mask	調整遮色片
+Refine Mask…	調整遮色片…
+Regular	一般
+Relative	相對
+Relative Colorimetric	相對公制色度
+Release Clipping Mask	釋放剪裁遮色片
+Release Notes	版本資訊
+Relink to File…	重新連結至檔案…
+Remove Black Matte	移除黑色邊緣
+Remove Color Fringe	移除色彩邊緣
+Remove Color Fringe…	移除色彩邊緣…
+Remove Fringe	去除白邊
+Remove White Matte	移除白色邊緣
+Remove export	移除轉存
+Remove this instance of the effect	移除此效果例項
+Remove this shortcut	移除此快速鍵
+Rename Layer	重新命名圖層
+Rename Layer…	重新命名圖層…
+Rename set	重新命名組合
+Render	渲染
+Rendering the preview…	正在演算預視…
+Repeat…	重覆…
+Replace Color	顏色取代
+Replace Color…	顏色取代…
+Replace Contents	取代內容
+Replace Contents…	取代內容…
+Replace existing guides	取代現有參考線
+Replay	重播
+Report an Issue	回報問題
+Reselect	重新選取
+Reset	重設
+Reset Transform	重設變形
+Reset View Rotation	重設檢視旋轉
+Reset all shortcuts	重設所有快速鍵
+Resize Canvas	調整版面尺寸
+Resize Images	調整影像尺寸
+Resize Images…	調整影像尺寸…
+Resolution	解析度
+Resolution must be greater than zero	解析度必須大於零
+Restore Layer	還原圖層
+Result	結果
+Return this tool to its defaults	將此工具恢復為預設值
+Reveal All	顯示全部
+Reveal Selection	顯示選取範圍
+Reverse	顛倒
+Revert	復原至上次儲存
+Rewrites every pixel layer's numbers so the picture looks the same under the destination profile, as one undo step.	重寫每個像素圖層的數值，使影像在目標描述檔下看起來相同，一次可還原。
+Right	右側
+Right (narrow)	右（窄）
+Right (wide)	右（寬）
+Right Edges	右緣
+Right indent	右邊縮排
+Right-click a swatch to remove it	在色票上按右鍵即可移除
+Ring	環形
+Ripple…	漣漪效果…
+Rise	上升
+Rotate	旋轉
+Rotate 180°	旋轉 180°
+Rotate 90° Clockwise	順時針旋轉 90°
+Rotate 90° Counter Clockwise	逆時針旋轉 90°
+Rotate Canvas	旋轉版面
+Rotate the active layer so the measured line is level (Enter)	旋轉作用中圖層，使測量線保持水平（Enter）
+Rotates the canvas and every layer. Right angles are pixel-exact; other angles resample.	旋轉畫布和每個圖層。直角旋轉會精確到像素；其他角度會重新取樣。
+Rotation key	旋轉關鍵影格
+Round	圓角
+Round (computed)	圓形（計算）
+Rounded Steps	圓角階梯
+Roundness jitter	圓度快速變換
+Rows	列
+Rulers	尺規
+Run	執行
+SVG…	SVG…
+Same Radii	相同半徑
+Sample a colour from the canvas	從畫布取樣顏色
+Sample radius	取樣半徑
+Sampled	已取樣
+Sampled colour	取樣的顏色
+Sampled tip not loaded; painting round	未載入取樣筆尖；以圓形繪製
+Satin…	光澤…
+Saturation	飽和度
+Saturation jitter	飽和度快速變換
+Save	儲存
+Save As	另存新檔
+Save As…	另存新檔…
+Save Brush	儲存筆刷
+Save Selection	儲存選取範圍
+Save Selection…	儲存選取範圍…
+Save actions	儲存動作
+Save as PSD…	儲存為 PSD…
+Save current brush	儲存目前筆刷
+Save selection as channel	將選取範圍儲存為色版
+Saves every image in the source folder to the destination in another format, quality or size.	將來源資料夾中的每張影像以其他格式、品質或尺寸儲存到目的地。
+Scale	比例尺
+Scale %	縮放 %
+Scale Effects	縮放效果
+Scale Effects…	縮放效果…
+Scale H	水平縮放
+Scale V	垂直縮放
+Scale key	縮放關鍵影格
+Scale:	縮放：
+Scales every size and distance of the active layer's style as one undo step.	將作用中圖層樣式的所有尺寸和距離一起縮放，一次可還原。
+Scaling by 100% changes nothing	以 100% 縮放不會有任何變更
+Scratch directory	暫存磁碟目錄
+Screen	螢幕
+Screen, print and social presets	螢幕、列印和社群媒體預設集
+Script…	腳本…
+Scroll wheel zooms instead of scrolling	滾輪縮放而非捲動
+Search Commands…	搜尋指令…
+Search layers	搜尋圖層
+Search layers by name	依名稱搜尋圖層
+Select	選取
+Select All	全部
+Select Bottom Layer	選取最下層圖層
+Select Layer Above	選取上方圖層
+Select Layer Below	選取下方圖層
+Select Linked Layers	選取連結的圖層
+Select None	取消全部選取
+Select Top Layer	選取最上層圖層
+Select a layer first	請先選取圖層
+Select a layer to see its CSS	選取圖層以查看其 CSS
+Select a layer to see its properties	選取圖層以查看其屬性
+Select a layer: a click on a style applies it to the active layer.	選取圖層：按一下樣式即可套用到作用中圖層。
+Select a path first	請先選取路徑
+Select a text layer, or type into one: a click inserts the glyph at the caret.	選取文字圖層或在其中輸入：按一下會在插入點插入字符。
+Select a text layer to edit its type	選取文字圖層以編輯其文字
+Select every pixel near one colour	選取接近某個顏色的所有像素
+Selection	選擇
+Selection Edges	選取範圍邊緣
+Selection: white is replaced, black is kept.	選取範圍：白色會被取代，黑色會被保留。
+Selective Color	色彩選擇
+Selective Color…	色彩選擇…
+Selects a band of this width along the selection's edge	沿著選取範圍邊緣選取此寬度的色帶
+Semi Condensed	半窄體
+Semi Expanded	半寬體
+Semibold	半粗體
+Send Backward	下移一層
+Send to Back	移至最下層
+Separate documents	個別文件
+Separate keywords with commas or semicolons.	以逗號或分號分隔關鍵字。
+Sepia	懷舊
+Set	組合
+Set the History Brush to paint from this state (the marked row)	設定步驟記錄筆刷從此狀態繪製（標記的列）
+Shadows	陰影
+Shadows/Highlights	陰影/亮部
+Shadows/Highlights…	陰影/亮部…
+Shape	形狀
+Shape Dynamics	筆尖動態
+Shape Mosaic…	形狀馬賽克…
+Shape Properties	形狀屬性
+Sharpen	銳化
+Sharpen Edges	銳化邊緣
+Sharpen More	更多銳化
+Sharpest, with a little ringing on hard edges.	最銳利，在硬邊上會有些微光環。
+Shear…	修剪…
+Shift Edge	移動邊緣
+Show	顯示
+Show / Hide Layer	顯示 / 隱藏圖層
+Show / hide layer	顯示 / 隱藏圖層
+Show / hide the effects list	顯示 / 隱藏效果清單
+Show / hide the layer style	顯示 / 隱藏圖層樣式
+Show / hide this channel	顯示 / 隱藏此色版
+Show / hide this effect	顯示 / 隱藏此效果
+Show / hide this path	顯示 / 隱藏此路徑
+Show / hide this smart filter	顯示 / 隱藏此智慧型濾鏡
+Show Layers	顯示圖層
+Show every layer	顯示所有圖層
+Show or hide the position, size and alignment fields	顯示或隱藏位置、尺寸和對齊欄位
+Show or hide the recorded steps	顯示或隱藏錄製的步驟
+Show or hide the set's actions	顯示或隱藏組合的動作
+Show this alpha channel alone in grayscale and paint into it; click again to store it	以灰階單獨顯示此 Alpha 色版並在其中繪製；再按一下即可儲存
+Sides	邊
+Similar	選取相似
+Size	大小
+Size jitter	尺寸快速變換
+Skew	傾斜
+Skewness	偏度
+Slice Options	切片選項
+Slice Options…	切片選項…
+Slices	切片
+Slices from Guides	以引導線切片
+Slices…	切片…
+Small	小
+Small Caps	小型大寫字母
+Smart Blur…	智慧模糊…
+Smart Filter	智慧型濾鏡
+Smart Filters	智慧濾鏡
+Smart Guides	智慧型參考線
+Smart Object	智慧物件
+Smart Sharpen…	智慧銳化…
+Smart filter mask: click to paint on it	智慧型濾鏡遮色片：按一下以在其上繪製
+Smooth	光滑
+Smooth Selection	平滑選取範圍
+Smooth draws grey-scale edges; None draws hard, aliased edges. The glyph scaler has one smooth mode, so Sharp, Crisp and Strong are not offered.	平滑會繪製灰階邊緣；無會繪製銳利的鋸齒邊緣。字符縮放器只有一種平滑模式，因此不提供銳利、明晰和強烈。
+Smooth…	光滑…
+Snap	貼齊
+Snap To	貼齊至
+Soft Light	柔光
+Soft Round 100	柔邊圓形 100
+Soft Round 24	柔邊圓形 24
+Soft and cheap. Good for a small enlargement.	柔和且快速。適合小幅放大。
+Softer Brush	較柔筆刷
+Solarize	爆光過度
+Solid Color…	純色…
+Solidity	硬度
+Source	來源
+Source 1	來源 1
+Source 2	來源 2
+Source Space	來源空間
+Spectrum	光譜
+Spherize…	球體化…
+Spin Blur…	迴轉模糊…
+Splits the active layer into Linear Light detail layers over a residual, finest on top; together they recomposite to the layer.	將作用中圖層分割為位於殘差上方的線性光源細節圖層，最精細的在最上方；合起來可重新組成該圖層。
+Spot Channel	特別色色版
+Spot Channel Options…	特別色色版選項…
+Spot channel: composited over the image as its ink	特別色色版：以其油墨合成於影像上方
+Square	方形
+Squeeze	擠壓
+Stack Mode	堆疊模式
+Stamp Visible	蓋印可見圖層
+Standard	標準
+Standard Deviation	標準差
+Standard ligatures	標準連字
+Step Backward	上一步
+Step Forward	下一步
+Stop	停止
+Straighten Layer	拉直層
+Strength	強度
+Stroke	筆畫
+Stroke path with the foreground colour at the brush size, on a new shape layer	以前景色和筆刷尺寸描繪路徑，於新的形狀圖層上
+Stroke…	筆畫…
+Style	風格
+Styles	樣式
+Styles enabled	已啟用樣式
+Stylize	風格化濾鏡
+Sub	下標
+Subject	主題
+Subtract	減去
+Subtract Front Shape	減去前面形狀
+Subtract from Selection	從選取範圍中減去
+Summation	總和
+Sunset	夕陽
+Super	上標
+Superscript raises and shrinks the text; subscript lowers and shrinks it.	上標會升高並縮小文字；下標會降低並縮小文字。
+Surface Blur…	表面模糊…
+Swap colours  (X)	切換顏色  (X)
+Swap foreground and background (X)	切換前景色和背景色 (X)
+Swatches	色板
+TGA…	TGA…
+TIF…	TIF…
+Templates	模板
+Text	文字
+Text Properties	文字屬性
+Text overflows the box	文字超出文字框
+Text replacement	文字取代
+Texture Dilation…	紋理擴張…
+That channel is no longer in the document	該色版已不在文件中
+That file could not be used:	無法使用該檔案：
+The CSV ends inside a quoted field	CSV 在引號欄位內結束
+The CSV has a header but no data sets	CSV 有標題列但沒有資料組
+The CSV is empty	CSV 是空的
+The CSV names a variable that is not defined:	CSV 使用了未定義的變數：
+The active layer is not in the document	作用中圖層不在文件中
+The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	作用中的智慧型物件會依序顯示來源資料夾中的每張影像；每個結果都會以 PNG 轉存到目的地資料夾。
+The amount must be within	總量必須在以下範圍內：
+The angle must be a finite number of degrees	角度必須是有限的度數
+The balanced default for photographs.	適合相片的平衡預設值。
+The canvas grows to fit the rotated image.	畫布會擴大以容納旋轉後的影像。
+The canvas must be at least 1 x 1 pixel	畫布至少須為 1 x 1 像素
+The cell size must be 2 to 200 pixels	儲存格大小必須為 2 至 200 像素
+The cut is empty: paint more of the part to keep.	剪下的結果是空的：請塗抹更多要保留的部分。
+The destination is the profile the document already has	目標就是文件已有的描述檔
+The destination must be another folder than the source.	目的地必須是與來源不同的資料夾。
+The document has no layers	文件沒有圖層
+The document is already in {name}	文件已是 {name}
+The document is already tagged with this profile	文件已標記此描述檔
+The document is already tagged {name}	文件已標記為 {name}
+The document's own profile: {error}	文件本身的描述檔：{error}
+The first {shown} of {n} pages are listed; a longer file opens only those.	列出 {n} 頁中的前 {shown} 頁；較長的檔案只會開啟這些頁面。
+The image has no opaque pixels to count	影像沒有可計數的不透明像素
+The ink is laid over the image; the selection, if there is one, is where it prints.	油墨會疊在影像上；若有選取範圍，則只在選取範圍內印出。
+The last stop has no segment after it.	最後一個色標之後沒有區段。
+The layer has no pixels to cut.	圖層沒有可剪下的像素。
+The layer's pixels are locked	圖層的像素已鎖定
+The list is empty	清單是空的
+The margins and gutters leave no room for a column or a row	邊界和間距沒有留下容納欄或列的空間
+The margins and gutters leave no room for a column or a row.	邊界和間距沒有留下容納欄或列的空間。
+The name cannot be empty	名稱不可為空白
+The name has not changed	名稱沒有變更
+The name is the file File > Export > Slices writes this slice as. The URL and Alt Tag go into the HTML page it writes beside the images.	名稱是「檔案 > 轉存 > 切片」寫出此切片時使用的檔案名稱。URL 和 Alt 標記會寫入影像旁的 HTML 頁面。
+The new canvas is smaller — content outside it will be clipped.	新畫布較小 — 超出的內容將被裁掉。
+The next text layer the Type tool creates starts with this style.	文字工具建立的下一個文字圖層會以此樣式開始。
+The panel is already on this side	面板已在這一側
+The path encloses no pixel of the canvas	路徑沒有包圍畫布上的任何像素
+The position must be a finite number	位置必須是有限的數字
+The preview runs the real brush engine.	預視使用真正的筆刷引擎。
+The resolution must be 1 to 2400 ppi	解析度必須為 1 至 2400 ppi
+The resolution must be {min} to {max} dpi	解析度必須為 {min} 至 {max} dpi
+The rulers and the size readouts use this unit	尺標和尺寸讀數使用此單位
+The scale must be between 1% and 1000%	縮放必須介於 1% 和 1000% 之間
+The selection is kept with the document under this name	選取範圍會以此名稱隨文件保存
+The source and destination must be different folders	來源和目的地必須是不同的資料夾
+The steps this snapshot named have been discarded	此快照所命名的步驟已被捨棄
+The table needs a name	表格需要名稱
+The warp has not changed	彎曲沒有變更
+There are no guides to slice along	沒有可用來切片的參考線
+There are no slices to clear	沒有可清除的切片
+There is no history to clear	沒有可清除的步驟記錄
+There is no live selection to combine with	沒有可組合的作用中選取範圍
+These are matrix-shaper profiles, which carry no perceptual or saturation tables: those two intents convert as Relative Colorimetric.	這些是矩陣／曲線描述檔，不含感應式或飽和度表格：這兩種方式會以相對公制色度進行轉換。
+Thin	細體
+Third-party notices	第三方聲明
+This Layer	此圖層
+This adjustment has no panel controls	此調整沒有面板控制項
+This adjustment has no settings.	此調整沒有設定。
+This build keeps channels on layers; it has no free-standing alpha channels yet	此版本將色版保留在圖層上；尚無獨立的 Alpha 色版
+This effect is off. Tick it in the list to edit it.	此效果已關閉。請在清單中勾選以進行編輯。
+This format cannot store CMYK, so the document is written as RGB. Choose JPEG or TIFF for CMYK.	此格式無法儲存 CMYK，因此文件會以 RGB 寫入。若要 CMYK，請選擇 JPEG 或 TIFF。
+This format could not be previewed.	無法預視此格式。
+This format has no metadata slot: nothing is embedded	此格式沒有中繼資料欄位：不會嵌入任何內容
+This format has no palette, so the indexed colours are written as RGB. Choose PNG or GIF for the palette.	此格式沒有調色盤，因此索引色會以 RGB 寫入。若要保留調色盤，請選擇 PNG 或 GIF。
+This format stores 8 bits per channel	此格式每個色版儲存 8 位元
+This is a Lab document. No format here stores Lab, so it is converted to RGB on export.	這是 Lab 文件。此處沒有可儲存 Lab 的格式，因此轉存時會轉換為 RGB。
+This layer has no mask	此圖層沒有遮色片
+This panel is already at the bottom of its dock	此面板已在停駐區的最下方
+This panel is already at the top of its dock	此面板已在停駐區的最上方
+This tool has no options	此工具沒有選項
+This tool is already at its defaults	此工具已是預設值
+This window cannot read screen pixels, so the eyedropper is unavailable	此視窗無法讀取螢幕像素，因此無法使用滴管
+This works on a pixel layer; the active layer is a {kind}	此功能適用於像素圖層；作用中圖層是{kind}
+This works on an 8-bit document	此功能適用於 8 位元文件
+This works on an RGB document	此功能適用於 RGB 文件
+Threshold	閾值
+Threshold…	閾值…
+Thumbnail Size	縮圖尺寸
+Thumbnail size	縮圖尺寸
+Thumbnails by Document	依文件顯示縮圖
+Thumbnails by Layer	依圖層顯示縮圖
+Tiles/List	拼貼/清單
+Tiles…	拼貼…
+Tilt-Shift…	移軸模糊…
+Timeline	時間軸
+Tint	色調
+Tint hue	色調色相
+Tint saturation	色調飽和度
+To canvas	至畫布
+Toggle Link	切換連結
+Tonal width	色調寬度
+Tone	色調
+Tone and Detail	色調與細節
+Tool Presets	工具預設集
+Top	頂端
+Top Edges	頂端邊緣
+Top Left	頂端左側
+Top Left Pixel Color	左上角像素顏色
+Top Right	頂端右側
+Top left	左上
+Top right	右上
+Trace Contour…	等高線…
+Traces the active layer's colours into shape layers, one per colour.	將作用中圖層的顏色描繪為形狀圖層，每種顏色一個。
+Transform	變形
+Transform Layer	變形圖層
+Transform Selection	變形選取
+Transparency	透明度
+Transparent Pixels	透明像素
+Trim	修剪
+Trim Away	修剪掉
+Trim…	修剪…
+Tritone	三色調
+Turn on Resample to change the pixel count.	開啟「重新取樣」以變更像素數量。
+Twirl…	旋轉扭曲…
+Twist	扭曲
+Two variables share a name	兩個變數名稱相同
+Type	類型
+Type a zoom level	輸入縮放比例
+Type is edited in Character and Paragraph	文字需在字元和段落中編輯
+Type tool defaults	文字工具預設值
+UI scale	介面縮放
+URL	URL
+US Letter	美式信紙
+Ultra Condensed	超窄體
+Ultra Expanded	超寬體
+Underlying Layer	下方圖層
+Undo	還原
+Ungroup Layers	解散圖層群組
+Uniform	統一
+Unite Shapes	聯集形狀
+Units	單位
+Unmake Frames	取消影格
+Unsaved changes	未儲存的變更
+Unsharp Mask…	銳化遮色片…
+Update the applied comp from the layers	從圖層更新已套用的構圖
+Use Black Point Compensation	使用黑場補償
+Use global light	使用整體光源
+Using:	使用：
+Vanishing Point…	消失點…
+Variables	變數
+Variance	變異數
+Vector Mask	向量遮罩
+Vector density	向量密度
+Vector enabled	向量已啟用
+Vector feather	向量羽化
+Vector invert	向量反轉
+Vector mask	向量圖遮色片
+Vectorize	向量化
+Vectorize Bitmap	向量化位圖
+Vectorize Bitmap…	向量化位圖…
+Vertical Centers	垂直居中
+Vertical Distortion	垂直變形
+Vertical center guide	垂直中央參考線
+Vertical scale, in percent: stretches the glyphs about the baseline; leading is unchanged	垂直縮放（百分比）：以基線為準拉伸字符；行距不變
+Vertically	垂直
+Vibrance	鮮艷
+Vibrance…	鮮艷…
+View	檢視
+Violet	紫羅蘭色
+Visibility	可見度
+Visible adjustment layers	可見的調整圖層
+Vivid Light	強烈光源
+W	寬
+WEBP…	WEBP…
+Waiting for the composite…	正在等待合成影像…
+Warm	暖色
+Warp	曲線
+Warp Style	彎曲樣式
+Warp Text	彎曲文字
+Warp Text…	彎曲文字…
+Wave	波浪
+Wavelet Decompose	小波分解
+Wavelet Decompose splits into 2 to 7 scales	小波分解可分割為 2 至 7 個層級
+Wavelet Decompose works on an sRGB document	小波分解適用於 sRGB 文件
+Wavelet Decompose: the layer has no pixels	小波分解：圖層沒有像素
+Wavelet Decompose: {n} detail layers over a residual; the source layer is hidden	小波分解：殘差上方有 {n} 個細節圖層；來源圖層已隱藏
+Wavelet Decompose…	小波分解…
+Wave…	波浪…
+Web (216)	網頁（216）
+WebP (lossless)	WebP（無損）
+WebP (lossy)	WebP（有損）
+Weight	粗細
+White	白
+White to Black	白色到黑色
+Whites	白色
+Width	寬
+Width and height must be at least 1 pixel	寬度和高度至少須為 1 像素
+Width must be between 1 and 250 pixels	寬度必須介於 1 和 250 像素之間
+Width to 110%	寬度調為 110%
+Width to 125%	寬度調為 125%
+Width to 80%	寬度調為 80%
+Width to 90%	寬度調為 90%
+Window	視窗
+Wind…	風…
+With Handles	包含控點
+Work Path	工作路徑
+Workspace	工作區
+Wrap to box	在文字框內換行
+Writes the visible adjustment layers, applied to an identity lattice, as a 3D LUT (.cube).	將可見的調整圖層套用到單位格點後，寫出為 3D LUT（.cube）。
+Written as CMYK: a naive ink model, not an ICC press profile.	以 CMYK 寫入：簡易的油墨模型，並非 ICC 印刷描述檔。
+Written as XMP into PNG, JPEG and TIFF files by Export As.	由「轉存為」以 XMP 寫入 PNG、JPEG 和 TIFF 檔案。
+Written with the document's palette.	以文件的調色盤寫入。
+Yellow	黃
+Yellow / Blue	黃色 / 藍色
+Yellows	黃色
+ZigZag…	水波…
+Zoom In	放大
+Zoom Out	縮小
+Zoom in	放大
+Zoom out	縮小
+Zoom to Selection	縮放至選取範圍
+a layer could not be rewritten	無法重寫某個圖層
+before / after	之前 / 之後
+changed	已變更
+content thumbnail — click to edit the layer's pixels	內容縮圖 — 按一下以編輯圖層的像素
+dpi	dpi
+edits are aimed at this mask — right-click for view and mask options	編輯作用於此遮色片 — 按右鍵可取得檢視和遮色片選項
+lines past the box	行超出文字框
+mask off	遮色片已關閉
+mask thumbnail — click to edit the layer's mask	遮色片縮圖 — 按一下以編輯圖層的遮色片
+minutes (0 is off)	分鐘（0 為關閉）
+no drop	不放開
+px	像素
+records here	記錄於此
+skipped on play:	播放時略過：
+the layers could not be added	無法新增圖層
+the profile cannot be transformed ({error})	無法轉換描述檔（{error}）
+to	至
+vector mask thumbnail — click to edit the vector mask	向量圖遮色片縮圖 — 按一下以編輯向量圖遮色片
+{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time	{format}：時間軸，{frames} 個影格，每秒 {fps} 格，共 {length} 毫秒；每個影格顯示其時間點上的圖層
+{label} is not answered by this route	此途徑不處理 {label}
+{label} was refused: {reason}	{label} 被拒絕：{reason}
+{name} Residual	{name} 殘差
+{name} Scale {k}	{name} 層級 {k}
+{name}: {n} pages	{name}：{n} 頁
+{n} slices from the guides ({cols} x {rows}); they replace the slices there were	從參考線建立 {n} 個切片（{cols} x {rows}）；它們會取代原有的切片
+{path} is a {space} profile; an RGB document takes an RGB profile	{path} 是 {space} 描述檔；RGB 文件需要 RGB 描述檔
+{path} is {len} bytes, larger than any colour profile	{path} 有 {len} 位元組，比任何色彩描述檔都大
+{reason}; this one is {space}	{reason}；這個是 {space}
+16 Bits	16 位元
+8 Bits	8 位元
+AVIF…	AVIF…
+Blank preview image	空白預視影像
+Byte Order	位元組順序
+Depth	深度
+Duplicate Into…	複製到…
+Guides from Layer	從圖層新增參考線
+Minify the file	縮減檔案
+Nothing under the pointer for this row	此列在指標下方沒有任何內容
+Make Work Path	建立工作路徑
+RAW…	RAW…
+Remove Anchor Point	移除錨點
+Remove Path	移除路徑
+Make Selection	建立選取範圍
+Divide…	分割…
+Right-click on an anchor point of the path	在路徑的錨點上按右鍵
+Right-click inside a path	在路徑內按右鍵
+Save PSD/PSB	儲存 PSD/PSB
+Save PSD/PSB…	儲存 PSD/PSB…
+Select or draw a path first	請先選取或繪製路徑
+Right-click on a text layer	在文字圖層上按右鍵
+Right-click inside a slice	在切片內按右鍵
+Divide Slices	分割切片
+N equal parts	N 個等分
+N pixels per part	每份 N 像素
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	將您按右鍵的切片（若沒有則為畫布）切割成切片格點。
+Tick Horizontally or Vertically	請勾選「水平」或「垂直」
+These settings make no cut: raise N or pick a smaller pixel count	這些設定不會切割任何內容：請提高 N 或選擇較小的像素數
+Cancel (Esc)	取消（Esc）
+All Documents	所有文件
+Select Source	選取來源
+Alt	Alt
+Turn into JPG	轉換為 JPG
+ZIP for pixel data	像素資料使用 ZIP
+a	a
+b	b
+Open a document to see its memory	開啟文件以查看其記憶體
+Image data	影像資料
+{undo} undo / {redo} redo steps	{undo} 個還原步驟 / {redo} 個重做步驟
+Holds copied pixels	包含拷貝的像素
+{size} ({tiles} tiles)	{size}（{tiles} 個圖塊）
+Empty	空的
+Purge Clipboard	清除剪貼簿
+Purge Histories	清除步驟記錄
+Purge All	全部清除
+Make	建立
+There is no path; draw one or select it in the Paths panel	沒有路徑；請繪製一條或在路徑面板中選取
+Artboards	畫板
+No Slices	無切片
+All Slices	所有切片
+User Slices	使用者切片
+Put the file into ZIP	將檔案放入 ZIP
+Reverse pages	反轉頁面順序

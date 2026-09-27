@@ -1,0 +1,1677 @@
+# Raster Studio interface strings, nl. One row per line: the English source, a TAB,
+# the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
+# Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
+@name	Nederlands
+Artboards	Tekengebieden
+No Slices	Geen segmenten
+All Slices	Alle segmenten
+User Slices	Gebruikerssegmenten
+Put the file into ZIP	Bestand in een ZIP plaatsen
+16 Bits	16 bits
+8 Bits	8 bits
+AVIF…	AVIF…
+Blank preview image	Lege voorbeeldafbeelding
+Byte Order	Bytevolgorde
+Depth	Diepte
+Duplicate Into…	Dupliceren naar…
+Guides from Layer	Hulplijnen van laag
+Minify the file	Bestand verkleinen
+Nothing under the pointer for this row	Niets onder de aanwijzer voor dit item
+Make Work Path	Werkpad maken
+RAW…	RAW…
+Remove Anchor Point	Ankerpunt verwijderen
+Remove Path	Pad verwijderen
+Make Selection	Selectie maken
+Divide…	Verdelen…
+Right-click on an anchor point of the path	Klik met de rechtermuisknop op een ankerpunt van het pad
+Right-click inside a path	Klik met de rechtermuisknop binnen een pad
+Save PSD/PSB	PSD/PSB opslaan
+Save PSD/PSB…	PSD/PSB opslaan…
+Select or draw a path first	Selecteer of teken eerst een pad
+Right-click on a text layer	Klik met de rechtermuisknop op een tekstlaag
+Right-click inside a slice	Klik met de rechtermuisknop binnen een segment
+Divide Slices	Segmenten verdelen
+N equal parts	N gelijke delen
+N pixels per part	N pixels per deel
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Snijdt het segment waarop u met rechts klikte, of het canvas als er geen was, in een raster van segmenten.
+Tick Horizontally or Vertically	Vink Horizontaal of Verticaal aan
+These settings make no cut: raise N or pick a smaller pixel count	Deze instellingen snijden niets: verhoog N of kies minder pixels
+ fps	 fps
+ frames	 frames
+ ms	 ms
+ px	 px
+0 bytes	0 bytes
+16 Bits/Channel	16 bits/kanaal
+16 bit	16 bit
+32 Bits/Channel	32 bits/kanaal
+3D	3D
+50% Grey	50% grijs
+50% Threshold	50% drempel
+8 Bits/Channel	8 bits/kanaal
+8 bit	8 bit
+90° Clockwise	90° rechtsom
+90° Counter Clockwise	90° linksom
+A CSV row has the wrong number of fields, at line	Een CSV-rij heeft het verkeerde aantal velden, op regel
+A blank canvas at any size	Een leeg canvas van elk formaat
+A colour channel cannot be deleted	Een kleurkanaal kan niet worden verwijderd
+A layered raster editor	Een rasterbewerker met lagen
+A palette holds 2 to 256 colours	Een palet bevat 2 tot 256 kleuren
+A saved selection already has that name	Een opgeslagen selectie heeft die naam al
+A saved selection: click to open Select > Load Selection, then choose it by name there	Een opgeslagen selectie: klik om Selecteren > Selectie laden te openen en kies haar daar op naam
+A slice needs a name	Een segment heeft een naam nodig
+AV1 (smaller, newer players)	AV1 (kleiner, nieuwere spelers)
+About Raster Studio	Over Raster Studio
+Absolute Colorimetric	Absoluut colorimetrisch
+Action sets	Actiesets
+Actions	Handelingen
+Adaptive (median cut)	Adaptief (mediaan-snede)
+Add "copy" to copied layers	"kopie" toevoegen aan gekopieerde lagen
+Add Artboard Above	Tekengebied boven toevoegen
+Add Artboard Below	Tekengebied onder toevoegen
+Add Artboard Left	Tekengebied links toevoegen
+Add Artboard Right	Tekengebied rechts toevoegen
+Add Filter Mask	Filtermasker toevoegen
+Add Media	Media toevoegen
+Add Noise…	Ruis toevoegen…
+Add a layer mask	Een laagmasker toevoegen
+Add a smart filter mask	Een slim-filtermasker toevoegen
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Een afbeeldings- of videobestand plaatsen (Bestand > Ingesloten plaatsen); een video wordt een videolaag bij de afspeelkop
+Add an adjustment layer	Een aanpassingslaag toevoegen
+Add another instance of this effect	Nog een exemplaar van dit effect toevoegen
+Add current colour	Huidige kleur toevoegen
+Add export	Export toevoegen
+Add frame	Frame toevoegen
+Add or remove room around the image. Pixels are not resampled.	Ruimte rond de afbeelding toevoegen of verwijderen. Pixels worden niet opnieuw berekend.
+Add shortcut	Sneltoets toevoegen
+Add to Selection	Toevoegen aan selectie
+Adds one guide at a document coordinate, in pixels.	Voegt één hulplijn toe op een documentcoördinaat, in pixels.
+Adjustment	Aanpassing
+Adjustments	Aanpassingen
+Advanced	Geavanceerd
+Again	Opnieuw
+Again with Copy	Opnieuw met kopie
+Aliased (pencil)	Gekarteld (potlood)
+Align	Uitlijnen
+Align the bottom edge to the canvas	Onderrand uitlijnen op het canvas
+Align the left edge to the canvas	Linkerrand uitlijnen op het canvas
+Align the right edge to the canvas	Rechterrand uitlijnen op het canvas
+Align the top edge to the canvas	Bovenrand uitlijnen op het canvas
+Align with layer	Uitlijnen met laag
+All	Alles
+All Caps	Hoofdletters
+All Caps shapes every lowercase letter as its capital; Small Caps shapes it as a capital at 70 % size. The stored text keeps the case you typed.	Hoofdletters vormt elke kleine letter als hoofdletter; Klein kapitaal vormt haar als hoofdletter op 70 % grootte. De opgeslagen tekst behoudt de hoofdletters zoals u ze typte.
+All Layers	Alle lagen
+Alpha	Alfa
+Already used by	Al gebruikt door
+Alt Tag	Alt-tag
+Amount	Hoeveelheid
+An export needs at least one output	Een export heeft minstens één uitvoer nodig
+An image or project from this computer	Een afbeelding of project van deze computer
+Angle	Hoek
+Angle (degrees)	Hoek (graden)
+Angle jitter	Hoekvariatie
+Animation	Animatie
+Another slice already has this name	Een ander segment heeft deze naam al
+Appearance	Weergavestijl
+Applied	Toegepast
+Apply	Toepassen
+Apply Guides	Hulplijnen toepassen
+Apply Image	Afbeelding toepassen
+Apply Image…	Afbeelding toepassen…
+Apply Mask	Masker toepassen
+Apply Style	Stijl toepassen
+Apply Style 1	Stijl 1 toepassen
+Apply Style Preset…	Stijlvoorinstelling toepassen…
+Apply the next comp	De volgende compositie toepassen
+Apply the previous comp	De vorige compositie toepassen
+Apply this mask	Dit masker toepassen
+Approximate. The composited result is what the canvas shows.	Benadering. Het samengestelde resultaat is wat het canvas toont.
+Arbitrary…	Willekeurig…
+Arc	Boog
+Arc Lower	Boog onder
+Arc Upper	Boog boven
+Arch	Boog
+Arrange	Ordenen
+Artboard	Tekengebied
+Artboard from Layers	Tekengebied van lagen
+Artboards in one document	Tekengebieden in één document
+Artboards to Files…	Tekengebieden naar bestanden…
+Assign Profile	Profiel toewijzen
+Assigned {name}: the pixel numbers are unchanged, so the colours look different	{name} toegewezen: de pixelwaarden zijn ongewijzigd, dus de kleuren zien er anders uit
+Author	Auteur
+Auto Color	Automatische kleuren
+Auto Contrast	Automatisch contrast
+Auto Tone	Automatische tint
+Auto leading	Automatische regelafstand
+Auto-Align Layers…	Lagen automatisch uitlijnen…
+Auto-Blend Layers…	Lagen automatisch overvloeien…
+Automate	Automatiseren
+Autosaves of never-saved documents go here; empty uses the default	Automatisch opgeslagen kopieën van nooit opgeslagen documenten komen hier; leeg gebruikt de standaard
+Average	Gemiddelde
+BMP…	BMP…
+Back to the colour this opened on	Terug naar de kleur waarmee dit opende
+Background — double-click for the picker	Achtergrond — dubbelklik voor de kleurkiezer
+Based On	Gebaseerd op
+Baseline shift	Verticale verplaatsing
+Baseline to baseline. Auto leading follows the type size.	Basislijn tot basislijn. Automatische regelafstand volgt de lettergrootte.
+Batch	Batch
+Batch…	Batch…
+Bend	Buigen
+Bevel	Schuine kant
+Bevel & Emboss	Schuine kant en reliëf
+Bevel & Emboss…	Schuine kant en reliëf…
+Bind a text replacement variable to a text layer, or a visibility variable to any layer.	Een tekstvervangingsvariabele aan een tekstlaag koppelen, of een zichtbaarheidsvariabele aan elke laag.
+Bitmap	Bitmap
+Bitmap…	Bitmap…
+Black	Zwart
+Black & White	Zwart-wit
+Black & White…	Zwart-wit…
+Black to Transparent	Zwart naar transparant
+Black to White	Zwart naar wit
+Black to white through the inks	Zwart naar wit via de inkten
+Blacks	Zwarttinten
+Blend If	Overvloeien als
+Blend Mode: Color	Overvloeimodus: Kleur
+Blend Mode: Color Burn	Overvloeimodus: Kleur doordrukken
+Blend Mode: Color Dodge	Overvloeimodus: Kleur tegenhouden
+Blend Mode: Darken	Overvloeimodus: Donkerder
+Blend Mode: Difference	Overvloeimodus: Verschil
+Blend Mode: Dissolve	Overvloeimodus: Verspreiden
+Blend Mode: Exclusion	Overvloeimodus: Uitsluiting
+Blend Mode: Hard Light	Overvloeimodus: Fel licht
+Blend Mode: Hard Mix	Overvloeimodus: Harde mix
+Blend Mode: Hue	Overvloeimodus: Kleurtoon
+Blend Mode: Lighten	Overvloeimodus: Lichter
+Blend Mode: Linear Burn	Overvloeimodus: Lineair doordrukken
+Blend Mode: Linear Dodge (Add)	Overvloeimodus: Lineair tegenhouden (toevoegen)
+Blend Mode: Linear Light	Overvloeimodus: Lineair licht
+Blend Mode: Luminosity	Overvloeimodus: Lichtsterkte
+Blend Mode: Multiply	Overvloeimodus: Vermenigvuldigen
+Blend Mode: Normal	Overvloeimodus: Normaal
+Blend Mode: Overlay	Overvloeimodus: Bedekken
+Blend Mode: Pin Light	Overvloeimodus: Puntlicht
+Blend Mode: Saturation	Overvloeimodus: Verzadiging
+Blend Mode: Screen	Overvloeimodus: Bleken
+Blend Mode: Soft Light	Overvloeimodus: Zacht licht
+Blend Mode: Vivid Light	Overvloeimodus: Intens licht
+Blending	Overvloeien
+Blending Options	Opties voor overvloeien
+Blending Options…	Opties voor overvloeien…
+Blending options	Overvloeiopties
+Blends a source document, layer or channel into the active layer as one step.	Laat een brondocument, -laag of -kanaal in één stap overvloeien in de actieve laag.
+Blends one channel of each of two sources into a new channel, a selection or a new document.	Laat één kanaal van elk van twee bronnen overvloeien in een nieuw kanaal, een selectie of een nieuw document.
+Blue	Blauw
+Blues	Blauwtinten
+Blur	Vervaging
+Blur Gallery	Galerie vervagen
+Blur More	Meer vervagen
+Bold	Vet
+Border Selection	Randselectie
+Border…	Rand…
+Both axes	Beide assen
+Bottom	Onderaan
+Bottom Edges	Onderranden
+Bottom Left	Linksonder
+Bottom Right	Rechtsonder
+Bottom Right Pixel Color	Kleur van pixel rechtsonder
+Bottom left	Linksonder
+Bottom right	Rechtsonder
+Box Blur…	Omgevingsvervagen…
+Box height	Vakhoogte
+Brightness	Helderheid
+Brightness jitter	Helderheidsvariatie
+Brightness/Contrast	Helderheid/contrast
+Brightness/Contrast…	Helderheid/contrast…
+Bring Forward	Naar voren
+Bring to Front	Naar voorgrond
+Brush Editor	Penseeleditor
+Brush: Background	Penseel: achtergrond
+Brush: Foreground	Penseel: voorgrond
+Brushes	Penselen
+Bulge	Bollend
+Butt	Plat
+CMYK Color	CMYK-kleur
+Calculations	Berekeningen
+Calculations…	Berekeningen…
+Camera Raw…	Camera Raw…
+Canvas Size	Canvasgrootte
+Canvas Size…	Canvasgrootte…
+Canvas extension	Canvasuitbreiding
+Caps	Uiteinden
+Carries the XMP; the source's EXIF goes into JPEG only	Bevat de XMP; de EXIF van de bron gaat alleen in JPEG
+Cell size (pixels)	Celgrootte (pixels)
+Center	Midden
+Center horizontally on the canvas	Horizontaal centreren op het canvas
+Center vertically on the canvas	Verticaal centreren op het canvas
+Centimeters	Centimeters
+Centre	Midden
+Centre the view on this note	De weergave op deze notitie centreren
+Change Bit Depth	Bitdiepte wijzigen
+Change Colour Mode	Kleurmodus wijzigen
+Change Layer Properties	Laageigenschappen wijzigen
+Change how many pixels the document has, or how large it prints.	Wijzig hoeveel pixels het document heeft, of hoe groot het wordt afgedrukt.
+Channel	Kanaal
+Channel Mixer	Kanaalmixer
+Channel Mixer…	Kanaalmixer…
+Channel thumbnail	Kanaalminiatuur
+Channels	Kanalen
+Character	Teken
+Character Style	Tekenstijl
+Character Styles	Tekenstijlen
+Checkerboard	Dambord
+Choose 2 to 256 colours	Kies 2 tot 256 kleuren
+Choose a colour profile	Kies een kleurprofiel
+Choose a destination folder	Kies een doelmap
+Choose a source folder	Kies een bronmap
+Choose at least one page to open	Kies minstens één pagina om te openen
+Choose at least one side to trim	Kies minstens één zijde om bij te snijden
+Choose the Action to play	Kies de af te spelen actie
+Choose the open grayscale document each channel of the new RGB document comes from.	Kies het geopende grijswaardendocument waaruit elk kanaal van het nieuwe RGB-document komt.
+Choose the pages to open, their resolution and how they open.	Kies de te openen pagina's, hun resolutie en hoe ze openen.
+Choose the source and the destination folders.	Kies de bron- en doelmappen.
+Choose…	Kiezen…
+Clear	Wissen
+Clear All	Alles wissen
+Clear Guides	Hulplijnen wissen
+Clear History	Geschiedenis wissen
+Clear Layer Style	Laagstijl wissen
+Clear Slices	Segmenten wissen
+Clear Strokes	Streken wissen
+Clear existing guides	Bestaande hulplijnen wissen
+Clear the {noun} from the active text layer	De {noun} van de actieve tekstlaag wissen
+Cleared {n} slice(s)	{n} segment(en) gewist
+Click an item in the panel first	Klik eerst op een item in het deelvenster
+Click anywhere to sample a colour	Klik ergens om een kleur te nemen
+Click anywhere to sample a colour, or press Escape.	Klik ergens om een kleur te nemen, of druk op Escape.
+Click the graph to add a point, drag a point to bend the curve, drag it off the graph to remove it	Klik in de grafiek om een punt toe te voegen, sleep een punt om de curve te buigen, sleep het uit de grafiek om het te verwijderen
+Click the preview to sample a colour from it	Klik in de voorvertoning om er een kleur uit te nemen
+Click the preview to sample the colour to replace	Klik in de voorvertoning om de te vervangen kleur te nemen
+Click the ramp to edit its stops.	Klik op de verloopbalk om de kleurpunten te bewerken.
+Clip to layer below	Uitknippen naar onderliggende laag
+Clipboard	Klembord
+Clipping	Uitknippen
+Close	Sluiten
+Close All	Alles sluiten
+Close Alpha Channel	Alfakanaal sluiten
+Close Others	Andere sluiten
+Close panel	Deelvenster sluiten
+Clouds	Wolken
+Codec	Codec
+Color	Kleur
+Color Balance	Kleurbalans
+Color Balance…	Kleurbalans…
+Color Burn	Kleur doordrukken
+Color Dodge	Kleur tegenhouden
+Color Dynamics	Kleurdynamiek
+Color Halftone…	Kleurhalftoon…
+Color Intensity	Kleurintensiteit
+Color Label	Kleurlabel
+Color Lookup	Kleur-opzoektabellen
+Color Lookup Tables…	Kleuropzoektabellen…
+Color Lookup…	Kleur-opzoektabellen…
+Color Overlay	Kleurbedekking
+Color Overlay…	Kleurbedekking…
+Color Picker	Kleurkiezer
+Color Range	Kleurbereik
+Color Range…	Kleurbereik…
+Color fringe cleanup: pulls the boundary pixels' color toward the nearby interior ink — a separate edit from mask refinement.	Kleurrandopschoning: trekt de kleur van de randpixels naar de nabije binnenkleur — een aparte bewerking, los van maskerverfijning.
+Color to Alpha…	Kleur naar alpha…
+Colors	Kleuren
+Colour	Kleur
+Colour varies once per stroke.	De kleur varieert eenmaal per streek.
+Colours	Kleuren
+Colours must be 1 to 64, the tolerance above 0 and the corner length at least 1	Kleuren moeten 1 tot 64 zijn, de tolerantie boven 0 en de hoeklengte minstens 1
+Columns	Kolommen
+Columns and rows with gutters between them, inside optional margins, in pixels.	Kolommen en rijen met tussenruimten, binnen optionele marges, in pixels.
+Combine Shapes	Vormen combineren
+Commit (Enter)	Doorvoeren (Enter)
+Cancel (Esc)	Annuleren (Esc)
+All Documents	Alle documenten
+Select Source	Bron selecteren
+Alt	Alt
+Commit Contents	Inhoud doorvoeren
+Composite	Samengesteld
+Condensed	Smal
+Cone	Kegel
+Constant	Constant
+Constrain proportions	Verhoudingen behouden
+Content-Aware	Inhoud behouden
+Content-Aware Scale	Zo schalen dat inhoud behouden blijft
+Contour	Randen
+Contract Selection	Selectie slinken
+Contract by	Slinken met
+Contract…	Inkrimpen…
+Contrast	Contrast
+Conversion Options	Conversieopties
+Convert Formats	Indelingen converteren
+Convert Formats…	Indelingen converteren…
+Convert for Smart Filters	Omzetten voor slimme filters
+Convert to Layers	Omzetten in lagen
+Convert to Linked…	Omzetten in gekoppeld…
+Convert to Paragraph Text	Omzetten in alineatekst
+Convert to Point Text	Omzetten in punttekst
+Convert to Profile	Omzetten in profiel
+Convert to Profile works on 8- and 16-bit documents	Omzetten in profiel werkt op documenten van 8 en 16 bit
+Convert to Profile…	Omzetten in profiel…
+Convert to Shape	Omzetten in vorm
+Convert to Smart Object	Omzetten in slim object
+Converted to {name} ({intent}): the numbers changed so the colours look the same	Omgezet naar {name} ({intent}): de waarden zijn gewijzigd zodat de kleuren er hetzelfde uitzien
+Cool	Koel
+Copper	Koper
+Copy	Kopiëren
+Copy Layer Style	Laagstijl kopiëren
+Copy Merged	Verenigd kopiëren
+Copyright Notice	Copyrightvermelding
+Corner length	Hoeklengte
+Corner radius	Hoekstraal
+Corner radius applies to rectangles; this path has no corners to round	Hoekstraal geldt voor rechthoeken; dit pad heeft geen hoeken om af te ronden
+Corners	Hoeken
+Count jitter	Aantalvariatie
+Create Clipping Mask	Uitknipmasker maken
+Create Layer	Laag maken
+Create Layers	Lagen maken
+Crop	Uitsnijden
+Crop and Straighten Photos	Foto's uitsnijden en rechtzetten
+Crops the canvas to the content, judged by the basis below.	Snijdt het canvas bij tot de inhoud, beoordeeld op de basis hieronder.
+Crystallize…	Kristal…
+Current Layer	Huidige laag
+Current Path	Huidig pad
+Curve tolerance	Curvetolerantie
+Curves	Curves
+Curves…	Curves…
+Custom	Aangepast
+Custom Brush	Aangepast penseel
+Custom: with the Move tool, drag the 16 mesh handles on the canvas	Aangepast: sleep met het gereedschap Verplaatsen de 16 rastergrepen op het canvas
+Custom…	Aangepast…
+Cut	Knippen
+Cyan	Cyaan
+Cyan / Red	Cyaan / rood
+Cyans	Cyaantinten
+DDS…	DDS…
+DXF…	DXF…
+Dark	Donker
+Dark Blue	Donkerblauw
+Dark Grey	Donkergrijs
+Darken	Donkerder
+Darker Color	Donkerdere kleur
+Dash	Streepjes
+Data Set	Gegevensset
+Data Sets	Gegevenssets
+Data Sets…	Gegevenssets…
+Default	Standaard
+Default colours  (D)	Standaardkleuren  (D)
+Default colours (D)	Standaardkleuren (D)
+Define	Definiëren
+Define Brush Preset…	Penseelvoorinstelling definiëren…
+Define Custom Shape…	Aangepaste vorm definiëren…
+Define New	Nieuwe definiëren
+Define Pattern…	Patroon definiëren…
+Define…	Definiëren…
+Delete	Verwijderen
+Delete Filter Mask	Filtermasker verwijderen
+Delete Layer	Laag verwijderen
+Delete Mask	Masker verwijderen
+Delete Vector Mask	Vectormasker verwijderen
+Delete action	Actie verwijderen
+Delete channel	Kanaal verwijderen
+Delete frame	Frame verwijderen
+Delete path	Pad verwijderen
+Delete selected layers	Geselecteerde lagen verwijderen
+Delete set and its actions	Set en de acties ervan verwijderen
+Delete stop	Kleurpunt verwijderen
+Delete the applied comp	De toegepaste compositie verwijderen
+Delete the selected keyframe	Het geselecteerde hoofdframe verwijderen
+Delete the selected tool preset	De geselecteerde gereedschapsvoorinstelling verwijderen
+Delete the selected {noun}	De geselecteerde {noun} verwijderen
+Delete the smart filter mask	Het slim-filtermasker verwijderen
+Delete this note	Deze notitie verwijderen
+Delete this smart filter	Dit slimme filter verwijderen
+Delete this spot channel	Dit steunkleurkanaal verwijderen
+Density	Dichtheid
+Dents…	Deuken…
+Desaturate	Minder verzadiging
+Description	Beschrijving
+Deselect	Deselecteren
+Deselect Layers	Lagen deselecteren
+Despeckle	Uitstippen
+Destination	Bestemming
+Destination Space	Doelruimte
+Detail	Detail
+Detail scales	Detailschalen
+Diamond	Ruitvormig
+Difference	Verschil
+Difference Clouds	Wolken (Verschil)
+Diffuse…	Diffuus…
+Diffusion	Diffusie
+Diffusion Dither	Diffusie-dithering
+Disable / Enable Filter Mask	Filtermasker uitschakelen / inschakelen
+Disable / Enable Mask	Masker uitschakelen / inschakelen
+Disable / Enable Vector Mask	Vectormasker uitschakelen / inschakelen
+Disable Mask	Masker uitschakelen
+Disable Vector Mask	Vectormasker uitschakelen
+Displace…	Verplaatsen…
+Dissolve	Verspreiden
+Distance	Afstand
+Distort	Vervormen
+Distribute	Verdelen
+Dither	Dithering
+Dither…	Dithering…
+Divide	Verdelen
+Dock this panel here	Dit deelvenster hier koppelen
+Document	Document
+Document Bounds	Documentgrenzen
+Document Info	Documentinfo
+Document Title	Documenttitel
+Document size	Documentgrootte
+Double-click to edit in Layer Style; drag to the trash to delete	Dubbelklik om te bewerken in Laagstijl; sleep naar de prullenbak om te verwijderen
+Double-click to edit this filter's settings	Dubbelklik om de instellingen van dit filter te bewerken
+Double-click to rename	Dubbelklik om de naam te wijzigen
+Drag a line with the Ruler first	Trek eerst een lijn met de liniaal
+Drag to zoom the view	Sleep om de weergave te zoomen
+Drop Shadow	Slagschaduw
+Drop Shadow…	Slagschaduw…
+Duotone	Duotoon
+Duotone Options	Duotoonopties
+Duotone…	Duotoon…
+Duplicate	Dupliceren
+Duplicate Layer	Laag dupliceren
+Duplicate Layer…	Laag dupliceren…
+Duplicate frame	Frame dupliceren
+Dust & Scratches…	Stof en krassen…
+EMF…	EMF…
+EXIF and XMP writing is not implemented — only ICC is embedded	Het schrijven van EXIF en XMP is niet geïmplementeerd — alleen ICC wordt ingesloten
+EXR…	EXR…
+Ease In	Langzaam in
+Ease Out	Langzaam uit
+Edge Glow	Gloeiende randen
+Edge refinement: feather, shift, smooth, and contrast over the mask's existing coverage — not subject recognition.	Randverfijning: doezelen, verschuiven, afvlakken en contrast over de bestaande dekking van het masker — geen onderwerpherkenning.
+Edges	Randen
+Edit	Bewerken
+Edit Adjustment	Aanpassing bewerken
+Edit Adjustment…	Aanpassing bewerken…
+Edit Alpha Channel	Alfakanaal bewerken
+Edit Contents…	Inhoud bewerken…
+Edit Document Records	Documentgegevens bewerken
+Edit Fill	Vulling bewerken
+Edit Filter Mask	Filtermasker bewerken
+Edit Generator	Generator bewerken
+Edit Group	Groep bewerken
+Edit Guides	Hulplijnen bewerken
+Edit Raster	Raster bewerken
+Edit Saved Selection	Opgeslagen selectie bewerken
+Edit Shape	Vorm bewerken
+Edit Slices	Segmenten bewerken
+Edit Smart object	Slim object bewerken
+Edit Text	Tekst bewerken
+Edit Timeline	Tijdlijn bewerken
+Edit brush…	Penseel bewerken…
+Edit fill	Vulling bewerken
+Edit gradient stops — click to open the editor	Verloopkleurpunten bewerken — klik om de editor te openen
+Edit in Quick Mask Mode	Bewerken in snelmaskermodus
+Edit this ramp	Dit verloop bewerken
+Effects	Effecten
+Effects apply to the whole layer and undo as one step.	Effecten gelden voor de hele laag en worden in één stap ongedaan gemaakt.
+Embed EXIF and XMP	EXIF en XMP insluiten
+Embed Linked	Gekoppeld insluiten
+Embed colour profile	Kleurprofiel insluiten
+Embedded source	Ingesloten bron
+Emboss…	Reliëf…
+Enable / disable the smart filter mask	Het slim-filtermasker in- / uitschakelen
+Enable Mask	Masker inschakelen
+Enable Vector Mask	Vectormasker inschakelen
+Enable at least one export	Schakel minstens één export in
+Enabled	Ingeschakeld
+Enlarge smaller images	Kleinere afbeeldingen vergroten
+Enter a colour like #3366CC	Voer een kleur in zoals #3366CC
+Entropy	Entropie
+Equalize	Egaliseren
+Essentials	Basis
+Every enabled row is written when you export.	Elke ingeschakelde rij wordt geschreven wanneer u exporteert.
+Every image in the source folder is fitted into the box and written to the destination folder in its own format.	Elke afbeelding in de bronmap wordt in het vak gepast en in haar eigen indeling naar de doelmap geschreven.
+Every parameter is at its neutral value — there is nothing to clean	Elke parameter staat op zijn neutrale waarde — er valt niets op te schonen
+Every parameter is at its neutral value — there is nothing to refine	Elke parameter staat op zijn neutrale waarde — er valt niets te verfijnen
+Every variable needs a name	Elke variabele heeft een naam nodig
+Exact	Exact
+Exclude Overlapping Shapes	Overlappende vormen uitsluiten
+Exclusion	Uitsluiting
+Expand Selection	Selectie vergroten
+Expand by	Vergroten met
+Expand the dock	Het dock uitvouwen
+Expanded	Breed
+Expand…	Uitbreiden…
+Export	Exporteren
+Export As	Exporteren als
+Export Color Lookup	Kleur opzoeken exporteren
+Export Contents…	Inhoud exporteren…
+Export Diagnostics…	Diagnose exporteren…
+Export Layers…	Lagen exporteren…
+Export PDF	PDF exporteren
+Export as .ABR…	Exporteren als .ABR…
+Export as .ACO…	Exporteren als .ACO…
+Export as .ASL…	Exporteren als .ASL…
+Export set as .atn	Set exporteren als .atn
+Export…	Exporteren…
+Exposure	Belichting
+Exposure…	Belichting…
+Extra Bold	Extra vet
+Extra Condensed	Extra smal
+Extra Expanded	Extra breed
+Extra Light	Extra licht
+Extras	Extra's
+Extrude…	Geef diepte…
+Eyedropper	Pipet
+Face	Letterbeeld
+Facet	Facet
+Fade	Vervagen
+Fade…	Vervagen…
+Family	Familie
+Feather	Doezelaar
+Feather Selection	Selectie doezelen
+Feather radius	Doezelstraal
+Feather…	Doezelaar…
+Fibers…	Vezels…
+Field Blur…	Veld vervagen…
+File	Bestand
+File Info	Bestandsinfo
+File Info…	Bestandsinfo…
+File name	Bestandsnaam
+Files that fail are listed in batch-errors.txt in the destination.	Mislukte bestanden worden vermeld in batch-errors.txt in het doel.
+Fill	Vullen
+Fill Filter Mask	Filtermasker vullen
+Fill Layer	Opvullaag
+Fill Mask	Masker vullen
+Fill Screen	Scherm vullen
+Fill in File Info, or open a file that has EXIF, to embed metadata	Vul Bestandsinfo in, of open een bestand met EXIF, om metagegevens in te sluiten
+Fill path with the foreground colour, on a new shape layer	Pad vullen met de voorgrondkleur, op een nieuwe vormlaag
+Fill type	Vultype
+Fills the active selection with the chosen contents.	Vult de actieve selectie met de gekozen inhoud.
+Fill…	Vullen…
+Filter	Filter
+Filter Gallery	Filtergalerie
+Filter Gallery…	Filtergalerie…
+Find Edges	Contrastlijn
+First line	Eerste regel
+Fish	Vis
+Fisheye	Visoog
+Fit The Area	Vul het gebied
+Fit on Screen	Passend in scherm
+Fit the whole image in the window	De hele afbeelding in het venster passen
+Fixed height	Vaste hoogte
+Flag	Vlag
+Flame…	Vlam…
+Flat Angled 40	Plat schuin 40
+Flatten Image	Eén laag maken
+Flip Canvas Horizontal	Canvas horizontaal omdraaien
+Flip Canvas Vertical	Canvas verticaal omdraaien
+Flip Horizontal	Horizontaal omdraaien
+Flip Vertical	Verticaal omdraaien
+Flip View Horizontal	Weergave horizontaal omdraaien
+Flip View Vertical	Weergave verticaal omdraaien
+Flow jitter	Stroomvariatie
+Folders	Mappen
+Font: 	Lettertype: 
+Foreground strokes mark what to keep, background strokes what to drop; Preview shows the cut.	Voorgrondstreken markeren wat blijft, achtergrondstreken wat wegvalt; Voorvertoning toont de snede.
+Foreground — double-click for the picker	Voorgrond — dubbelklik voor de kleurkiezer
+Foreground/background jitter	Voorgrond-/achtergrondvariatie
+Format	Indeling
+Fourier	Fourier
+Fourier Transform	Fouriertransformatie
+Fragment	Fragmentatie
+Frame	Kader
+Frames	Frames
+Free Transform	Vrije transformatie
+Free Transform a Copy	Een kopie vrij transformeren
+From Transparency	Van transparantie
+Fullscreen	Volledig scherm
+Fuzziness	Overeenkomst
+GIF…	GIF…
+Gamma	Gamma
+Gamut Warning	Gamutwaarschuwing
+Gaussian	Gaussiaans
+Gaussian Blur…	Gaussiaans vervagen…
+Generate Mockups	Mockups genereren
+Generate Mockups…	Mockups genereren…
+Give the brush a name	Geef het penseel een naam
+Give the export a file name	Geef de export een bestandsnaam
+Glass Menus	Glazen menu's
+Global light	Globaal licht
+Glyphs	Glyphs
+Gradient	Verloop
+Gradient Editor	Verloop wijzigen
+Gradient Map	Verloop toewijzen
+Gradient Map…	Verloop toewijzen…
+Gradient Overlay	Verloopbedekking
+Gradient Overlay…	Verloopbedekking…
+Gradient…	Verloop…
+Gray	Grijs
+Grayscale	Grijswaarden
+Green	Groen
+Greens	Groentinten
+Grid	Raster
+Grid points	Rasterpunten
+Group	Groep
+Group Layers	Lagen groeperen
+Grow	Toename
+Guide Guy	Guide Guy
+Guides	Hulplijnen
+Gutter	Tussenruimte
+H	H
+H.264 (plays everywhere)	H.264 (speelt overal af)
+HDR Toning	HDR-toning
+HDR Toning…	HDR-toning…
+HSB/HSL…	HSB/HSL…
+Halftone Screen	Halftoonraster
+Hard Light	Fel licht
+Hard Mix	Harde mix
+Hard Round 24	Hard rond 24
+Hard Round 4	Hard rond 4
+Hard edges, no blending. Pixel art only — it aliases on downscale.	Harde randen, geen overvloeiing. Alleen voor pixelkunst — het wordt gekarteld bij verkleinen.
+Harder Brush	Harder penseel
+Height	Hoogte
+Height to 110%	Hoogte naar 110%
+Height to 125%	Hoogte naar 125%
+Height to 80%	Hoogte naar 80%
+Height to 90%	Hoogte naar 90%
+Help	Help
+Hide All	Alles verbergen
+Hide Layers	Lagen verbergen
+Hide Selection	Selectie verbergen
+Hide the source layer	De bronlaag verbergen
+High Contrast	Hoog contrast
+High Pass…	Hoogdoorlaat…
+Highlights	Hooglichten
+Histogram	Histogram
+Histories	Geschiedenissen
+History	Geschiedenis
+Hold	Vasthouden
+Horizontal Centers	Horizontale middens
+Horizontal Distortion	Horizontale vervorming
+Horizontal center guide	Hulplijn horizontaal midden
+Horizontal scale, in percent: widens or narrows the glyphs and their spacing	Horizontale schaal, in procenten: verbreedt of versmalt de glyphs en hun afstand
+Horizontally	Horizontaal
+Hue	Kleurtoon
+Hue jitter	Kleurtoonvariatie
+Hue/Saturation	Kleurtoon/verzadiging
+Hue/Saturation…	Kleurtoon/verzadiging…
+ICC profile	ICC-profiel
+ICO…	ICO…
+Image	Afbeelding
+Image Options	Afbeeldingsopties
+Image Rotation	Afbeelding roteren
+Image Size	Afbeeldingsgrootte
+Image Size…	Afbeeldingsgrootte…
+Image size	Afbeeldingsgrootte
+Import CSV…	CSV importeren…
+Import PDF	PDF importeren
+Import a CSV of data sets first	Importeer eerst een CSV met gegevenssets
+Import a CSV: the first row names the variables, every further row is one data set.	Importeer een CSV: de eerste rij benoemt de variabelen, elke volgende rij is één gegevensset.
+In use	In gebruik
+Inches	Inches
+Indexed Color	Geïndexeerde kleur
+Indexed Color…	Geïndexeerde kleur…
+Inflate	Opblazen
+Info	Info
+Ink	Inkt
+Ink Color	Inktkleur
+Ink printed at 0, 25, 50, 75 and 100% tint	Inkt gedrukt op 0, 25, 50, 75 en 100% tint
+Inner Glow	Gloed binnen
+Inner Glow…	Gloed binnen…
+Inner Radius	Binnenstraal
+Inner Shadow	Schaduw binnen
+Inner Shadow…	Schaduw binnen…
+Inside	Binnen
+Intent	Methode
+Intersect Shape Areas	Doorsnede van vormgebieden
+Intersect with Selection	Doorsnede met selectie
+Inverse	Selectie omkeren
+Inverse Fourier Transform	Inverse fouriertransformatie
+Invert	Omkeren
+Invert coverage	Dekking omkeren
+Invert has no parameters	Negatief heeft geen parameters
+Iris Blur…	Iris vervagen…
+Italic	Cursief
+JPEG carries the XMP and the source's EXIF	JPEG bevat de XMP en de EXIF van de bron
+JPG…	JPG…
+Justify	Uitvullen
+Kaleidoscope…	Kaleidoscoop…
+Keep as it was	Laten zoals het was
+Kept when a comp is first applied	Behouden wanneer een compositie voor het eerst wordt toegepast
+Kerning	Tekenspatiëring
+Keyboard Shortcut Sheet…	Overzicht sneltoetsen…
+Keyboard Shortcuts…	Sneltoetsen…
+Keywords	Sleutelwoorden
+Kind	Soort
+Kurtosis	Kurtosis
+Lab Color	Lab-kleur
+Landscape	Liggend
+Language	Taal
+Large	Groot
+Last Document State	Laatste documentstatus
+Last Filter	Vorige filter
+Last line	Laatste regel
+Layer	Laag
+Layer Comps	Laagsamenstellingen
+Layer Edges	Laagranden
+Layer Mask	Laagmasker
+Layer Properties	Laageigenschappen
+Layer Style	Laagstijl
+Layer knocks out drop shadow	Laag vormt slagschaduw uit
+Layer via Copy	Laag via kopiëren
+Layer via Cut	Laag via knippen
+Layers	Lagen
+Layers panel options	Opties voor deelvenster Lagen
+Left	Links
+Left Edges	Linkerranden
+Left indent	Inspringing links
+Length	Lengte
+Lens Blur…	Lensvervaging…
+Lens Correction…	Lenscorrectie…
+Lens Flare…	Zon…
+Level	Niveau
+Levels	Niveaus
+Levels…	Niveaus…
+Light	Licht
+Light Grey	Lichtgrijs
+Lighten	Lichter
+Lighter Color	Lichtere kleur
+Lighting Effects…	Belichtingseffecten…
+Lightness	Lichtheid
+Line	Lijn
+Linear	Rechtlijnig
+Linear Burn	Lineair doordrukken
+Linear Dodge (Add)	Lineair tegenhouden (toevoegen)
+Linear Light	Lineair licht
+Link / Unlink Mask	Masker koppelen / ontkoppelen
+Link Layers	Lagen koppelen
+Link selected layers	Geselecteerde lagen koppelen
+Link with layer	Koppelen aan laag
+Linked	Gekoppeld
+Linked file	Gekoppeld bestand
+Liquify…	Uitvloeien…
+Live Shape	Actieve vorm
+Live preview	Live-voorvertoning
+Live preview is off.	Live-voorvertoning staat uit.
+Load	Laden
+Load .atn	.atn laden
+Load .cube file…	.cube-bestand laden…
+Load Selection	Selectie laden
+Load Selection…	Selectie laden…
+Load actions	Acties laden
+Load channel as selection	Kanaal als selectie laden
+Load path as a selection	Pad als selectie laden
+Loaded file	Geladen bestand
+Lock	Vergrendelen
+Lock All	Alles vergrendelen
+Lock Guides	Hulplijnen vergrendelen
+Lock Image Pixels	Afbeeldingspixels vergrendelen
+Lock Position	Positie vergrendelen
+Lock Transparent Pixels	Transparante pixels vergrendelen
+Lock all	Alles vergrendelen
+Lock pixels	Pixels vergrendelen
+Lock position	Positie vergrendelen
+Lock transparent pixels	Transparante pixels vergrendelen
+Long-tap as a right click	Lang tikken als rechtsklik
+Lookup table	Opzoektabel
+Luminance	Luminantie
+Luminance of the preview source; the markers are the black and white points.	Luminantie van de voorvertoningsbron; de markeringen zijn het zwart- en witpunt.
+Luminosity	Lichtsterkte
+MP4…	MP4…
+Magenta	Magenta
+Magenta / Green	Magenta / groen
+Magentas	Magentatinten
+Magic Cut	Magisch knippen
+Magic Cut…	Magisch knippen…
+Make Frames	Frames maken
+Make a selection first	Maak eerst een selectie
+Make work path from selection	Werkpad maken van selectie
+Manual	Handmatig
+Maps every colour onto one palette. The document keeps RGBA pixels; GIF and PNG export write this palette.	Wijst elke kleur toe aan één palet. Het document behoudt RGBA-pixels; GIF- en PNG-export schrijven dit palet.
+Maps the active layer onto a palette as one undo step; the document stays RGB.	Wijst de actieve laag toe aan een palet als één ongedaan-maakstap; het document blijft RGB.
+Margins	Marges
+Mark this state so you can come back to it	Deze status markeren zodat u ernaar kunt terugkeren
+Mask	Masker
+Mask Properties	Maskereigenschappen
+Mask source	Maskerbron
+Match Color	Kleur afstemmen
+Match Color…	Kleur afstemmen…
+Matting	Matting
+Maximum	Maximum
+Maximum…	Maximum…
+Mean	Gemiddelde
+Median	Mediaan
+Median…	Mediaan…
+Medium	Middelgroot
+Memory	Geheugen
+Menu Bar and Canvas	Menubalk en canvas
+Merge	Samenvoegen
+Merge Channels	Kanalen samenvoegen
+Merge Channels…	Kanalen samenvoegen…
+Merge Down	Omlaag samenvoegen
+Merge Layers	Lagen samenvoegen
+Merge Visible	Zichtbare lagen samenvoegen
+Merged	Samengevoegd
+Method	Methode
+Metrics	Metrisch
+Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.	Metrisch gebruikt de eigen paarspatiëring van het lettertype; 0 schakelt spatiëring uit; Handmatig zet één hoeveelheid (1/1000 em) tussen elk tekenpaar van de huidige tekst, en later getypte tekens beginnen zonder spatiëring; het vereist minstens twee tekens, dus kortere tekst en de standaardwaarden van het gereedschap Tekst bieden het niet aan. De shaper heeft geen optische spatiëring, dus die modus wordt niet aangeboden.
+Mezzotint…	Mezzotint…
+Midtones	Middentonen
+Millimeters	Millimeters
+Min diameter	Min. diameter
+Min roundness	Min. rondheid
+Min size	Min. grootte
+Minimal	Minimaal
+Minimum	Minimum
+Minimum size only applies when pressure controls size.	Minimumgrootte geldt alleen wanneer druk de grootte bepaalt.
+Minimum…	Minimum…
+Miter	Verstek
+Mode	Modus
+Modify	Aanpassen
+Monochrome	Monochroom
+Monotone	Monotoon
+More readouts	Meer uitlezingen
+More tabs	Meer tabbladen
+Mosaic…	Mozaïek…
+Motion Blur…	Bewegingsonscherpte…
+Move Layer	Laag verplaatsen
+Move a control first: these settings would change nothing	Verplaats eerst een regelaar: deze instellingen zouden niets veranderen
+Move this panel	Dit deelvenster verplaatsen
+Move this panel within its dock	Dit deelvenster binnen zijn dock verplaatsen
+Move to	Verplaatsen naar
+Move with the layer	Meebewegen met de laag
+Multiply	Vermenigvuldigen
+Name	Naam
+Name Change	Naamwijziging
+Name the channel first.	Geef het kanaal eerst een naam.
+Navigator	Navigator
+Nearest Neighbour	Naaste buur
+Neutralize	Neutraliseren
+Neutrals	Neutrale tinten
+New	Nieuw
+New Adjustment Layer	Nieuwe aanpassingslaag
+New Channel	Nieuw kanaal
+New Document	Nieuw document
+New Fill Layer	Nieuwe vullingslaag
+New Folder	Nieuwe map
+New Guide	Nieuwe hulplijn
+New Guide Layout	Nieuwe hulplijnindeling
+New Guide Layout…	Nieuwe hulplijnindeling…
+New Guide…	Nieuwe hulplijn…
+New Layer	Nieuwe laag
+New Layer Based Slice	Nieuw segment op basis van laag
+New Selection	Nieuwe selectie
+New Smart Object via Copy	Nieuw slim object via kopiëren
+New Snapshot	Nieuwe momentopname
+New Spot Channel	Nieuw steunkleurkanaal
+New Spot Channel…	Nieuw steunkleurkanaal…
+New Style Preset	Nieuwe stijlvoorinstelling
+New Video Group	Nieuwe videogroep
+New channel	Nieuw kanaal
+New folder	Nieuwe map
+New group	Nieuwe groep
+New layer	Nieuwe laag
+New layer comp	Nieuwe laagcompositie
+New note at the centre of the view	Nieuwe notitie in het midden van de weergave
+New path (saves the Work Path when it is selected)	Nieuw pad (slaat het werkpad op wanneer het is geselecteerd)
+New set	Nieuwe set
+New size	Nieuwe grootte
+New style from the active layer	Nieuwe stijl uit de actieve laag
+New tool preset from the active tool	Nieuwe gereedschapsvoorinstelling uit het actieve gereedschap
+New {noun} from the active text layer	Nieuwe {noun} uit de actieve tekstlaag
+New…	Nieuw…
+Next Blend Mode	Volgende overvloeimodus
+No Color	Geen kleur
+No character styles yet. New records the active text layer's font, size and look.	Nog geen tekenstijlen. Nieuw legt het lettertype, de grootte en het uiterlijk van de actieve tekstlaag vast.
+No command loads a channel as the selection in this build; the Select menu's Load Selection restores a saved selection instead	In deze build laadt geen enkele opdracht een kanaal als selectie; Selectie laden in het menu Selecteren herstelt in plaats daarvan een opgeslagen selectie
+No commands to bind	Geen opdrachten om te koppelen
+No document	Geen document
+No document is open	Er is geen document geopend
+No export selected	Geen export geselecteerd
+No faces listed for this family name	Geen letterbeelden vermeld voor deze familienaam
+No frames yet. Add frame makes an _a_ layer: each one is a frame, bottom first.	Nog geen frames. Frame toevoegen maakt een _a_-laag: elke laag is een frame, onderste eerst.
+No guide crosses the canvas	Geen hulplijn kruist het canvas
+No installed family matches	Geen geïnstalleerde familie komt overeen
+No layer comps yet. New Layer Comp records every layer's visibility, position and appearance.	Nog geen laagcomposities. Nieuwe laagcompositie legt de zichtbaarheid, positie en het uiterlijk van elke laag vast.
+No layers yet. Add one with the + button below.	Nog geen lagen. Voeg er een toe met de knop + hieronder.
+No layers yet: each top-level layer gets a bar on the timeline.	Nog geen lagen: elke laag op het hoogste niveau krijgt een balk op de tijdlijn.
+No notes yet. Click the canvas with the Note tool (I), or New Note pins one at the centre of the view; notes are saved with the document and never exported.	Nog geen notities. Klik op het canvas met het gereedschap Notitie (I), of Nieuwe notitie prikt er een in het midden van de weergave; notities worden met het document opgeslagen en nooit geëxporteerd.
+No open document is the same size as this one	Geen geopend document heeft dezelfde grootte als dit
+No paragraph styles yet. New records the active text layer's alignment, indents and spacing.	Nog geen alineastijlen. Nieuw legt de uitlijning, inspringingen en afstand van de actieve tekstlaag vast.
+No pattern chosen — the overlay paints nothing.	Geen patroon gekozen — de bedekking schildert niets.
+No patterns are defined yet	Er zijn nog geen patronen gedefinieerd
+No profile file was chosen	Er is geen profielbestand gekozen
+No recent files yet	Nog geen recente bestanden
+No selection has been saved	Er is geen selectie opgeslagen
+No source recorded for this object	Geen bron vastgelegd voor dit object
+No stop selected	Geen kleurpunt geselecteerd
+No style presets yet. Define one with Layer > Layer Style > Define Style Preset, or add a Photoshop library with File > Open (.asl).	Nog geen stijlvoorinstellingen. Definieer er een met Laag > Laagstijl > Stijlvoorinstelling definiëren, of voeg een Photoshop-bibliotheek toe met Bestand > Openen (.asl).
+No styles yet. The + button saves the active layer's style; File > Open loads an .asl style library.	Nog geen stijlen. De knop + slaat de stijl van de actieve laag op; Bestand > Openen laadt een .asl-stijlbibliotheek.
+No such command	Onbekende opdracht
+No tool presets yet. New Tool Preset saves the active tool with its current options.	Nog geen gereedschapsvoorinstellingen. Nieuwe gereedschapsvoorinstelling slaat het actieve gereedschap op met zijn huidige opties.
+Noise	Ruis
+None	Geen
+Normal	Normaal
+Normal Map…	Normaalstructuur…
+Not a hex colour	Geen hexkleur
+Not installed — shaping with	Niet geïnstalleerd — gezet met
+Not saved yet	Nog niet opgeslagen
+Notes	Notities
+Nothing has changed	Er is niets veranderd
+Nothing in this submenu is available right now	Niets in dit submenu is nu beschikbaar
+Nothing is left to learn the background from: paint over it with the background brush.	Er is niets meer over om de achtergrond van te leren: schilder eroverheen met het achtergrondpenseel.
+Nothing to measure yet — paint or place something on this layer first	Nog niets te meten — schilder of plaats eerst iets op deze laag
+Nothing to preview.	Niets om te voorvertonen.
+OK	OK
+Oblique	Schuin
+Off: the wheel pans the view and Ctrl+wheel zooms	Uit: het wiel verschuift de weergave en Ctrl+wiel zoomt
+Offset…	Verschuiving…
+Oil Paint…	Olieverf…
+One page holding the flattened image; no vector content.	Eén pagina met de samengevoegde afbeelding; geen vectorinhoud.
+Onion skin	Uienschil
+Only English is available in this build	Alleen Engels is beschikbaar in deze build
+Only a mask channel can be loaded as a selection here	Alleen een maskerkanaal kan hier als selectie worden geladen
+Only web-safe colours	Alleen webveilige kleuren
+Opacity	Dekking
+Opacity 10%	Dekking 10%
+Opacity 100%	Dekking 100%
+Opacity 20%	Dekking 20%
+Opacity 30%	Dekking 30%
+Opacity 40%	Dekking 40%
+Opacity 50%	Dekking 50%
+Opacity 60%	Dekking 60%
+Opacity 70%	Dekking 70%
+Opacity 80%	Dekking 80%
+Opacity 90%	Dekking 90%
+Opacity jitter	Dekkingsvariatie
+Opacity key	Dekkingssleutel
+Opacity must be between 0% and 100%	De dekking moet tussen 0% en 100% liggen
+Opacity scales the layer and its effects; Fill scales the layer's own pixels only.	Dekking schaalt de laag en haar effecten; Vulling schaalt alleen de eigen pixels van de laag.
+Opacity stops sit above the bar, colour stops below it.	Dekkingspunten staan boven de balk, kleurpunten eronder.
+Open	Openen
+Open .ABR…	.ABR openen…
+Open .ACO…	.ACO openen…
+Open .ASL…	.ASL openen…
+Open Recent	Recent geopend
+Open a document first	Open eerst een document
+Open a document to animate it.	Open een document om het te animeren.
+Open a document to apply styles to its layers.	Open een document om stijlen op de lagen toe te passen.
+Open a document to insert glyphs into its text.	Open een document om glyphs in de tekst in te voegen.
+Open a document to keep text styles in it.	Open een document om er tekststijlen in te bewaren.
+Open a document to lay guides out on it.	Open een document om er hulplijnen op te plaatsen.
+Open a document to pin notes on it.	Open een document om er notities op te prikken.
+Open a document to record layer comps.	Open een document om laagcomposities vast te leggen.
+Open a document to see its CSS	Open een document om de CSS te zien
+Open a document to see its facts.	Open een document om de gegevens te zien.
+Open a document to see its histogram	Open een document om het histogram te zien
+Open a document to see its history	Open een document om de geschiedenis te zien
+Open a document to see its properties	Open een document om de eigenschappen te zien
+Open another document, or add another pixel layer, to match its colours.	Open een ander document, of voeg nog een pixellaag toe, om de kleuren daarvan af te stemmen.
+Open as	Openen als
+Open editor…	Editor openen…
+Open or close the folder	De map openen of sluiten
+Open the Adjustments panel	Het deelvenster Aanpassingen openen
+Open…	Openen…
+Operation	Bewerking
+Orange	Oranje
+Other	Overige
+Out of gamut	Buiten gamut
+Outer Glow	Gloed buiten
+Outer Glow…	Gloed buiten…
+Outline the path	Het pad omlijnen
+Output	Uitvoer
+Output channel	Uitvoerkanaal
+Outside	Buiten
+Overlay	Bedekken
+PBM…	PBM…
+PDF Presentation…	PDF-presentatie…
+PDF…	PDF…
+PGM…	PGM…
+PNG…	PNG…
+PPM…	PPM…
+Page	Pagina
+Page {n}	Pagina {n}
+Page {page} opens at {w} x {h} px	Pagina {page} opent op {w} x {h} px
+Pages	Pagina's
+Paint	Schilderen
+Paint Filter Mask	Filtermasker schilderen
+Paint Mask	Masker schilderen
+Paint over the part to keep with the foreground brush first.	Schilder eerst met het voorgrondpenseel over het deel dat moet blijven.
+Paint over what to keep and over what to drop	Schilder over wat moet blijven en over wat moet wegvallen
+Paint the inside of the path	De binnenkant van het pad schilderen
+Painting	Schilderen
+Paints a band along the active selection's border.	Schildert een band langs de rand van de actieve selectie.
+Pair kerning	Paarspatiëring
+Palette	Palet
+Paragraph	Paragraaf
+Paragraph Style	Alineastijl
+Paragraph Styles	Alineastijlen
+Particles…	Ruisdeeltjes…
+Paste	Plakken
+Paste Into	Plakken in
+Paste Layer Style	Laagstijl plakken
+Paste Outside	Buiten plakken
+Paste Special	Speciaal plakken
+Paste in Place	Plakken op dezelfde plaats
+Path	Pad
+Path Blur…	Pad vervagen…
+Path editing lives in the Paths panel	Paden bewerken gebeurt in het deelvenster Paden
+Paths	Paden
+Pattern	Patroon
+Pattern Dither	Patroon-dithering
+Pattern Overlay	Patroonbedekking
+Pattern Overlay…	Patroonbedekking…
+Pattern Preview	Patroonvoorvertoning
+Pattern…	Patroon…
+Pencil 1px	Potlood 1px
+Percent	Procent
+Perceptual	Perceptueel
+Perspective	Perspectief
+Perspective Warp	Perspectiefvervorming
+Photo Filter	Fotofilter
+Photo Filter…	Fotofilter…
+Photography	Fotografie
+Picas	Pica's
+Pick a filter; it applies at its default settings.	Kies een filter; het wordt toegepast met de standaardinstellingen.
+Pin Light	Puntlicht
+Pinch…	Kneep…
+Pixel Grid	Pixelraster
+Pixel dimensions	Pixelafmetingen
+Pixel mask	Pixelmasker
+Pixel to Pixel	Pixel naar pixel
+Pixelate	Omzetten in pixels
+Pixels	Pixels
+Place Embedded…	Ingesloten plaatsen…
+Place Linked…	Gekoppeld plaatsen…
+Play	Afspelen
+Play from step	Afspelen vanaf stap
+Play selection	Selectie afspelen
+Play this step (unchecked steps are passed over)	Deze stap afspelen (niet aangevinkte stappen worden overgeslagen)
+Plays a recorded Action on every image in the source folder and saves each result to the destination.	Speelt een opgenomen actie af op elke afbeelding in de bronmap en slaat elk resultaat op in het doel.
+Pointer	Aanwijzer
+Pointillize…	Pointilleren…
+Points	Punten
+Polar Coordinates…	Polaire coördinaten…
+Position	Positie
+Position is locked — unlock it in the Layers panel to move or resize	De positie is vergrendeld — ontgrendel haar in het deelvenster Lagen om te verplaatsen of de grootte te wijzigen
+Position key	Positiesleutel
+Posterize	Waarden beperken
+Posterize…	Waarden beperken…
+Precise Cursor	Precieze aanwijzer
+Preferences…	Voorkeuren…
+Preserve Transparency	Transparantie behouden
+Preserve luminosity	Lichtsterkte behouden
+Preset Manager…	Beheer voorinstellingen…
+Press a key…	Druk op een toets…
+Pressure controls flow	Druk bepaalt de stroom
+Pressure controls size	Druk bepaalt de grootte
+Preview	Voorbeeld
+Preview against	Voorvertonen tegen
+Preview is off.	Voorvertoning staat uit.
+Previewed on the active layer; applied to its pixels as one undoable step.	Voorvertoond op de actieve laag; op de pixels toegepast als één stap die ongedaan kan worden gemaakt.
+Previous Blend Mode	Vorige overvloeimodus
+Print Size	Afdrukgrootte
+Print as PDF…	Afdrukken als PDF…
+Print size	Afdrukgrootte
+Prints the grayscale image through one to four inks, each through its own curve. The inks are applied to the pixels when the mode changes.	Drukt de grijswaardenafbeelding af met één tot vier inkten, elk via een eigen curve. De inkten worden op de pixels toegepast wanneer de modus verandert.
+Print…	Printen…
+Profile	Profiel
+Profile from File…	Profiel uit bestand…
+Profiles are assigned to RGB documents	Profielen worden toegewezen aan RGB-documenten
+Profiles are converted between in RGB documents	Tussen profielen wordt omgezet in RGB-documenten
+Profiles belong to RGB documents; convert to RGB first	Profielen horen bij RGB-documenten; zet eerst om naar RGB
+Proof Colors	Proefkleuren
+Properties	Eigenschappen
+Puppet Warp	Marionet verdraaien
+Purge	Leegmaken
+Purple	Paars
+Quadtone	Quadtoon
+Quality	Kwaliteit
+Quick Export Layer as PNG…	Laag snel exporteren als PNG…
+Quit	Afsluiten
+RGB Color	RGB-kleur
+Radial Blur…	Radiaal vervagen…
+Radius	Straal
+Radius (px)	Straal (px)
+Range	Bereik
+Raster Studio Help	Raster Studio Help
+Rasterize	Omzetten in pixels
+Reassign anyway	Toch opnieuw toewijzen
+Recent	Recent
+Record	Opnemen
+Record Source Size	Brongrootte vastleggen
+Record an Action in the Actions panel first	Neem eerst een actie op in het deelvenster Acties
+Record an edit, then replay the whole sequence on any document with at least as many layers.	Neem een bewerking op en speel de hele reeks af op elk document met minstens zoveel lagen.
+Record into set	Opnemen in set
+Recording: every edit is captured until Stop	Opname: elke bewerking wordt vastgelegd tot Stoppen
+Red	Rood
+Redefine the selected {noun} from the active text layer, restyling every layer that uses it	De geselecteerde {noun} opnieuw definiëren vanuit de actieve tekstlaag, en elke laag die haar gebruikt opnieuw opmaken
+Redo	Opnieuw
+Reds	Roodtinten
+Reduce Colors	Kleuren verminderen
+Reduce Colors changed nothing: the layer already uses only colours of that palette	Kleuren reduceren veranderde niets: de laag gebruikt al alleen kleuren van dat palet
+Reduce Colors: the layer now uses at most {n} colours	Kleuren reduceren: de laag gebruikt nu hoogstens {n} kleuren
+Reduce Colors…	Kleuren verminderen…
+Reduce Noise…	Ruis verminderen…
+Reduces the grayscale image to pure black and white. The layers are flattened into one, over white.	Reduceert de grijswaardenafbeelding tot puur zwart en wit. De lagen worden samengevoegd tot één, op wit.
+Reference point: Bottom	Referentiepunt: onder
+Reference point: Bottom Left	Referentiepunt: linksonder
+Reference point: Bottom Right	Referentiepunt: rechtsonder
+Reference point: Centre	Referentiepunt: midden
+Reference point: Left	Referentiepunt: links
+Reference point: Right	Referentiepunt: rechts
+Reference point: Top	Referentiepunt: boven
+Reference point: Top Left	Referentiepunt: linksboven
+Reference point: Top Right	Referentiepunt: rechtsboven
+Refine	Verfijnen
+Refine Edge…	Rand verfijnen…
+Refine Mask	Masker verfijnen
+Refine Mask…	Masker verfijnen…
+Regular	Standaard
+Relative	Relatief
+Relative Colorimetric	Relatief colorimetrisch
+Release Clipping Mask	Uitknipmasker opheffen
+Release Notes	Release notes
+Relink to File…	Opnieuw koppelen aan bestand…
+Remove Black Matte	Zwarte rand verwijderen
+Remove Color Fringe	Kleurrand verwijderen
+Remove Color Fringe…	Kleurrand verwijderen…
+Remove Fringe	Rand verwijderen
+Remove White Matte	Witte rand verwijderen
+Remove export	Export verwijderen
+Remove this instance of the effect	Dit exemplaar van het effect verwijderen
+Remove this shortcut	Deze sneltoets verwijderen
+Rename Layer	Naam laag wijzigen
+Rename Layer…	Naam laag wijzigen…
+Rename set	Naam set wijzigen
+Render	Rendering
+Rendering the preview…	Voorvertoning wordt gerenderd…
+Repeat…	Herhaal…
+Replace Color	Kleur vervangen
+Replace Color…	Kleur vervangen…
+Replace Contents	Inhoud vervangen
+Replace Contents…	Inhoud vervangen…
+Replace existing guides	Bestaande hulplijnen vervangen
+Replay	Opnieuw afspelen
+Report an Issue	Een probleem melden
+Reselect	Opnieuw selecteren
+Reset	Opnieuw instellen
+Reset Transform	Transformatie herstellen
+Reset View Rotation	Weergaverotatie herstellen
+Reset all shortcuts	Alle sneltoetsen herstellen
+Resize Canvas	Canvasgrootte wijzigen
+Resize Images	Afbeeldingsgrootte wijzigen
+Resize Images…	Afbeeldingsgrootte wijzigen…
+Resolution	Resolutie
+Resolution must be greater than zero	De resolutie moet groter dan nul zijn
+Restore Layer	Laag herstellen
+Result	Resultaat
+Return this tool to its defaults	Dit gereedschap terugzetten naar de standaardwaarden
+Reveal All	Alles tonen
+Reveal Selection	Selectie onthullen
+Reverse	Omkeren
+Revert	Terug naar opgeslagen versie
+Rewrites every pixel layer's numbers so the picture looks the same under the destination profile, as one undo step.	Herschrijft de waarden van elke pixellaag zodat het beeld er onder het doelprofiel hetzelfde uitziet, als één ongedaan-maakstap.
+Right	Rechts
+Right (narrow)	Rechts (smal)
+Right (wide)	Rechts (breed)
+Right Edges	Rechterranden
+Right indent	Inspringing rechts
+Right-click a swatch to remove it	Klik met rechts op een staal om het te verwijderen
+Ring	Ring
+Ripple…	Rimpels…
+Rise	Omhoog
+Rotate	Draaien
+Rotate 180°	180° roteren
+Rotate 90° Clockwise	90° rechtsom roteren
+Rotate 90° Counter Clockwise	90° linksom roteren
+Rotate Canvas	Canvas roteren
+Rotate the active layer so the measured line is level (Enter)	De actieve laag roteren zodat de gemeten lijn waterpas is (Enter)
+Rotates the canvas and every layer. Right angles are pixel-exact; other angles resample.	Roteert het canvas en elke laag. Rechte hoeken zijn pixelexact; andere hoeken worden opnieuw berekend.
+Rotation key	Rotatiesleutel
+Round	Rond
+Round (computed)	Rond (berekend)
+Rounded Steps	Afgeronde stappen
+Roundness jitter	Rondheidsvariatie
+Rows	Rijen
+Rulers	Linialen
+Run	Uitvoeren
+SVG…	SVG…
+Same Radii	Dezelfde straal
+Sample a colour from the canvas	Een kleur van het canvas nemen
+Sample radius	Monsterstraal
+Sampled	Genomen
+Sampled colour	Genomen kleur
+Sampled tip not loaded; painting round	Genomen penseelpunt niet geladen; er wordt rond geschilderd
+Satin…	Satijn…
+Saturation	Verzadiging
+Saturation jitter	Verzadigingsvariatie
+Save	Opslaan
+Save As	Opslaan als
+Save As…	Opslaan als…
+Save Brush	Penseel opslaan
+Save Selection	Selectie opslaan
+Save Selection…	Selectie opslaan…
+Save actions	Acties opslaan
+Save as PSD…	Opslaan als PSD…
+Save current brush	Huidig penseel opslaan
+Save selection as channel	Selectie opslaan als kanaal
+Saves every image in the source folder to the destination in another format, quality or size.	Slaat elke afbeelding in de bronmap op in het doel in een andere indeling, kwaliteit of grootte.
+Scale	Schalen
+Scale %	Schaal %
+Scale Effects	Schaaleffecten
+Scale Effects…	Schaaleffecten…
+Scale H	Schaal H
+Scale V	Schaal V
+Scale key	Schaalsleutel
+Scale:	Schaal:
+Scales every size and distance of the active layer's style as one undo step.	Schaalt elke grootte en afstand van de stijl van de actieve laag als één ongedaan-maakstap.
+Scaling by 100% changes nothing	Schalen met 100% verandert niets
+Scratch directory	Werkmap
+Screen	Beeldscherm
+Screen, print and social presets	Voorinstellingen voor scherm, druk en sociale media
+Script…	Script…
+Scroll wheel zooms instead of scrolling	Scrollwiel zoomt in plaats van te scrollen
+Search Commands…	Opdrachten zoeken…
+Search layers	Lagen zoeken
+Search layers by name	Lagen zoeken op naam
+Select	Selecteren
+Select All	Alles selecteren
+Select Bottom Layer	Onderste laag selecteren
+Select Layer Above	Laag erboven selecteren
+Select Layer Below	Laag eronder selecteren
+Select Linked Layers	Gekoppelde lagen selecteren
+Select None	Niets selecteren
+Select Top Layer	Bovenste laag selecteren
+Select a layer first	Selecteer eerst een laag
+Select a layer to see its CSS	Selecteer een laag om de CSS te zien
+Select a layer to see its properties	Selecteer een laag om de eigenschappen te zien
+Select a layer: a click on a style applies it to the active layer.	Selecteer een laag: een klik op een stijl past die toe op de actieve laag.
+Select a path first	Selecteer eerst een pad
+Select a text layer, or type into one: a click inserts the glyph at the caret.	Selecteer een tekstlaag of typ erin: een klik voegt de glyph in bij de invoegpositie.
+Select a text layer to edit its type	Selecteer een tekstlaag om de tekst te bewerken
+Select every pixel near one colour	Elke pixel nabij één kleur selecteren
+Selection	Selectie
+Selection Edges	Selectieranden
+Selection: white is replaced, black is kept.	Selectie: wit wordt vervangen, zwart blijft.
+Selective Color	Selectieve kleur
+Selective Color…	Selectieve kleur…
+Selects a band of this width along the selection's edge	Selecteert een band van deze breedte langs de rand van de selectie
+Semi Condensed	Half smal
+Semi Expanded	Half breed
+Semibold	Halfvet
+Send Backward	Naar achteren
+Send to Back	Naar achtergrond
+Separate documents	Afzonderlijke documenten
+Separate keywords with commas or semicolons.	Scheid trefwoorden met komma's of puntkomma's.
+Sepia	Sepia
+Set	Set
+Set the History Brush to paint from this state (the marked row)	Het historiepenseel vanuit deze status laten schilderen (de gemarkeerde rij)
+Shadows	Schaduwen
+Shadows/Highlights	Schaduwen/hooglichten
+Shadows/Highlights…	Schaduwen/hooglichten…
+Shape	Vorm
+Shape Dynamics	Vormdynamiek
+Shape Mosaic…	Vormmozaïek…
+Shape Properties	Vormeigenschappen
+Sharpen	Verscherpen
+Sharpen Edges	Scherpe randen
+Sharpen More	Scherper
+Sharpest, with a little ringing on hard edges.	Het scherpst, met wat nagalm aan harde randen.
+Shear…	Verschuiving…
+Shift Edge	Rand verschuiven
+Show	Tonen
+Show / Hide Layer	Laag tonen / verbergen
+Show / hide layer	Laag tonen / verbergen
+Show / hide the effects list	De effectenlijst tonen / verbergen
+Show / hide the layer style	De laagstijl tonen / verbergen
+Show / hide this channel	Dit kanaal tonen / verbergen
+Show / hide this effect	Dit effect tonen / verbergen
+Show / hide this path	Dit pad tonen / verbergen
+Show / hide this smart filter	Dit slimme filter tonen / verbergen
+Show Layers	Lagen tonen
+Show every layer	Elke laag tonen
+Show or hide the position, size and alignment fields	De velden voor positie, grootte en uitlijning tonen of verbergen
+Show or hide the recorded steps	De opgenomen stappen tonen of verbergen
+Show or hide the set's actions	De acties van de set tonen of verbergen
+Show this alpha channel alone in grayscale and paint into it; click again to store it	Dit alfakanaal alleen in grijswaarden tonen en erin schilderen; klik opnieuw om het op te slaan
+Sides	Zijden
+Similar	Gelijkend
+Size	Grootte
+Size jitter	Groottevariatie
+Skew	Schuintrekken
+Skewness	Scheefheid
+Slice Options	Segmentopties
+Slice Options…	Segmentopties…
+Slices	Segmenten
+Slices from Guides	Segmenten van hulplijnen
+Slices…	Segmenten…
+Small	Klein
+Small Caps	Klein kapitaal
+Smart Blur…	Slim vervagen…
+Smart Filter	Slim filter
+Smart Filters	Slimme filters
+Smart Guides	Slimme hulplijnen
+Smart Object	Slim object
+Smart Sharpen…	Slim verscherpen…
+Smart filter mask: click to paint on it	Slim-filtermasker: klik om erop te schilderen
+Smooth	Vloeiend
+Smooth Selection	Selectie afvlakken
+Smooth draws grey-scale edges; None draws hard, aliased edges. The glyph scaler has one smooth mode, so Sharp, Crisp and Strong are not offered.	Vloeiend tekent grijswaardenranden; Geen tekent harde, gekartelde randen. De glyphschaler heeft één vloeiende modus, dus Scherp, Helder en Sterk worden niet aangeboden.
+Smooth…	Vloeiend…
+Snap	Magnetisch
+Snap To	Magnetisch
+Soft Light	Zwak licht
+Soft Round 100	Zacht rond 100
+Soft Round 24	Zacht rond 24
+Soft and cheap. Good for a small enlargement.	Zacht en snel. Goed voor een kleine vergroting.
+Softer Brush	Zachter penseel
+Solarize	Solarisatie
+Solid Color…	Volle kleur…
+Solidity	Vastheid
+Source	Bron
+Source 1	Bron 1
+Source 2	Bron 2
+Source Space	Bronruimte
+Spectrum	Spectrum
+Spherize…	Opbollen…
+Spin Blur…	Draaien vervagen…
+Splits the active layer into Linear Light detail layers over a residual, finest on top; together they recomposite to the layer.	Splitst de actieve laag in detaillagen met Lineair licht boven een restlaag, de fijnste bovenaan; samen vormen ze weer de laag.
+Spot Channel	Steunkleurkanaal
+Spot Channel Options…	Opties voor steunkleurkanaal…
+Spot channel: composited over the image as its ink	Steunkleurkanaal: als zijn inkt over de afbeelding samengesteld
+Square	Vierkant
+Squeeze	Samendrukken
+Stack Mode	Stapelmodus
+Stamp Visible	Zichtbare stempelen
+Standard	Standaard
+Standard Deviation	Standaardafwijking
+Standard ligatures	Standaardligaturen
+Step Backward	Stap terug
+Step Forward	Stap vooruit
+Stop	Stoppen
+Straighten Layer	Laag rechttrekken
+Strength	Sterkte
+Stroke	Omlijning
+Stroke path with the foreground colour at the brush size, on a new shape layer	Pad omlijnen met de voorgrondkleur op penseelgrootte, op een nieuwe vormlaag
+Stroke…	Omlijning…
+Style	Stijl
+Styles	Stijlen
+Styles enabled	Stijlen ingeschakeld
+Stylize	Stileren
+Sub	Onder
+Subject	Onderwerp
+Subtract	Aftrekken
+Subtract Front Shape	Voorste vorm aftrekken
+Subtract from Selection	Van selectie aftrekken
+Summation	Optelling
+Sunset	Zonsondergang
+Super	Boven
+Superscript raises and shrinks the text; subscript lowers and shrinks it.	Superscript verhoogt en verkleint de tekst; subscript verlaagt en verkleint haar.
+Surface Blur…	Oppervlak vervagen…
+Swap colours  (X)	Kleuren omwisselen  (X)
+Swap foreground and background (X)	Voorgrond en achtergrond omwisselen (X)
+Swatches	Kleurstalen
+TGA…	TGA…
+TIF…	TIF…
+Templates	Sjablonen
+Text	Tekst
+Text Properties	Teksteigenschappen
+Text overflows the box	Tekst loopt buiten het vak
+Text replacement	Tekstvervanging
+Texture Dilation…	Textuur uitbreiden…
+That channel is no longer in the document	Dat kanaal zit niet meer in het document
+That file could not be used:	Dat bestand kon niet worden gebruikt:
+The CSV ends inside a quoted field	De CSV eindigt binnen een veld tussen aanhalingstekens
+The CSV has a header but no data sets	De CSV heeft een koptekst maar geen gegevenssets
+The CSV is empty	De CSV is leeg
+The CSV names a variable that is not defined:	De CSV noemt een variabele die niet is gedefinieerd:
+The active layer is not in the document	De actieve laag zit niet in het document
+The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	Het actieve slimme object toont om beurten elke afbeelding van de bronmap; elk resultaat wordt als PNG naar de doelmap geëxporteerd.
+The amount must be within	De hoeveelheid moet liggen binnen
+The angle must be a finite number of degrees	De hoek moet een eindig aantal graden zijn
+The balanced default for photographs.	De evenwichtige standaard voor foto's.
+The canvas grows to fit the rotated image.	Het canvas groeit zodat de geroteerde afbeelding past.
+The canvas must be at least 1 x 1 pixel	Het canvas moet minstens 1 x 1 pixel zijn
+The cell size must be 2 to 200 pixels	De celgrootte moet 2 tot 200 pixels zijn
+The cut is empty: paint more of the part to keep.	De snede is leeg: schilder meer van het deel dat moet blijven.
+The destination is the profile the document already has	Het doel is het profiel dat het document al heeft
+The destination must be another folder than the source.	Het doel moet een andere map zijn dan de bron.
+The document has no layers	Het document heeft geen lagen
+The document is already in {name}	Het document is al in {name}
+The document is already tagged with this profile	Het document is al voorzien van dit profiel
+The document is already tagged {name}	Het document is al voorzien van {name}
+The document's own profile: {error}	Het eigen profiel van het document: {error}
+The first {shown} of {n} pages are listed; a longer file opens only those.	De eerste {shown} van {n} pagina's worden vermeld; een langer bestand opent alleen die.
+The image has no opaque pixels to count	De afbeelding heeft geen dekkende pixels om te tellen
+The ink is laid over the image; the selection, if there is one, is where it prints.	De inkt wordt over de afbeelding gelegd; de selectie, als die er is, bepaalt waar ze drukt.
+The last stop has no segment after it.	Na het laatste kleurpunt volgt geen segment.
+The layer has no pixels to cut.	De laag heeft geen pixels om uit te knippen.
+The layer's pixels are locked	De pixels van de laag zijn vergrendeld
+The list is empty	De lijst is leeg
+The margins and gutters leave no room for a column or a row	De marges en tussenruimten laten geen plaats voor een kolom of rij
+The margins and gutters leave no room for a column or a row.	De marges en tussenruimten laten geen plaats voor een kolom of rij.
+The name cannot be empty	De naam mag niet leeg zijn
+The name has not changed	De naam is niet gewijzigd
+The name is the file File > Export > Slices writes this slice as. The URL and Alt Tag go into the HTML page it writes beside the images.	De naam is het bestand waarin Bestand > Exporteren > Segmenten dit segment schrijft. De URL en de alt-tag komen in de HTML-pagina die het naast de afbeeldingen schrijft.
+The new canvas is smaller — content outside it will be clipped.	Het nieuwe canvas is kleiner — inhoud erbuiten wordt afgesneden.
+The next text layer the Type tool creates starts with this style.	De volgende tekstlaag die het gereedschap Tekst maakt, begint met deze stijl.
+The panel is already on this side	Het deelvenster staat al aan deze kant
+The path encloses no pixel of the canvas	Het pad omsluit geen enkele pixel van het canvas
+The position must be a finite number	De positie moet een eindig getal zijn
+The preview runs the real brush engine.	De voorvertoning gebruikt de echte penseel-engine.
+The resolution must be 1 to 2400 ppi	De resolutie moet 1 tot 2400 ppi zijn
+The resolution must be {min} to {max} dpi	De resolutie moet {min} tot {max} dpi zijn
+The rulers and the size readouts use this unit	De linialen en grootte-uitlezingen gebruiken deze eenheid
+The scale must be between 1% and 1000%	De schaal moet tussen 1% en 1000% liggen
+The selection is kept with the document under this name	De selectie wordt onder deze naam bij het document bewaard
+The source and destination must be different folders	De bron en het doel moeten verschillende mappen zijn
+The steps this snapshot named have been discarded	De stappen die deze momentopname benoemde, zijn verwijderd
+The table needs a name	De tabel heeft een naam nodig
+The warp has not changed	De verdraaiing is niet gewijzigd
+There are no guides to slice along	Er zijn geen hulplijnen om langs te segmenteren
+There are no slices to clear	Er zijn geen segmenten om te wissen
+There is no history to clear	Er is geen geschiedenis om te wissen
+There is no live selection to combine with	Er is geen actieve selectie om mee te combineren
+These are matrix-shaper profiles, which carry no perceptual or saturation tables: those two intents convert as Relative Colorimetric.	Dit zijn matrix-shaper-profielen, zonder perceptuele of verzadigingstabellen: die twee methoden worden omgezet als Relatief colorimetrisch.
+Thin	Dun
+Third-party notices	Kennisgevingen van derden
+This Layer	Deze laag
+This adjustment has no panel controls	Deze aanpassing heeft geen regelaars in het deelvenster
+This adjustment has no settings.	Deze aanpassing heeft geen instellingen.
+This build keeps channels on layers; it has no free-standing alpha channels yet	Deze build bewaart kanalen op lagen; losse alfakanalen zijn er nog niet
+This effect is off. Tick it in the list to edit it.	Dit effect staat uit. Vink het aan in de lijst om het te bewerken.
+This format cannot store CMYK, so the document is written as RGB. Choose JPEG or TIFF for CMYK.	Deze indeling kan geen CMYK opslaan, dus het document wordt als RGB geschreven. Kies JPEG of TIFF voor CMYK.
+This format could not be previewed.	Deze indeling kon niet worden voorvertoond.
+This format has no metadata slot: nothing is embedded	Deze indeling heeft geen plaats voor metagegevens: er wordt niets ingesloten
+This format has no palette, so the indexed colours are written as RGB. Choose PNG or GIF for the palette.	Deze indeling heeft geen palet, dus de geïndexeerde kleuren worden als RGB geschreven. Kies PNG of GIF voor het palet.
+This format stores 8 bits per channel	Deze indeling slaat 8 bits per kanaal op
+This is a Lab document. No format here stores Lab, so it is converted to RGB on export.	Dit is een Lab-document. Geen enkele indeling hier slaat Lab op, dus het wordt bij export omgezet naar RGB.
+This layer has no mask	Deze laag heeft geen masker
+This panel is already at the bottom of its dock	Dit deelvenster staat al onderaan in zijn dock
+This panel is already at the top of its dock	Dit deelvenster staat al bovenaan in zijn dock
+This tool has no options	Dit gereedschap heeft geen opties
+This tool is already at its defaults	Dit gereedschap staat al op de standaardwaarden
+This window cannot read screen pixels, so the eyedropper is unavailable	Dit venster kan geen schermpixels lezen, dus het pipet is niet beschikbaar
+This works on a pixel layer; the active layer is a {kind}	Dit werkt op een pixellaag; de actieve laag is een {kind}
+This works on an 8-bit document	Dit werkt op een 8-bitsdocument
+This works on an RGB document	Dit werkt op een RGB-document
+Threshold	Drempelwaarde
+Threshold…	Drempelwaarde…
+Thumbnail Size	Miniatuurgrootte
+Thumbnail size	Miniatuurgrootte
+Thumbnails by Document	Miniaturen per document
+Thumbnails by Layer	Miniaturen per laag
+Tiles/List	Tegels/lijst
+Tiles…	Tegels…
+Tilt-Shift…	Kantelen en verschuiven…
+Timeline	Tijdlijn
+Tint	Tint
+Tint hue	Tintkleurtoon
+Tint saturation	Tintverzadiging
+To canvas	Naar canvas
+Toggle Link	Koppeling in-/uitschakelen
+Tonal width	Toonbreedte
+Tone	Toon
+Tone and Detail	Toon en detail
+Tool Presets	Voorinstellingen voor tools
+Top	Bovenaan
+Top Edges	Bovenranden
+Top Left	Linksboven
+Top Left Pixel Color	Kleur van pixel linksboven
+Top Right	Rechtsboven
+Top left	Linksboven
+Top right	Rechtsboven
+Trace Contour…	Omtreklijn…
+Traces the active layer's colours into shape layers, one per colour.	Zet de kleuren van de actieve laag om in vormlagen, één per kleur.
+Transform	Transformeren
+Transform Layer	Laag transformeren
+Transform Selection	Selectie transformeren
+Transparency	Transparantie
+Transparent Pixels	Transparante pixels
+Trim	Verkleinen
+Trim Away	Wegsnijden
+Trim…	Verkleinen…
+Tritone	Tritoon
+Turn into JPG	Omzetten naar JPG
+Turn on Resample to change the pixel count.	Schakel Opnieuw berekenen in om het aantal pixels te wijzigen.
+Twirl…	Verdraaien…
+Twist	Draaien
+Two variables share a name	Twee variabelen hebben dezelfde naam
+Type	Type
+Type a zoom level	Typ een zoomniveau
+Type is edited in Character and Paragraph	Tekst wordt bewerkt in Teken en Alinea
+Type tool defaults	Standaardwaarden van het gereedschap Tekst
+UI scale	UI-schaal
+URL	URL
+US Letter	US Letter
+Ultra Condensed	Ultra smal
+Ultra Expanded	Ultra breed
+Underlying Layer	Onderliggende laag
+Undo	Ongedaan maken
+Ungroup Layers	Groepering van lagen opheffen
+Uniform	Gelijkmatig
+Unite Shapes	Vormen verenigen
+Units	Eenheden
+Unmake Frames	Frames opheffen
+Unsaved changes	Niet-opgeslagen wijzigingen
+Unsharp Mask…	Onscherp masker…
+Update the applied comp from the layers	De toegepaste compositie bijwerken vanuit de lagen
+Use Black Point Compensation	Zwartpuntcompensatie gebruiken
+Use global light	Globaal licht gebruiken
+Using:	Gebruikt:
+Vanishing Point…	Verdwijnpunt…
+Variables	Variabelen
+Variance	Variantie
+Vector Mask	Vectormasker
+Vector density	Vectordichtheid
+Vector enabled	Vector ingeschakeld
+Vector feather	Vector doezelen
+Vector invert	Vector omkeren
+Vector mask	Vectormasker
+Vectorize	Vectoriseren
+Vectorize Bitmap	Bitmap vectoriseren
+Vectorize Bitmap…	Bitmap vectoriseren…
+Vertical Centers	Verticale middens
+Vertical Distortion	Verticale vervorming
+Vertical center guide	Hulplijn verticaal midden
+Vertical scale, in percent: stretches the glyphs about the baseline; leading is unchanged	Verticale schaal, in procenten: rekt de glyphs uit rond de basislijn; de regelafstand blijft ongewijzigd
+Vertically	Verticaal
+Vibrance	Levendigheid
+Vibrance…	Levendigheid…
+View	Weergave
+Violet	Violet
+Visibility	Zichtbaarheid
+Visible adjustment layers	Zichtbare aanpassingslagen
+Vivid Light	Levendig licht
+W	B
+WEBP…	WEBP…
+Waiting for the composite…	Wachten op de samengestelde afbeelding…
+Warm	Warm
+Warp	Verdraaien
+Warp Style	Verdraaiingsstijl
+Warp Text	Tekst verdraaien
+Warp Text…	Tekst verdraaien…
+Wave	Golf
+Wavelet Decompose	Waveletontleding
+Wavelet Decompose splits into 2 to 7 scales	Waveletontleding splitst in 2 tot 7 schalen
+Wavelet Decompose works on an sRGB document	Waveletontleding werkt op een sRGB-document
+Wavelet Decompose: the layer has no pixels	Waveletontleding: de laag heeft geen pixels
+Wavelet Decompose: {n} detail layers over a residual; the source layer is hidden	Waveletontleding: {n} detaillagen boven een restlaag; de bronlaag is verborgen
+Wavelet Decompose…	Waveletontleding…
+Wave…	Golf…
+Web (216)	Web (216)
+WebP (lossless)	WebP (verliesvrij)
+WebP (lossy)	WebP (met verlies)
+Weight	Gewicht
+White	Wit
+White to Black	Wit naar zwart
+Whites	Wittinten
+Width	Breedte
+Width and height must be at least 1 pixel	Breedte en hoogte moeten minstens 1 pixel zijn
+Width must be between 1 and 250 pixels	De breedte moet tussen 1 en 250 pixels liggen
+Width to 110%	Breedte naar 110%
+Width to 125%	Breedte naar 125%
+Width to 80%	Breedte naar 80%
+Width to 90%	Breedte naar 90%
+Window	Venster
+Wind…	Wind…
+With Handles	Met grepen
+Work Path	Werkpad
+Workspace	Werkruimte
+Wrap to box	Terugloop in vak
+Writes the visible adjustment layers, applied to an identity lattice, as a 3D LUT (.cube).	Schrijft de zichtbare aanpassingslagen, toegepast op een identiteitsrooster, als een 3D-LUT (.cube).
+Written as CMYK: a naive ink model, not an ICC press profile.	Geschreven als CMYK: een eenvoudig inktmodel, geen ICC-drukprofiel.
+Written as XMP into PNG, JPEG and TIFF files by Export As.	Door Exporteren als geschreven als XMP in PNG-, JPEG- en TIFF-bestanden.
+Written with the document's palette.	Geschreven met het palet van het document.
+Yellow	Geel
+Yellow / Blue	Geel / blauw
+Yellows	Geeltinten
+ZIP for pixel data	ZIP voor pixelgegevens
+ZigZag…	Zigzag…
+Zoom In	Inzoomen
+Zoom Out	Uitzoomen
+Zoom in	Inzoomen
+Zoom out	Uitzoomen
+Zoom to Selection	Zoomen naar selectie
+a layer could not be rewritten	een laag kon niet worden herschreven
+before / after	voor / na
+changed	gewijzigd
+content thumbnail — click to edit the layer's pixels	inhoudsminiatuur — klik om de pixels van de laag te bewerken
+dpi	dpi
+edits are aimed at this mask — right-click for view and mask options	bewerkingen zijn gericht op dit masker — klik met rechts voor weergave- en maskeropties
+lines past the box	regels buiten het vak
+mask off	masker uit
+mask thumbnail — click to edit the layer's mask	maskerminiatuur — klik om het masker van de laag te bewerken
+minutes (0 is off)	minuten (0 is uit)
+no drop	niet neerzetten
+px	px
+records here	neemt hier op
+skipped on play:	overgeslagen bij afspelen:
+the layers could not be added	de lagen konden niet worden toegevoegd
+the profile cannot be transformed ({error})	het profiel kan niet worden getransformeerd ({error})
+to	tot
+vector mask thumbnail — click to edit the vector mask	vectormaskerminiatuur — klik om het vectormasker te bewerken
+{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time	{format}: de tijdlijn, {frames} frames op {fps} fps over {length} ms; elk frame toont de lagen op zijn tijdstip
+{label} is not answered by this route	{label} wordt niet beantwoord via deze route
+{label} was refused: {reason}	{label} is geweigerd: {reason}
+{name} Residual	{name} restlaag
+{name} Scale {k}	{name} schaal {k}
+{name}: {n} pages	{name}: {n} pagina's
+{n} slices from the guides ({cols} x {rows}); they replace the slices there were	{n} segmenten uit de hulplijnen ({cols} x {rows}); ze vervangen de bestaande segmenten
+{path} is a {space} profile; an RGB document takes an RGB profile	{path} is een {space}-profiel; een RGB-document neemt een RGB-profiel
+{path} is {len} bytes, larger than any colour profile	{path} is {len} bytes, groter dan elk kleurprofiel
+{reason}; this one is {space}	{reason}; dit is {space}
+Open a document to see its memory	Open een document om het geheugen te zien
+Image data	Afbeeldingsgegevens
+{undo} undo / {redo} redo steps	{undo} ongedaan maken / {redo} opnieuw
+Holds copied pixels	Bevat gekopieerde pixels
+{size} ({tiles} tiles)	{size} ({tiles} tegels)
+Empty	Leeg
+Purge Clipboard	Klembord legen
+Purge Histories	Geschiedenissen legen
+Purge All	Alles legen
+Make	Maken
+There is no path; draw one or select it in the Paths panel	Er is geen pad; teken er een of selecteer het in het deelvenster Paden
+a	a
+b	b
+Reverse pages	Pagina's omkeren

@@ -538,6 +538,8 @@ fn body_of(
         PanelId::Styles => crate::panels::styles::styles_body(w, ui, doc),
         PanelId::DocumentInfo => crate::panels::doc_info::doc_info_body(w, ui, doc),
         PanelId::GuideGuy => crate::panels::guide_guy::guide_guy_body(w, ui, doc),
+        // W18-I: Window > Memory.
+        PanelId::Memory => crate::panels::memory::memory_body(w, ui, doc, history),
     }
 }
 
@@ -5425,20 +5427,32 @@ fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Histo
     let rows = w.channels.rows(doc);
     let mode = doc.meta.color_space.clone();
     let mut toggle: Option<(ChannelKind, bool)> = None;
-    let mut select: Option<ChannelKind> = None;
+    let mut select: Option<(ChannelKind, bool)> = None;
     let mut load_channel: Option<ChannelKind> = None;
     for (index, row) in rows.iter().enumerate() {
+        // W18-C: a CMYK / Lab component cannot be previewed alone (the canvas
+        // hides RGB components only), so its row has no eye, like a spot row.
+        let has_eye = !matches!(
+            row.kind,
+            ChannelKind::Components { model, .. }
+                if model != crate::panels::channels::ChannelModel::Rgb
+        );
         let response = row_layout(ui, |ui| {
-            if icon_toggle_id(
-                ui,
-                "eye",
-                row.visible,
-                crate::strings::tr("ui.docks.show.hide.channel"),
-                Some(super::ids::channel_eye(index)),
-            )
-            .clicked()
-            {
-                toggle = Some((row.kind, !row.visible));
+            if has_eye {
+                if icon_toggle_id(
+                    ui,
+                    "eye",
+                    row.visible,
+                    crate::strings::tr("ui.docks.show.hide.channel"),
+                    Some(super::ids::channel_eye(index)),
+                )
+                .clicked()
+                {
+                    toggle = Some((row.kind, !row.visible));
+                }
+            } else {
+                let side = current_tokens(ui).metrics.list_row_height - Space::XSmall.pt();
+                ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
             }
             channel_thumbnail(w, ui, row.kind);
             ui.add_space(Space::XSmall.pt());
@@ -5462,10 +5476,11 @@ fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Histo
                 load_channel = Some(row.kind);
             } else {
                 crate::panels::panel_menus_w16::pick_spot(ui.ctx(), None);
-                select = Some(row.kind);
+                // W18-C: Shift-click adds a colour channel to the selection.
+                select = Some((row.kind, ui.input(|i| i.modifiers.shift)));
             }
         }
-        if w.channels.selected == row.kind && ui.is_rect_visible(response.rect) {
+        if w.channels.row_selected(row.kind) && ui.is_rect_visible(response.rect) {
             let t = current_tokens(ui);
             let radius = Radius::Medium.resolve(&t.radii, response.rect.height());
             ui.painter().rect_stroke(
@@ -5510,12 +5525,19 @@ fn channels_body(w: &mut Workspace, ui: &mut Ui, doc: &Document, history: &Histo
                     w.emit(Intent::Document(command));
                 }
             }
+            // W18-C: several RGB components' eyes are the per-component
+            // flags; a CMYK / Lab row draws no eye.
+            ChannelKind::Components { .. } => {}
         }
     }
-    if let Some(kind) = select {
-        if w.channels.selected != kind {
-            let was_mask = matches!(w.channels.selected, ChannelKind::Mask { .. });
-            w.channels.selected = kind;
+    if let Some((row_kind, shift)) = select {
+        let before = w.channels.selected;
+        let was_mask = matches!(before, ChannelKind::Mask { .. });
+        // W18-C: the click selects (Shift adds) and shows the selection
+        // alone, as Photopea does; the shell reads the selected components
+        // as the write mask of every pixel edit.
+        let kind = w.channels.click(doc, row_kind, shift);
+        if before != kind {
             w.emit(Intent::SelectChannel(kind));
             // W10-B: selecting a mask channel shows it alone, in grayscale,
             // and aims painting at it — Photopea's channel isolation — by
@@ -5582,21 +5604,27 @@ fn saved_selection_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
                 super::paint_icon(ui, icon_rect, "mask", TextRole::Tertiary);
             }
             ui.add_space(Space::XSmall.pt());
-            ui.label(body(ui, name.clone()));
-            eye.rect.max.x
+            // W18-I: a double-click on the name renames the channel in place.
+            let (name_rect, rename) = crate::panels::channels::alpha_name_ui(ui, doc, index, name);
+            (eye.rect.max.x, name_rect, rename)
         });
+        let (eye_right, name_rect, rename) = row.inner;
+        if let Some(command) = rename {
+            w.emit(Intent::Document(command));
+        }
         // The row's click (Load Selection) starts right of the eye, so the
         // eye keeps its own click.
         let mut response = row.response.rect;
-        response.min.x = row.inner.max(response.min.x);
+        response.min.x = eye_right.max(response.min.x);
         let response = ui
             .interact(response, saved_selection_row_id(index), Sense::click())
             .on_hover_text(crate::strings::tr("ui.docks.channels.saved.hint"));
-        if response.clicked() {
+        let name_click = crate::panels::channels::alpha_name_click(ui, index, name_rect);
+        if response.clicked() || name_click.is_some() {
             // W3-X: the row that was clicked, not the most recent entry. A
             // Ctrl+click loads it as the selection without asking, as
             // Photopea's Ctrl+click on a channel thumbnail does.
-            let direct = ui.input(|i| i.modifiers.command);
+            let direct = name_click.unwrap_or_else(|| ui.input(|i| i.modifiers.command));
             w.pending_selection_load = Some(crate::SelectionLoadRequest { index, direct });
             w.emit(Intent::Action(crate::menu::MenuAction::LoadSelection));
         }
@@ -5892,6 +5920,11 @@ fn channel_thumbnail(w: &mut Workspace, ui: &mut Ui, kind: ChannelKind) {
             ui.painter()
                 .image(tex.id(), rect, uv, crate::dialogs::controls::UNTINTED);
         }),
+        // W18-C: a CMYK / Lab component (or a set) shows the composite.
+        ChannelKind::Components { .. } => w.navigator_texture.as_ref().map(|tex| {
+            ui.painter()
+                .image(tex.id(), rect, uv, crate::dialogs::controls::UNTINTED);
+        }),
     };
     if painted.is_none() {
         let side = rect.height() * 0.7;
@@ -6029,6 +6062,10 @@ pub(crate) fn path_action_id(name: &str) -> egui::Id {
     egui::Id::new(("raster-paths-action", name))
 }
 
+/// W18-E: the path rows' thumbnail, Ctrl+click load and double-click rename.
+#[path = "docks_paths_w18.rs"]
+pub(crate) mod paths_w18;
+
 /// The Paths panel: the Work Path (when there is one), a row per shape
 /// layer's path, and Photoshop's footer.
 fn paths_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
@@ -6055,7 +6092,11 @@ fn paths_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     }
     let mut select = None;
     let mut toggle: Option<(LayerId, bool)> = None;
+    // W18-E: a Ctrl+click's selection, a finished rename.
+    let mut emitted: Option<Command> = None;
+    let editing = paths_w18::renaming(ui);
     for row in &rows {
+        let mut thumb_click = false;
         let response = row_layout(ui, |ui| {
             // A path is drawn by its shape layer, so the eye here *is* that
             // layer's visibility rather than a second, parallel switch.
@@ -6069,7 +6110,18 @@ fn paths_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             {
                 toggle = Some((row.layer, !row.visible));
             }
-            ui.label(body(ui, row.name.clone()));
+            // W18-E: the path's thumbnail, and a double-click renames.
+            thumb_click = paths_w18::thumbnail(ui, doc, row.layer).clicked();
+            match &editing {
+                Some((layer, draft)) if *layer == row.layer => {
+                    if let Some(rename) = paths_w18::rename_field(ui, row.layer, draft.clone()) {
+                        emitted = Some(rename);
+                    }
+                }
+                _ => {
+                    ui.label(body(ui, row.name.clone()));
+                }
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if !row.has_geometry {
                     ui.label(hint(ui, "empty"));
@@ -6078,8 +6130,18 @@ fn paths_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
         })
         .response
         .interact(Sense::click());
-        if response.clicked() {
-            select = Some(row.layer);
+        if response.double_clicked() {
+            paths_w18::begin_rename(ui, row.layer, &row.name);
+        } else if response.clicked() || thumb_click {
+            // W18-E: Ctrl+click loads the path as the selection (Photopea);
+            // a plain click selects the row.
+            if ui.input(|i| i.modifiers.command) {
+                if let Some(load) = paths_w18::load_command(doc, row.layer) {
+                    emitted = Some(load);
+                }
+            } else {
+                select = Some(row.layer);
+            }
         }
         if !w.paths.work_selected
             && w.paths.selected == Some(row.layer)
@@ -6096,6 +6158,9 @@ fn paths_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     }
     if let Some((layer, visible)) = toggle {
         w.emit(Intent::Document(LayersModel::set_visible(layer, visible)));
+    }
+    if let Some(command) = emitted {
+        w.emit(Intent::Document(command));
     }
     if let Some(layer) = select {
         w.paths.selected = Some(layer);

@@ -91,6 +91,22 @@ pub struct TimelineView {
     pub scrub_ms: Option<u32>,
     pub selected: Option<(LayerId, KeyProperty, usize)>,
     pub drag: Option<Drag>,
+    /// W18-I: the stretch of time the axis shows, in ms; `0` shows the
+    /// whole timeline. Ctrl+wheel over the timeline zooms it.
+    pub span_ms: u32,
+    /// W18-I: the time at the axis's left edge while zoomed in; the wheel
+    /// over the timeline scrolls it.
+    pub start_ms: u32,
+}
+
+/// W18-I: the narrowest stretch of time the axis zooms in to.
+pub const MIN_SPAN_MS: u32 = 100;
+
+/// W18-I: the stretch of time the axis shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimeWindow {
+    pub start_ms: u32,
+    pub span_ms: u32,
 }
 
 impl TimelineView {
@@ -103,6 +119,54 @@ impl TimelineView {
             return snap(t as u32, timeline);
         }
         self.scrub_ms.unwrap_or(timeline.current_ms).min(duration)
+    }
+
+    /// W18-I: the stretch of time the axis shows: the whole timeline until
+    /// Ctrl+wheel zooms in, then `span_ms` from `start_ms`, both kept
+    /// inside the timeline.
+    pub fn window(&self, timeline: &model::DocumentTimeline) -> TimeWindow {
+        let duration = timeline.duration_ms.max(1);
+        let span = if self.span_ms == 0 {
+            duration
+        } else {
+            self.span_ms.clamp(MIN_SPAN_MS.min(duration), duration)
+        };
+        TimeWindow {
+            start_ms: self.start_ms.min(duration - span),
+            span_ms: span,
+        }
+    }
+
+    /// W18-I: the mouse wheel over the timeline. With Ctrl (Cmd) it zooms
+    /// the axis about the time under the pointer (`at`, 0..=1 across the
+    /// axis); otherwise it scrolls the zoomed axis through time (down or
+    /// right is later). `delta` is egui's scroll delta in points and
+    /// `axis_width` the axis's width in points.
+    pub fn wheel(
+        &mut self,
+        timeline: &model::DocumentTimeline,
+        delta: Vec2,
+        zoom: bool,
+        at: f32,
+        axis_width: f32,
+    ) {
+        let duration = timeline.duration_ms.max(1);
+        let win = self.window(timeline);
+        let at = at.clamp(0.0, 1.0);
+        if zoom {
+            let factor = (-delta.y / 200.0).exp();
+            let span = ((win.span_ms as f32 * factor).round() as u32)
+                .clamp(MIN_SPAN_MS.min(duration), duration);
+            let pivot = win.start_ms as f32 + at * win.span_ms as f32;
+            let start = (pivot - at * span as f32).max(0.0).round() as u32;
+            self.span_ms = if span >= duration { 0 } else { span };
+            self.start_ms = start.min(duration - span);
+        } else if self.span_ms != 0 {
+            let along = if delta.x != 0.0 { delta.x } else { delta.y };
+            let shift = -along * win.span_ms as f32 / axis_width.max(1.0);
+            let start = (win.start_ms as f32 + shift).round().max(0.0) as u32;
+            self.start_ms = start.min(duration - win.span_ms);
+        }
     }
 }
 
@@ -186,18 +250,19 @@ fn snap(t: u32, timeline: &model::DocumentTimeline) -> u32 {
     ((frame * 1000 + fps / 2) / fps).min(u64::from(timeline.duration_ms)) as u32
 }
 
-/// The time under `x` on an axis spanning `axis`.
-fn time_at(x: f32, axis: Rect, timeline: &model::DocumentTimeline) -> u32 {
+/// The time under `x` on an axis spanning `axis` that shows `win`.
+fn time_at(x: f32, axis: Rect, timeline: &model::DocumentTimeline, win: TimeWindow) -> u32 {
     let f = ((x - axis.left()) / axis.width().max(1.0)).clamp(0.0, 1.0);
     snap(
-        (f * timeline.duration_ms.max(1) as f32).round() as u32,
+        win.start_ms + (f * win.span_ms.max(1) as f32).round() as u32,
         timeline,
     )
 }
 
-/// Where time `t` lies on an axis spanning `axis`.
-fn x_at(t: u32, axis: Rect, timeline: &model::DocumentTimeline) -> f32 {
-    axis.left() + axis.width() * (t as f32 / timeline.duration_ms.max(1) as f32)
+/// Where time `t` lies on an axis spanning `axis` that shows `win` (left
+/// or right of the axis when `t` is outside the window).
+fn x_at(t: u32, axis: Rect, win: TimeWindow) -> f32 {
+    axis.left() + axis.width() * ((t as f32 - win.start_ms as f32) / win.span_ms.max(1) as f32)
 }
 
 /// The Frames / Timeline switch. Answers whether Timeline mode is on.
@@ -392,6 +457,9 @@ pub(super) fn timeline_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
         Sense::hover(),
     );
     let axis = Rect::from_min_max(Pos2::new(strip.left() + label_w, strip.top()), strip.max);
+    let win = view.window(tl);
+    // W18-I: keys outside the window are not drawn over the names.
+    let clip = Rect::from_x_y_ranges(axis.x_range(), ui.clip_rect().y_range());
     let ruler = ui.interact(axis, ids::ruler(), Sense::click_and_drag());
     if ui.is_rect_visible(axis) {
         ui.painter().rect_filled(
@@ -403,21 +471,23 @@ pub(super) fn timeline_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             t.borders.hairline,
             color32(t.palette.color(ColorRole::SeparatorStrong)),
         );
-        let mut s = 0u32;
-        while s <= tl.duration_ms {
-            let x = x_at(s, axis, tl);
+        // W18-I: a tick a second, or a tenth of one when zoomed in close.
+        let step = if win.span_ms <= 2000 { 100 } else { 1000 };
+        let mut s = win.start_ms.div_ceil(step) * step;
+        while s <= win.start_ms + win.span_ms {
+            let x = x_at(s, axis, win);
             ui.painter().line_segment(
                 [Pos2::new(x, axis.center().y), Pos2::new(x, axis.bottom())],
                 tick,
             );
-            s += 1000;
+            s += step;
         }
     }
     // A scrub seeks the canvas on every frame the time under the pointer
     // differs from the document's playhead: live, and never a history step.
     if ruler.is_pointer_button_down_on() || ruler.dragged() {
         if let Some(p) = ruler.interact_pointer_pos() {
-            let at = time_at(p.x, axis, tl);
+            let at = time_at(p.x, axis, tl, win);
             view.scrub_ms = Some(at);
             view.playing = false;
             if at != tl.current_ms {
@@ -428,7 +498,7 @@ pub(super) fn timeline_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     if ruler.drag_stopped() || ruler.clicked() {
         let at = ruler
             .interact_pointer_pos()
-            .map(|p| time_at(p.x, axis, tl))
+            .map(|p| time_at(p.x, axis, tl, win))
             .or(view.scrub_ms);
         if let Some(at) = at.filter(|at| *at != tl.current_ms) {
             w.emit(Intent::SeekTimeline { t_ms: at });
@@ -464,9 +534,15 @@ pub(super) fn timeline_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             _ => {}
         }
         let bar = Rect::from_min_max(
-            Pos2::new(x_at(in_ms, lane, tl), lane.top()),
-            Pos2::new(x_at(out_ms, lane, tl), lane.bottom()),
+            Pos2::new(x_at(in_ms, lane, win).max(lane.left()), lane.top()),
+            Pos2::new(x_at(out_ms, lane, win).min(lane.right()), lane.bottom()),
         );
+        // W18-I: a bar wholly outside the window has nothing to show.
+        let bar = if bar.width() >= 0.0 {
+            bar
+        } else {
+            Rect::NOTHING
+        };
         let bar_response = ui.interact(bar, ids::bar(row), Sense::click());
         if bar_response.clicked() {
             w.emit(Intent::SelectLayers {
@@ -498,7 +574,10 @@ pub(super) fn timeline_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             (in_ms, ids::bar_in(row), true),
             (out_ms, ids::bar_out(row), false),
         ] {
-            let x = x_at(edge_ms, lane, tl);
+            let x = x_at(edge_ms, lane, win);
+            if x < lane.left() - handle_w || x > lane.right() + handle_w {
+                continue;
+            }
             let handle = Rect::from_center_size(
                 Pos2::new(x, lane.center().y),
                 Vec2::new(handle_w, lane.height()),
@@ -506,7 +585,7 @@ pub(super) fn timeline_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             let r = ui.interact(handle, handle_id, Sense::drag());
             if r.dragged() {
                 if let Some(p) = r.interact_pointer_pos() {
-                    let at = time_at(p.x, lane, tl);
+                    let at = time_at(p.x, lane, tl, win);
                     view.drag = Some(if is_in {
                         Drag::In(*id, at)
                     } else {
@@ -544,18 +623,31 @@ pub(super) fn timeline_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
                     Some(Drag::Key(l, p, i, at)) if l == *id && p == property && i == index => at,
                     _ => key_ms,
                 };
-                let centre = Pos2::new(x_at(shown_ms, lane, tl), y);
+                let centre = Pos2::new(x_at(shown_ms, lane, win), y);
+                if centre.x < lane.left() - key_r || centre.x > lane.right() + key_r {
+                    continue;
+                }
                 let hit = Rect::from_center_size(
                     centre,
                     Vec2::new(key_r * 3.0, (key_r * 3.0).min(lane_step)),
                 );
                 let r = ui.interact(hit, ids::key(row, property, index), Sense::click_and_drag());
+                if r.secondary_clicked() {
+                    // W18-I: Photopea's "Right-click a keyframe to delete
+                    // it", one undo step.
+                    if let Some(c) = model::delete_key(doc, *id, property, index) {
+                        w.emit(Intent::Document(c));
+                    }
+                    view.selected = None;
+                    continue;
+                }
                 if r.clicked() || r.drag_started() {
                     view.selected = Some((*id, property, index));
                 }
                 if r.dragged() {
                     if let Some(p) = r.interact_pointer_pos() {
-                        view.drag = Some(Drag::Key(*id, property, index, time_at(p.x, lane, tl)));
+                        view.drag =
+                            Some(Drag::Key(*id, property, index, time_at(p.x, lane, tl, win)));
                     }
                 }
                 if r.drag_stopped() {
@@ -599,28 +691,53 @@ pub(super) fn timeline_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
                             centre + Vec2::new(-kr, 0.0),
                         ]
                     };
-                    ui.painter().add(egui::Shape::convex_polygon(
-                        shape,
-                        color32(t.palette.color(fill)),
-                        egui::Stroke::new(
-                            t.borders.hairline,
-                            color32(t.palette.color(ColorRole::SurfacePanel)),
-                        ),
-                    ));
+                    ui.painter()
+                        .with_clip_rect(clip)
+                        .add(egui::Shape::convex_polygon(
+                            shape,
+                            color32(t.palette.color(fill)),
+                            egui::Stroke::new(
+                                t.borders.hairline,
+                                color32(t.palette.color(ColorRole::SurfacePanel)),
+                            ),
+                        ));
                 }
             }
         }
     }
 
     // The playhead line, over the ruler and every row.
-    let x = x_at(playhead, axis, tl);
-    ui.painter().line_segment(
-        [Pos2::new(x, axis.top()), Pos2::new(x, rows_bottom)],
-        egui::Stroke::new(
-            t.borders.thick,
-            color32(t.palette.color(ColorRole::SelectionStroke)),
-        ),
-    );
+    let x = x_at(playhead, axis, win);
+    if (axis.left()..=axis.right()).contains(&x) {
+        ui.painter().line_segment(
+            [Pos2::new(x, axis.top()), Pos2::new(x, rows_bottom)],
+            egui::Stroke::new(
+                t.borders.thick,
+                color32(t.palette.color(ColorRole::SelectionStroke)),
+            ),
+        );
+    }
+
+    // W18-I: the wheel over the ruler and the rows scrolls the axis through
+    // time and Ctrl+wheel zooms it; the panel does not scroll under it.
+    let area = Rect::from_min_max(axis.min, Pos2::new(axis.right(), rows_bottom));
+    let pointer = ui.input(|i| i.pointer.hover_pos());
+    if pointer.is_some_and(|p| area.contains(p) && ui.clip_rect().contains(p)) {
+        // Ctrl (Cmd) is read off the wheel event as well as the held keys:
+        // egui files the event's own modifiers there, not in `modifiers`.
+        let (delta, zoom) = ui.input(|i| {
+            let on_event = i.events.iter().any(|e| {
+                matches!(e, egui::Event::MouseWheel { modifiers, .. }
+                    if modifiers.command || modifiers.ctrl || modifiers.mac_cmd)
+            });
+            (i.raw_scroll_delta, i.modifiers.command || on_event)
+        });
+        if delta != Vec2::ZERO {
+            let at = pointer.map_or(0.5, |p| (p.x - axis.left()) / axis.width().max(1.0));
+            view.wheel(tl, delta, zoom, at, axis.width());
+        }
+        ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+    }
 
     if view.playing {
         // Playback scrubs the canvas: each frame the playhead has moved on,
@@ -1336,5 +1453,104 @@ mod tests {
         let opacity = live.doc.layers.get(clip).unwrap().opacity;
         assert!((opacity - at as f32 / 3000.0).abs() < 1e-3);
         assert_eq!(live.history.undo_depth(), 0, "playback left no history");
+    }
+
+    /// W18-I: Photopea's "Right-click a keyframe to delete it": a secondary
+    /// click on Clip's 3000 ms opacity key deletes that key (one undo step)
+    /// and leaves the 0 ms key.
+    #[test]
+    fn a_right_click_on_a_keyframe_deletes_it() {
+        let (doc, _, clip) = timeline_doc();
+        let mut live = Live::new(doc);
+        let key = live.rect(ids::key(0, KeyProperty::Opacity, 1)).center();
+        let right = |pressed| egui::Event::PointerButton {
+            pos: key,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let (mut intents, _) = live.frame(vec![egui::Event::PointerMoved(key), right(true)]);
+        intents.extend(live.frame(vec![right(false)]).0);
+        assert_eq!(live.apply(&intents), 1, "{intents:?}");
+        assert_eq!(
+            live.doc
+                .timeline
+                .track(clip)
+                .unwrap()
+                .key_times(KeyProperty::Opacity),
+            vec![0]
+        );
+        assert_eq!(live.history.undo_depth(), 1, "one undo step");
+    }
+
+    /// W18-I: the wheel over the timeline. Ctrl+wheel over the rows zooms
+    /// the axis in about the pointer (Clip's 3000 ms key, at the axis's end,
+    /// leaves the axis), and the plain wheel then scrolls later in time,
+    /// bringing it back; the panel does not scroll under it.
+    #[test]
+    fn the_wheel_zooms_and_scrolls_the_time_axis() {
+        let (doc, _, _) = timeline_doc();
+        let mut live = Live::new(doc);
+        let axis = live.rect(ids::ruler());
+        let end_key = live.rect(ids::key(0, KeyProperty::Opacity, 1)).center();
+        assert!(
+            (end_key.x - axis.right()).abs() < 1.0,
+            "{end_key:?} {axis:?}"
+        );
+        let over = Pos2::new(axis.left() + 2.0, live.rect(ids::bar(0)).center().y);
+        let wheel = |delta: egui::Vec2, modifiers: egui::Modifiers| egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta,
+            modifiers,
+        };
+        let mut zoom_in = vec![egui::Event::PointerMoved(over)];
+        zoom_in.push(wheel(egui::vec2(0.0, 300.0), egui::Modifiers::COMMAND));
+        let (intents, _) = live.frame(zoom_in);
+        assert!(intents.is_empty(), "the wheel edits nothing: {intents:?}");
+        live.frame(Vec::new());
+        let view = timeline_view(&live.ctx);
+        assert!(view.span_ms > 0 && view.span_ms < 3000, "{view:?}");
+        // Zoomed about the pointer: the time under it stays under it.
+        let at = (over.x - axis.left()) / axis.width();
+        let win = view.window(&live.doc.timeline);
+        let under = win.start_ms as f32 + at * win.span_ms as f32;
+        assert!((under - at * 3000.0).abs() <= 1.0, "{view:?}");
+        // A second zoomed frame: `read_response` falls back to the frame
+        // before, which the wheel frame drew unzoomed.
+        live.frame(Vec::new());
+        assert!(
+            live.ctx
+                .read_response(ids::key(0, KeyProperty::Opacity, 1))
+                .is_none_or(|r| !r.rect.is_positive() || r.rect.left() > axis.right()),
+            "the 3000 ms key is outside the zoomed window"
+        );
+        // Wheel down: later in time, until the end of the timeline shows.
+        for _ in 0..20 {
+            live.frame(vec![
+                egui::Event::PointerMoved(over),
+                wheel(egui::vec2(0.0, -400.0), egui::Modifiers::NONE),
+            ]);
+        }
+        live.frame(Vec::new());
+        let view = timeline_view(&live.ctx);
+        let win = view.window(&live.doc.timeline);
+        assert_eq!(win.start_ms + win.span_ms, 3000, "{view:?}");
+        let end_key = live.rect(ids::key(0, KeyProperty::Opacity, 1)).center();
+        assert!(
+            (end_key.x - axis.right()).abs() < 1.0,
+            "{end_key:?} {axis:?}"
+        );
+        // Ctrl+wheel the other way zooms back out to the whole timeline.
+        for _ in 0..10 {
+            live.frame(vec![
+                egui::Event::PointerMoved(over),
+                wheel(egui::vec2(0.0, -300.0), egui::Modifiers::COMMAND),
+            ]);
+        }
+        assert_eq!(
+            timeline_view(&live.ctx).window(&live.doc.timeline).span_ms,
+            3000
+        );
+        assert_eq!(live.history.undo_depth(), 0);
     }
 }

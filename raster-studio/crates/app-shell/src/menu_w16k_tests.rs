@@ -122,10 +122,10 @@ fn view_mode_rows_set_the_screen_mode() {
     }
 }
 
-/// Round 3: the canvas path overlay (chrome.rs `paint_live_session`) reads
-/// no view flag, so View > Show offers no Paths row that would tick and
-/// hide nothing. Every row the shell's View > Show carries must be a flag
-/// some painter reads; today that is Slices alone.
+/// Round 3, revised by W18-E: every row the shell's View > Show carries is
+/// a flag some painter reads. W18-E's canvas path overlay
+/// (`paths_w18::paint_paths`) reads Paths, so the row is Photopea's again,
+/// in its order: Selection, Paths, Guides, Grid, Pixel Grid, Slices.
 #[test]
 fn view_show_offers_no_inert_paths_row() {
     let dir = tempfile::tempdir().unwrap();
@@ -133,9 +133,13 @@ fn view_show_offers_no_inert_paths_row() {
     let show = submenu(&ed, "View", &["Show"]);
     assert_eq!(
         show,
-        vec![MenuAction::ToggleView(ui::ViewFlag::Slices)],
+        ui::ViewFlag::SHOW
+            .iter()
+            .map(|f| MenuAction::ToggleView(*f))
+            .collect::<Vec<_>>(),
         "View > Show carries only rows whose flag a painter reads"
     );
+    assert!(show.contains(&MenuAction::ToggleView(ui::ViewFlag::Paths)));
 }
 
 // ---------------------------------------------------------------------------

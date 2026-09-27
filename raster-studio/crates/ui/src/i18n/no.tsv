@@ -1,0 +1,1677 @@
+# Raster Studio interface strings, no. One row per line: the English source, a TAB,
+# the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
+# Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
+@name	Norsk
+Artboards	Tegnebrett
+No Slices	Ingen stykker
+All Slices	Alle stykker
+User Slices	Brukerstykker
+Put the file into ZIP	Legg filen i en ZIP
+Nothing under the pointer for this row	Det er ingenting under pekeren for denne raden
+Make Work Path	Lag arbeidsbane
+Remove Anchor Point	Fjern ankerpunkt
+Remove Path	Fjern bane
+Make Selection	Lag markering
+Divide…	Del…
+Right-click on an anchor point of the path	Høyreklikk på et ankerpunkt på banen
+Right-click inside a path	Høyreklikk inne i en bane
+Select or draw a path first	Velg eller tegn en bane først
+Right-click on a text layer	Høyreklikk på et tekstlag
+Right-click inside a slice	Høyreklikk inne i et stykke
+Divide Slices	Del opp stykker
+N equal parts	N like store deler
+N pixels per part	N piksler per del
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Deler stykket du høyreklikket på, eller lerretet når det ikke fantes noe, i et rutenett av stykker.
+Tick Horizontally or Vertically	Kryss av for Vannrett eller Loddrett
+These settings make no cut: raise N or pick a smaller pixel count	Disse innstillingene kutter ingenting: øk N eller velg et mindre antall piksler
+ fps	 b/s
+ frames	 bilder
+ ms	 ms
+ px	 px
+0 bytes	0 byte
+16 Bits	16 biter
+16 Bits/Channel	16 biter/kanal
+16 bit	16 biter
+32 Bits/Channel	32 biter/kanal
+3D	3D
+50% Grey	50 % grå
+50% Threshold	50 % terskel
+8 Bits	8 biter
+8 Bits/Channel	8 biter/kanal
+8 bit	8 biter
+90° Clockwise	90° med klokken
+90° Counter Clockwise	90° mot klokken
+A CSV row has the wrong number of fields, at line	En CSV-rad har feil antall felt, på linje
+A blank canvas at any size	Et tomt lerret i hvilken som helst størrelse
+A colour channel cannot be deleted	En fargekanal kan ikke slettes
+A layered raster editor	En rasterredigerer med lag
+A palette holds 2 to 256 colours	En palett rommer 2 til 256 farger
+A saved selection already has that name	En lagret markering har allerede det navnet
+A saved selection: click to open Select > Load Selection, then choose it by name there	En lagret markering: klikk for å åpne Merk > Last inn markering, og velg den der etter navn
+A slice needs a name	Et stykke må ha et navn
+AV1 (smaller, newer players)	AV1 (mindre, nyere avspillere)
+AVIF…	AVIF…
+About Raster Studio	Om Raster Studio
+Absolute Colorimetric	Absolutt kolorimetrisk
+Action sets	Handlingssett
+Actions	Prosedyrer
+Adaptive (median cut)	Adaptiv (median cut)
+Add "copy" to copied layers	Legg til «kopi» i kopierte lag
+Add Artboard Above	Legg til tegnebrett over
+Add Artboard Below	Legg til tegnebrett under
+Add Artboard Left	Legg til tegnebrett til venstre
+Add Artboard Right	Legg til tegnebrett til høyre
+Add Filter Mask	Legg til filtermaskering
+Add Media	Legg til medier
+Add Noise…	Legg til støy…
+Add a layer mask	Legg til en lagmaske
+Add a smart filter mask	Legg til en smart filtermaske
+Blank preview image	Tomt forhåndsvisningsbilde
+Byte Order	Byterekkefølge
+Depth	Dybde
+Duplicate Into…	Dupliser til…
+Guides from Layer	Hjelpelinjer fra lag
+Minify the file	Forminsk filen
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Plasser en bilde- eller videofil (Fil > Plasser innebygd); en video blir et videolag ved avspillingshodet
+Add an adjustment layer	Legg til et justeringslag
+Add another instance of this effect	Legg til en forekomst til av denne effekten
+Add current colour	Legg til gjeldende farge
+Add export	Legg til eksport
+Add frame	Legg til bilde
+Add or remove room around the image. Pixels are not resampled.	Legg til eller fjern plass rundt bildet. Piksler samples ikke på nytt.
+Add shortcut	Legg til snarvei
+Add to Selection	Legg til i markering
+Adds one guide at a document coordinate, in pixels.	Legger til én hjelpelinje ved en dokumentkoordinat, i piksler.
+Adjustment	Justering
+Adjustments	Justeringer
+Advanced	Avansert
+Again	På nytt
+Again with Copy	Igjen med kopi
+Aliased (pencil)	Uten kantutjevning (blyant)
+Align	Juster
+Align the bottom edge to the canvas	Juster nederkanten etter lerretet
+Align the left edge to the canvas	Juster venstre kant etter lerretet
+Align the right edge to the canvas	Juster høyre kant etter lerretet
+Align the top edge to the canvas	Juster overkanten etter lerretet
+Align with layer	Juster etter lag
+All	Alt
+All Caps	Store bokstaver
+All Caps shapes every lowercase letter as its capital; Small Caps shapes it as a capital at 70 % size. The stored text keeps the case you typed.	Store bokstaver former hver liten bokstav som stor; Kapitéler former den som stor i 70 % størrelse. Den lagrede teksten beholder skrivemåten du skrev.
+All Layers	Alle lag
+Alpha	Alfa
+Already used by	Brukes allerede av
+Alt Tag	Alt-kode
+Amount	Mengde
+An export needs at least one output	En eksport må ha minst én utdata
+An image or project from this computer	Et bilde eller prosjekt fra denne datamaskinen
+Angle	Vinkel
+Angle (degrees)	Vinkel (grader)
+Angle jitter	Vinkelvariasjon
+Animation	Animasjon
+Another slice already has this name	Et annet stykke har allerede dette navnet
+Appearance	Utseende
+Applied	Brukt
+Apply	Bruk
+Apply Guides	Bruk hjelpelinjer
+Apply Image	Bruk bilde
+Apply Image…	Bruk bilde…
+Apply Mask	Bruk maske
+Apply Style	Bruk stil
+Apply Style 1	Bruk stil 1
+Apply Style Preset…	Bruk stilforhåndsinnstilling…
+Apply the next comp	Bruk den neste komposisjonen
+Apply the previous comp	Bruk den forrige komposisjonen
+Apply this mask	Bruk denne masken
+Approximate. The composited result is what the canvas shows.	Omtrentlig. Det sammensatte resultatet er det lerretet viser.
+Arbitrary…	Vilkårlig…
+Arc	Bue
+Arc Lower	Bue nedover
+Arc Upper	Bue oppover
+Arch	Hvelv
+Arrange	Ordne
+Artboard	Tegnebrett
+Artboard from Layers	Tegnebrett fra lag
+Artboards in one document	Tegnebrett i ett dokument
+Artboards to Files…	Tegnebrett til filer…
+Assign Profile	Tilordne profil
+Assigned {name}: the pixel numbers are unchanged, so the colours look different	{name} tilordnet: pikselverdiene er uendret, så fargene ser annerledes ut
+Author	Forfatter
+Auto Color	Automatisk farge
+Auto Contrast	Automatisk kontrast
+Auto Tone	Automatisk tone
+Auto leading	Automatisk linjeavstand
+Auto-Align Layers…	Juster lag automatisk…
+Auto-Blend Layers…	Bland lag automatisk…
+Automate	Automatiser
+Autosaves of never-saved documents go here; empty uses the default	Autolagrede kopier av aldri lagrede dokumenter havner her; tomt bruker standarden
+Average	Gjennomsnittlig
+BMP…	BMP…
+Back to the colour this opened on	Tilbake til fargen dette åpnet med
+Background — double-click for the picker	Bakgrunn — dobbeltklikk for fargevelgeren
+Based On	Basert på
+Baseline shift	Grunnlinjeforskyvning
+Baseline to baseline. Auto leading follows the type size.	Grunnlinje til grunnlinje. Automatisk linjeavstand følger skriftstørrelsen.
+Batch	Parti
+Batch…	Parti…
+Bend	Bøy
+Bevel	Skråkant
+Bevel & Emboss	Skråkant og preg
+Bevel & Emboss…	Skråkant og preg…
+Bind a text replacement variable to a text layer, or a visibility variable to any layer.	Knytt en teksterstatningsvariabel til et tekstlag, eller en synlighetsvariabel til et hvilket som helst lag.
+Bitmap	Punktgrafikk
+Bitmap…	Punktgrafikk…
+Black	Svart
+Black & White	Svart-hvitt
+Black & White…	Svart-hvitt…
+Black to Transparent	Svart til gjennomsiktig
+Black to White	Svart til hvit
+Black to white through the inks	Svart til hvit gjennom fargene
+Blacks	Svarte
+Blend If	Bruk overgang hvis
+Blend Mode: Color	Blandingsmodus: Farge
+Blend Mode: Color Burn	Blandingsmodus: Fargebrenning
+Blend Mode: Color Dodge	Blandingsmodus: Fargeunnvikelse
+Blend Mode: Darken	Blandingsmodus: Mørkere
+Blend Mode: Difference	Blandingsmodus: Differanse
+Blend Mode: Dissolve	Blandingsmodus: Oppløs
+Blend Mode: Exclusion	Blandingsmodus: Ekskludering
+Blend Mode: Hard Light	Blandingsmodus: Hardt lys
+Blend Mode: Hard Mix	Blandingsmodus: Hard blanding
+Blend Mode: Hue	Blandingsmodus: Fargetone
+Blend Mode: Lighten	Blandingsmodus: Lysere
+Blend Mode: Linear Burn	Blandingsmodus: Lineær brenning
+Blend Mode: Linear Dodge (Add)	Blandingsmodus: Lineær unnvikelse (legg til)
+Blend Mode: Linear Light	Blandingsmodus: Lineært lys
+Blend Mode: Luminosity	Blandingsmodus: Luminans
+Blend Mode: Multiply	Blandingsmodus: Multipliser
+Blend Mode: Normal	Blandingsmodus: Normal
+Blend Mode: Overlay	Blandingsmodus: Overlegg
+Blend Mode: Pin Light	Blandingsmodus: Punktlys
+Blend Mode: Saturation	Blandingsmodus: Metning
+Blend Mode: Screen	Blandingsmodus: Skjerm
+Blend Mode: Soft Light	Blandingsmodus: Mykt lys
+Blend Mode: Vivid Light	Blandingsmodus: Levende lys
+Blending	Blanding
+Blending Options	Blandingsvalg
+Blending Options…	Blandingsvalg…
+Blending options	Blandingsalternativer
+Blends a source document, layer or channel into the active layer as one step.	Blander et kildedokument, -lag eller -kanal inn i det aktive laget som ett trinn.
+Blends one channel of each of two sources into a new channel, a selection or a new document.	Blander én kanal fra hver av to kilder til en ny kanal, en markering eller et nytt dokument.
+Blue	Blå
+Blues	Blåtoner
+Blur	Uskarpt-filtre
+Blur Gallery	Uskarphetsgalleri
+Blur More	Mer uskarphet
+Bold	Fet
+Border Selection	Kantmarkering
+Border…	Ramme…
+Both axes	Begge akser
+Bottom	Bunn
+Bottom Edges	Nederste kanter
+Bottom Left	Nederst til venstre
+Bottom Right	Nederst til høyre
+Bottom Right Pixel Color	Farge på piksel nede til høyre
+Bottom left	Nede til venstre
+Bottom right	Nede til høyre
+Box Blur…	Boksuskarphet…
+Box height	Rammehøyde
+Brightness	Lysstyrke
+Brightness jitter	Lysstyrkevariasjon
+Brightness/Contrast	Lysstyrke/kontrast
+Brightness/Contrast…	Lysstyrke/kontrast…
+Bring Forward	Flytt fremover
+Bring to Front	Plasser lengst frem
+Brush Editor	Penselredigerer
+Brush: Background	Pensel: bakgrunn
+Brush: Foreground	Pensel: forgrunn
+Brushes	Pensler
+Bulge	Utbulning
+Butt	Rett
+CMYK Color	CMYK-farge
+Calculations	Beregninger
+Calculations…	Beregninger…
+Camera Raw…	Camera Raw…
+Canvas Size	Arbeidsområde
+Canvas Size…	Arbeidsområde…
+Canvas extension	Lerretsutvidelse
+Caps	Endepunkter
+Carries the XMP; the source's EXIF goes into JPEG only	Inneholder XMP; kildens EXIF går bare inn i JPEG
+Cell size (pixels)	Cellestørrelse (piksler)
+Center	Sentrum
+Center horizontally on the canvas	Midtstill vannrett på lerretet
+Center vertically on the canvas	Midtstill loddrett på lerretet
+Centimeters	Centimeter
+Centre	Midten
+Centre the view on this note	Midtstill visningen på dette notatet
+Change Bit Depth	Endre bitdybde
+Change Colour Mode	Endre fargemodus
+Change Layer Properties	Endre lagegenskaper
+Change how many pixels the document has, or how large it prints.	Endre hvor mange piksler dokumentet har, eller hvor stort det skrives ut.
+Channel	Kanal
+Channel Mixer	Kanaler
+Channel Mixer…	Kanaler…
+Channel thumbnail	Kanalminiatyr
+Channels	Kanaler
+Character	Tegn
+Character Style	Tegnstil
+Character Styles	Tegnstiler
+Checkerboard	Sjakkbrett
+Choose 2 to 256 colours	Velg 2 til 256 farger
+Choose a colour profile	Velg en fargeprofil
+Choose a destination folder	Velg en målmappe
+Choose a source folder	Velg en kildemappe
+Choose at least one page to open	Velg minst én side å åpne
+Choose at least one side to trim	Velg minst én side å beskjære
+Choose the Action to play	Velg handlingen som skal spilles av
+Choose the open grayscale document each channel of the new RGB document comes from.	Velg det åpne gråtonedokumentet som hver kanal i det nye RGB-dokumentet kommer fra.
+Choose the pages to open, their resolution and how they open.	Velg sidene som skal åpnes, oppløsningen deres og hvordan de åpnes.
+Choose the source and the destination folders.	Velg kilde- og målmappene.
+Choose…	Velg…
+Clear	Tøm
+Clear All	Fjern alle
+Clear Guides	Fjern hjelpelinjer
+Clear History	Tøm historikk
+Clear Layer Style	Fjern lagstil
+Clear Slices	Fjern stykker
+Clear Strokes	Fjern strøk
+Clear existing guides	Fjern eksisterende hjelpelinjer
+Clear the {noun} from the active text layer	Fjern {noun} fra det aktive tekstlaget
+Cleared {n} slice(s)	{n} stykke(r) fjernet
+Click an item in the panel first	Klikk først på et element i panelet
+Click anywhere to sample a colour	Klikk hvor som helst for å hente en farge
+Click anywhere to sample a colour, or press Escape.	Klikk hvor som helst for å hente en farge, eller trykk på Escape.
+Click the graph to add a point, drag a point to bend the curve, drag it off the graph to remove it	Klikk i grafen for å legge til et punkt, dra et punkt for å bøye kurven, dra det ut av grafen for å fjerne det
+Click the preview to sample a colour from it	Klikk i forhåndsvisningen for å hente en farge fra den
+Click the preview to sample the colour to replace	Klikk i forhåndsvisningen for å hente fargen som skal erstattes
+Click the ramp to edit its stops.	Klikk på overgangen for å redigere stoppene.
+Clip to layer below	Klipp til laget under
+Clipboard	Utklippstavle
+Clipping	Klipping
+Close	Lukk
+Close All	Lukk alle
+Close Alpha Channel	Lukk alfakanal
+Close Others	Lukk andre
+Close panel	Lukk panel
+Clouds	Skyer
+Codec	Kodek
+Color	Farge
+Color Balance	Fargebalanse
+Color Balance…	Fargebalanse…
+Color Burn	Mørkne farge
+Color Dodge	Lysne farge
+Color Dynamics	Fargedynamikk
+Color Halftone…	Rastermønster…
+Color Intensity	Fargeintensitet
+Color Label	Fargeetikett
+Color Lookup	Fargeoppslag
+Color Lookup Tables…	Fargeoppslagstabeller…
+Color Lookup…	Fargeoppslag…
+Color Overlay	Fargeoverlapping
+Color Overlay…	Fargeoverlapping…
+Color Picker	Fargevelger
+Color Range	Fargespekter
+Color Range…	Fargespekter…
+Color fringe cleanup: pulls the boundary pixels' color toward the nearby interior ink — a separate edit from mask refinement.	Rensing av fargekanter: trekker kantpikslenes farge mot den nærliggende indre fargen — en egen redigering, atskilt fra maskeforbedring.
+Color to Alpha…	Farge til alfa…
+Colors	Farger
+Colour	Farge
+Colour varies once per stroke.	Fargen varierer én gang per strøk.
+Colours	Farger
+Colours must be 1 to 64, the tolerance above 0 and the corner length at least 1	Farger må være 1 til 64, toleransen over 0 og hjørnelengden minst 1
+Columns	Kolonner
+Columns and rows with gutters between them, inside optional margins, in pixels.	Kolonner og rader med mellomrom imellom, innenfor valgfrie marger, i piksler.
+Combine Shapes	Kombiner figurer
+Commit (Enter)	Bekreft (Enter)
+Cancel (Esc)	Avbryt (Esc)
+All Documents	Alle dokumenter
+RAW…	RAW…
+Save PSD/PSB	Lagre PSD/PSB
+Save PSD/PSB…	Lagre PSD/PSB…
+Select Source	Velg kilde
+Alt	Alt
+Commit Contents	Bekreft innhold
+Composite	Sammensatt
+Condensed	Smal
+Cone	Kjegle
+Constant	Konstant
+Constrain proportions	Behold proporsjoner
+Content-Aware	Innholdsbevisst
+Content-Aware Scale	Innholdstilpasset skala
+Contour	Kontur
+Contract Selection	Trekk sammen markering
+Contract by	Trekk sammen med
+Contract…	Trekk sammen…
+Contrast	Kontrast
+Conversion Options	Konverteringsalternativer
+Convert Formats	Konverter formater
+Convert Formats…	Konverter formater…
+Convert for Smart Filters	Konverter for smarte filtre
+Convert to Layers	Konverter til lag
+Convert to Linked…	Konverter til koblet…
+Convert to Paragraph Text	Konverter til avsnittstekst
+Convert to Point Text	Konverter til punkttekst
+Convert to Profile	Konverter til profil
+Convert to Profile works on 8- and 16-bit documents	Konverter til profil virker på 8- og 16-biters dokumenter
+Convert to Profile…	Konverter til profil…
+Convert to Shape	Konverter til form
+Convert to Smart Object	Gjør om til Smartobjekt
+Converted to {name} ({intent}): the numbers changed so the colours look the same	Konvertert til {name} ({intent}): verdiene er endret så fargene ser like ut
+Cool	Kjølig
+Copper	Kobber
+Copy	Kopier
+Copy Layer Style	Kopier lagstil
+Copy Merged	Kopier sammenflettet
+Copyright Notice	Opphavsrettsmerknad
+Corner length	Hjørnelengde
+Corner radius	Hjørneradius
+Corner radius applies to rectangles; this path has no corners to round	Hjørneradius gjelder rektangler; denne banen har ingen hjørner å avrunde
+Corners	Hjørner
+Count jitter	Antallsvariasjon
+Create Clipping Mask	Opprett utklippsmaske
+Create Layer	Opprett lag
+Create Layers	Opprett lag
+Crop	Beskjære
+Crop and Straighten Photos	Beskjær og rett opp bilder
+Crops the canvas to the content, judged by the basis below.	Beskjærer lerretet til innholdet, vurdert etter grunnlaget nedenfor.
+Crystallize…	Krystalliser…
+Current Layer	Gjeldende lag
+Current Path	Gjeldende bane
+Curve tolerance	Kurvetoleranse
+Curves	Kurver
+Curves…	Kurver…
+Custom	Tilpasset
+Custom Brush	Egendefinert pensel
+Custom: with the Move tool, drag the 16 mesh handles on the canvas	Egendefinert: dra de 16 nettverkshåndtakene på lerretet med Flytt-verktøyet
+Custom…	Tilpasset…
+Cut	Klipp ut
+Cyan	Cyan
+Cyan / Red	Cyan / rød
+Cyans	Cyantoner
+DDS…	DDS…
+DXF…	DXF…
+Dark	Mørk
+Dark Blue	Mørkeblå
+Dark Grey	Mørkegrå
+Darken	Gjør mørkere
+Darker Color	Mørkere farge
+Dash	Stiplet
+Data Set	Datasett
+Data Sets	Datasett
+Data Sets…	Datasett…
+Default	Standard
+Default colours  (D)	Standardfarger  (D)
+Default colours (D)	Standardfarger (D)
+Define	Definer
+Define Brush Preset…	Definer penselforhåndsinnstilling…
+Define Custom Shape…	Definer egendefinert figur…
+Define New	Definer ny
+Define Pattern…	Definer mønster…
+Define…	Definer…
+Delete	Slett
+Delete Filter Mask	Slett filtermaskering
+Delete Layer	Slett lag
+Delete Mask	Slett maske
+Delete Vector Mask	Slett vektormaskering
+Delete action	Slett handling
+Delete channel	Slett kanal
+Delete frame	Slett bilde
+Delete path	Slett bane
+Delete selected layers	Slett markerte lag
+Delete set and its actions	Slett settet og handlingene i det
+Delete stop	Slett stopp
+Delete the applied comp	Slett den brukte komposisjonen
+Delete the selected keyframe	Slett det markerte nøkkelbildet
+Delete the selected tool preset	Slett den markerte verktøyforhåndsinnstillingen
+Delete the selected {noun}	Slett markert {noun}
+Delete the smart filter mask	Slett den smarte filtermasken
+Delete this note	Slett dette notatet
+Delete this smart filter	Slett dette smarte filteret
+Delete this spot channel	Slett denne spotfargekanalen
+Density	Tetthet
+Dents…	Bulker…
+Desaturate	Mindre metning
+Description	Beskrivelse
+Deselect	Fravelg
+Deselect Layers	Opphev markering av lag
+Despeckle	Flekkfjerning
+Destination	Mål
+Destination Space	Målfargerom
+Detail	Detalj
+Detail scales	Detaljskalaer
+Diamond	Rombe
+Difference	Differens
+Difference Clouds	Dobbelteksponerte skyer
+Diffuse…	Diffus…
+Diffusion	Diffusjon
+Diffusion Dither	Diffusjonsraster
+Disable / Enable Filter Mask	Deaktiver / aktiver filtermaske
+Disable / Enable Mask	Deaktiver / aktiver maske
+Disable / Enable Vector Mask	Deaktiver / aktiver vektormaske
+Disable Mask	Deaktiver maske
+Disable Vector Mask	Deaktiver vektormaskering
+Displace…	Forflytning…
+Dissolve	Dryss
+Distance	Avstand
+Distort	Forvreng
+Distribute	Fordel
+Dither	Rastrering
+Dither…	Rastrering…
+Divide	Del
+Dock this panel here	Fest dette panelet her
+Document	Dokument
+Document Bounds	Dokumentgrenser
+Document Info	Dokumentinfo
+Document Title	Dokumenttittel
+Document size	Dokumentstørrelse
+Double-click to edit in Layer Style; drag to the trash to delete	Dobbeltklikk for å redigere i Lagstil; dra til papirkurven for å slette
+Double-click to edit this filter's settings	Dobbeltklikk for å redigere innstillingene til dette filteret
+Double-click to rename	Dobbeltklikk for å gi nytt navn
+Drag a line with the Ruler first	Dra først en linje med linjalen
+Drag to zoom the view	Dra for å zoome visningen
+Drop Shadow	Skygger
+Drop Shadow…	Skygger…
+Duotone	Duotone
+Duotone Options	Duotonealternativer
+Duotone…	Duotone…
+Duplicate	Dupliser
+Duplicate Layer	Duplisér lag
+Duplicate Layer…	Duplisér lag…
+Duplicate frame	Dupliser bilde
+Dust & Scratches…	Støv og skrammer…
+EMF…	EMF…
+EXIF and XMP writing is not implemented — only ICC is embedded	Skriving av EXIF og XMP er ikke implementert — bare ICC bygges inn
+EXR…	EXR…
+Ease In	Myk inn
+Ease Out	Myk ut
+Edge Glow	Glødende kanter
+Edge refinement: feather, shift, smooth, and contrast over the mask's existing coverage — not subject recognition.	Kantforbedring: myking, forskyvning, utjevning og kontrast over maskens eksisterende dekning — ingen motivgjenkjenning.
+Edges	Kanter
+Edit	Rediger
+Edit Adjustment	Rediger justering
+Edit Adjustment…	Rediger justering…
+Edit Alpha Channel	Rediger alfakanal
+Edit Contents…	Rediger innhold…
+Edit Document Records	Rediger dokumentposter
+Edit Fill	Rediger fyll
+Edit Filter Mask	Rediger filtermaske
+Edit Generator	Rediger generator
+Edit Group	Rediger gruppe
+Edit Guides	Rediger hjelpelinjer
+Edit Raster	Rediger raster
+Edit Saved Selection	Rediger lagret markering
+Edit Shape	Rediger figur
+Edit Slices	Rediger stykker
+Edit Smart object	Rediger smart objekt
+Edit Text	Rediger tekst
+Edit Timeline	Rediger tidslinje
+Edit brush…	Rediger pensel…
+Edit fill	Rediger fyll
+Edit gradient stops — click to open the editor	Rediger overgangsstopp — klikk for å åpne redigereren
+Edit in Quick Mask Mode	Rediger i hurtigmaskemodus
+Edit this ramp	Rediger denne overgangen
+Effects	Effekter
+Effects apply to the whole layer and undo as one step.	Effekter gjelder hele laget og angres som ett trinn.
+Embed EXIF and XMP	Bygg inn EXIF og XMP
+Embed Linked	Bygg inn koblet
+Embed colour profile	Bygg inn fargeprofil
+Embedded source	Innebygd kilde
+Emboss…	Relieff…
+Enable / disable the smart filter mask	Aktiver / deaktiver den smarte filtermasken
+Enable Mask	Aktiver maske
+Enable Vector Mask	Aktiver vektormaskering
+Enable at least one export	Aktiver minst én eksport
+Enabled	Aktivert
+Enlarge smaller images	Forstørr mindre bilder
+Enter a colour like #3366CC	Skriv inn en farge som #3366CC
+Entropy	Entropi
+Equalize	Utjevn
+Essentials	Det viktigste
+Every enabled row is written when you export.	Hver aktivert rad skrives når du eksporterer.
+Every image in the source folder is fitted into the box and written to the destination folder in its own format.	Hvert bilde i kildemappen tilpasses i boksen og skrives til målmappen i sitt eget format.
+Every parameter is at its neutral value — there is nothing to clean	Alle parametere står på sin nøytrale verdi — det er ingenting å rense
+Every parameter is at its neutral value — there is nothing to refine	Alle parametere står på sin nøytrale verdi — det er ingenting å forbedre
+Every variable needs a name	Hver variabel må ha et navn
+Exact	Nøyaktig
+Exclude Overlapping Shapes	Utelat overlappende figurer
+Exclusion	Utelatelse
+Expand Selection	Utvid markering
+Expand by	Utvid med
+Expand the dock	Utvid dokken
+Expanded	Bred
+Expand…	Utvid…
+Export	Eksporter
+Export As	Eksporter som
+Export Color Lookup	Eksporter fargeoppslag
+Export Contents…	Eksporter innhold…
+Export Diagnostics…	Eksporter diagnostikk…
+Export Layers…	Eksporter lag…
+Export PDF	Eksporter PDF
+Export as .ABR…	Eksporter som .ABR…
+Export as .ACO…	Eksporter som .ACO…
+Export as .ASL…	Eksporter som .ASL…
+Export set as .atn	Eksporter sett som .atn
+Export…	Eksporter…
+Exposure	Eksponering
+Exposure…	Eksponering…
+Extra Bold	Ekstra fet
+Extra Condensed	Ekstra smal
+Extra Expanded	Ekstra bred
+Extra Light	Ekstra lett
+Extras	Extra
+Extrude…	Ekstruder…
+Eyedropper	Pipette
+Face	Snitt
+Facet	Fasetter
+Fade	Uttoning
+Fade…	Uttoning…
+Family	Familie
+Feather	Uttoning
+Feather Selection	Myk markeringskant
+Feather radius	Radius for myk kant
+Feather…	Uttoning…
+Fibers…	Fibre…
+Field Blur…	Feltuskarphet…
+File	Fil
+File Info	Filinformasjon
+File Info…	Filinformasjon…
+File name	Filnavn
+Files that fail are listed in batch-errors.txt in the destination.	Filer som mislykkes, er oppført i batch-errors.txt i målet.
+Fill	Fyll
+Fill Filter Mask	Fyll filtermaske
+Fill Layer	Fyllag
+Fill Mask	Fyll maske
+Fill Screen	Fyll skjermen
+Fill in File Info, or open a file that has EXIF, to embed metadata	Fyll ut filinformasjon, eller åpne en fil med EXIF, for å bygge inn metadata
+Fill path with the foreground colour, on a new shape layer	Fyll banen med forgrunnsfargen, på et nytt figurlag
+Fill type	Fylltype
+Fills the active selection with the chosen contents.	Fyller den aktive markeringen med det valgte innholdet.
+Fill…	Fyll…
+Filter	Filter
+Filter Gallery	Filtergalleri
+Filter Gallery…	Filtergalleri…
+Find Edges	Finn kanter
+First line	Første linje
+Fish	Fisk
+Fisheye	Fiskeøye
+Fit The Area	Tilpass området
+Fit on Screen	Tilpass til skjermen
+Fit the whole image in the window	Tilpass hele bildet i vinduet
+Fixed height	Fast høyde
+Flag	Flagg
+Flame…	Flamme…
+Flat Angled 40	Flat vinklet 40
+Flatten Image	Slå sammen alle lag
+Flip Canvas Horizontal	Vend lerret vannrett
+Flip Canvas Vertical	Vend lerret loddrett
+Flip Horizontal	Vend vannrett
+Flip Vertical	Vend loddrett
+Flip View Horizontal	Vend visning vannrett
+Flip View Vertical	Vend visning loddrett
+Flow jitter	Flytvariasjon
+Folders	Mapper
+Font: 	Skrift: 
+Foreground strokes mark what to keep, background strokes what to drop; Preview shows the cut.	Forgrunnsstrøk markerer det som skal beholdes, bakgrunnsstrøk det som skal bort; Forhåndsvisning viser snittet.
+Foreground — double-click for the picker	Forgrunn — dobbeltklikk for fargevelgeren
+Foreground/background jitter	Forgrunns-/bakgrunnsvariasjon
+Format	Format
+Fourier	Fourier
+Fourier Transform	Fouriertransformasjon
+Fragment	Fragmenter
+Frame	Ramme
+Frames	Bilder
+Free Transform	Fri transformer
+Free Transform a Copy	Fri transformering av en kopi
+From Transparency	Fra gjennomsiktighet
+Fullscreen	Fullskjerm
+Fuzziness	Toleranse
+GIF…	GIF…
+Gamma	Gamma
+Gamut Warning	Fargeomfangsadvarsel
+Gaussian	Gaussisk
+Gaussian Blur…	Gaussisk uskarphet…
+Generate Mockups	Generer modeller
+Generate Mockups…	Generer modeller…
+Give the brush a name	Gi penselen et navn
+Give the export a file name	Gi eksporten et filnavn
+Glass Menus	Glassmenyer
+Global light	Globalt lys
+Glyphs	Tegnvarianter
+Gradient	Gradering
+Gradient Editor	Graderingsredigering
+Gradient Map	Graderingskart
+Gradient Map…	Graderingskart…
+Gradient Overlay	Graderingsoverlapping
+Gradient Overlay…	Graderingsoverlapping…
+Gradient…	Gradering…
+Gray	Grå
+Grayscale	Gråtoner
+Green	Grønn
+Greens	Grønntoner
+Grid	Rutenett
+Grid points	Rutenettpunkter
+Group	Gruppe
+Group Layers	Gruppér lag
+Grow	Utvid
+Guide Guy	Guide Guy
+Guides	Hjelpelinjer
+Gutter	Mellomrom
+H	H
+H.264 (plays everywhere)	H.264 (spilles av overalt)
+HDR Toning	HDR-toning
+HDR Toning…	HDR-toning…
+HSB/HSL…	HSB/HSL…
+Halftone Screen	Halvtoneraster
+Hard Light	Hardt lys
+Hard Mix	Hard fargeblanding
+Hard Round 24	Hard rund 24
+Hard Round 4	Hard rund 4
+Hard edges, no blending. Pixel art only — it aliases on downscale.	Harde kanter, ingen blanding. Bare for pikselgrafikk — det blir taggete ved nedskalering.
+Harder Brush	Hardere pensel
+Height	Høyde
+Height to 110%	Høyde til 110 %
+Height to 125%	Høyde til 125 %
+Height to 80%	Høyde til 80 %
+Height to 90%	Høyde til 90 %
+Help	Hjelp
+Hide All	Skjul alle
+Hide Layers	Skjul lag
+Hide Selection	Skjul markering
+Hide the source layer	Skjul kildelaget
+High Contrast	Høy kontrast
+High Pass…	Høypass…
+Highlights	Høylys
+Histogram	Histogram
+Histories	Historikker
+History	Historie
+Hold	Hold
+Horizontal Centers	Vannrette midtpunkter
+Horizontal Distortion	Horisontal forvrengning
+Horizontal center guide	Hjelpelinje i vannrett midte
+Horizontal scale, in percent: widens or narrows the glyphs and their spacing	Vannrett skala, i prosent: gjør glyfene og avstanden mellom dem bredere eller smalere
+Horizontally	horisontalt
+Hue	Kulør
+Hue jitter	Fargetonevariasjon
+Hue/Saturation	Kulør/metning
+Hue/Saturation…	Kulør/metning…
+ICC profile	ICC-profil
+ICO…	ICO…
+Image	Bilde
+Image Options	Bildealternativer
+Image Rotation	Bilderotasjon
+Image Size	Bildestørrelse
+Image Size…	Bildestørrelse…
+Image size	Bildestørrelse
+Import CSV…	Importer CSV…
+Import PDF	Importer PDF
+Import a CSV of data sets first	Importer først en CSV med datasett
+Import a CSV: the first row names the variables, every further row is one data set.	Importer en CSV: den første raden navngir variablene, hver påfølgende rad er ett datasett.
+In use	I bruk
+Inches	Tommer
+Indexed Color	Indeksert farge
+Indexed Color…	Indeksert farge…
+Inflate	Pump opp
+Info	Info
+Ink	Trykkfarge
+Ink Color	Trykkfarge
+Ink printed at 0, 25, 50, 75 and 100% tint	Trykkfarge trykt med 0, 25, 50, 75 og 100 % tone
+Inner Glow	Indre glød
+Inner Glow…	Indre glød…
+Inner Radius	Indre radius
+Inner Shadow	Indre skygge
+Inner Shadow…	Indre skygge…
+Inside	Innsiden
+Intent	Gjengivelse
+Intersect Shape Areas	Snitt av figurområder
+Intersect with Selection	Snitt med markering
+Inverse	Inverter
+Inverse Fourier Transform	Invers fouriertransformasjon
+Invert	Invertér
+Invert coverage	Inverter dekning
+Invert has no parameters	Inverter har ingen parametere
+Iris Blur…	Irisuskarphet…
+Italic	Kursiv
+JPEG carries the XMP and the source's EXIF	JPEG inneholder XMP og kildens EXIF
+JPG…	JPG…
+Justify	Blokkjuster
+Kaleidoscope…	Kaleidoskop…
+Keep as it was	Behold som det var
+Kept when a comp is first applied	Beholdes når en komposisjon brukes første gang
+Kerning	Kerning
+Keyboard Shortcut Sheet…	Oversikt over hurtigtaster…
+Keyboard Shortcuts…	Tastatursnarveier…
+Keywords	Nøkkelord
+Kind	Type
+Kurtosis	Kurtose
+Lab Color	Lab-farge
+Landscape	Liggende
+Language	Språk
+Large	Stor
+Last Document State	Siste dokumenttilstand
+Last Filter	Forrige filter
+Last line	Siste linje
+Layer	Lag
+Layer Comps	Lagsammensetninger
+Layer Edges	Lagkanter
+Layer Mask	Lagmaske
+Layer Properties	Lagegenskaper
+Layer Style	Lagstil
+Layer knocks out drop shadow	Laget slår ut slagskygge
+Layer via Copy	Lag via kopi
+Layer via Cut	Lag via utklipp
+Layers	Lag
+Layers panel options	Alternativer for lagpanelet
+Left	Venstre
+Left Edges	Venstre kanter
+Left indent	Venstre innrykk
+Length	Lengde
+Lens Blur…	Linseuskarphet…
+Lens Correction…	Objektivkorrigering…
+Lens Flare…	Motlysslør…
+Level	Nivå
+Levels	Nivåer
+Levels…	Nivåer…
+Light	Lett
+Light Grey	Lysegrå
+Lighten	Gjør lysere
+Lighter Color	Lysere farge
+Lighting Effects…	Lyseffekter…
+Lightness	Lyshet
+Line	Linje
+Linear	Lineær
+Linear Burn	Lineær mørkning
+Linear Dodge (Add)	Lineær unnvikelse (legg til)
+Linear Light	Lineært lys
+Link / Unlink Mask	Koble / koble fra maske
+Link Layers	Koble til lag
+Link selected layers	Koble markerte lag
+Link with layer	Koble med lag
+Linked	Koblet
+Linked file	Koblet fil
+Liquify…	Gjør flytende…
+Live Shape	Live form
+Live preview	Direkte forhåndsvisning
+Live preview is off.	Direkte forhåndsvisning er av.
+Load	Last inn
+Load .atn	Last inn .atn
+Load .cube file…	Last inn .cube-fil…
+Load Selection	Last inn markering
+Load Selection…	Last inn markering…
+Load actions	Last inn handlinger
+Load channel as selection	Last inn kanal som markering
+Load path as a selection	Last inn bane som markering
+Loaded file	Innlastet fil
+Lock	Lås
+Lock All	Lås alle
+Lock Guides	Lås hjelpelinjer
+Lock Image Pixels	Lås bildepiksler
+Lock Position	Lås posisjon
+Lock Transparent Pixels	Lås gjennomsiktige piksler
+Lock all	Lås alle
+Lock pixels	Lås piksler
+Lock position	Lås posisjon
+Lock transparent pixels	Lås gjennomsiktige piksler
+Long-tap as a right click	Langt trykk som høyreklikk
+Lookup table	Oppslagstabell
+Luminance	Luminans
+Luminance of the preview source; the markers are the black and white points.	Luminans for forhåndsvisningskilden; markørene er svart- og hvitpunktet.
+Luminosity	Lysstyrke
+MP4…	MP4…
+Magenta	Magenta
+Magenta / Green	Magenta / grønn
+Magentas	Magentatoner
+Magic Cut	Måst Jaissr
+Magic Cut…	Måst Jaissr…
+Make Frames	Opprett bilder
+Make a selection first	Opprett en markering først
+Make work path from selection	Opprett arbeidsbane fra markering
+Manual	Manuell
+Maps every colour onto one palette. The document keeps RGBA pixels; GIF and PNG export write this palette.	Tilordner hver farge til én palett. Dokumentet beholder RGBA-piksler; GIF- og PNG-eksport skriver denne paletten.
+Maps the active layer onto a palette as one undo step; the document stays RGB.	Tilordner det aktive laget til en palett som ett angretrinn; dokumentet forblir RGB.
+Margins	Marger
+Mark this state so you can come back to it	Merk denne tilstanden så du kan komme tilbake til den
+Mask	Maskering
+Mask Properties	Maskeegenskaper
+Mask source	Maskekilde
+Match Color	Match farge
+Match Color…	Match farge…
+Matting	Matting
+Maximum	Maksimum
+Maximum…	Maksimum…
+Mean	Gjennomsnitt
+Median	Median
+Median…	Median…
+Medium	Medium
+Memory	Minne
+Menu Bar and Canvas	Menylinje og lerret
+Merge	Slå sammen
+Merge Channels	Slå sammen kanaler
+Merge Channels…	Slå sammen kanaler…
+Merge Down	Slå sammen nedover
+Merge Layers	Slå sammen lag
+Merge Visible	Slå sammen synlige
+Merged	Sammenslått
+Method	Metode
+Metrics	Metrisk
+Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.	Metrisk bruker skriftens egen parkerning; 0 slår av kerning; Manuell setter én mengde (1/1000 em) mellom hvert tegnpar i teksten slik den er nå, og tegn som skrives senere, begynner uten kerning; det krever minst to tegn, så kortere tekst og standardinnstillingene for tekstverktøyet tilbyr det ikke. Formgiveren har ingen optisk kerning, så den modusen tilbys ikke.
+Mezzotint…	Mezzotint…
+Midtones	Mellomtoner
+Millimeters	Millimeter
+Min diameter	Min. diameter
+Min roundness	Min. rundhet
+Min size	Min. størrelse
+Minimal	Minimal
+Minimum	Minimum
+Minimum size only applies when pressure controls size.	Minimumsstørrelse gjelder bare når trykket styrer størrelsen.
+Minimum…	Minimum…
+Miter	Gjæring
+Mode	Modus
+Modify	Endre
+Monochrome	Monokrom
+Monotone	Monotone
+More readouts	Flere avlesninger
+More tabs	Flere faner
+Mosaic…	Mosaikk…
+Motion Blur…	Bevegelsesuskarphet…
+Move Layer	Flytt lag
+Move a control first: these settings would change nothing	Flytt en kontroll først: disse innstillingene ville ikke endre noe
+Move this panel	Flytt dette panelet
+Move this panel within its dock	Flytt dette panelet innenfor dokken
+Move to	Flytt til
+Move with the layer	Flytt med laget
+Multiply	Flere
+Name	Navn
+Name Change	Navneeendring
+Name the channel first.	Gi kanalen et navn først.
+Navigator	Navigatør
+Nearest Neighbour	Nærmeste nabo
+Neutralize	Nøytraliser
+Neutrals	Nøytrale toner
+New	Ny
+New Adjustment Layer	Nytt justeringslag
+New Channel	Ny kanal
+New Document	Nytt dokument
+New Fill Layer	Nytt fyllag
+New Folder	Ny mappe
+New Guide	Ny hjelpelinje
+New Guide Layout	Nytt hjelpelinjeoppsett
+New Guide Layout…	Nytt hjelpelinjeoppsett…
+New Guide…	Ny hjelpelinje…
+New Layer	Nytt lag
+New Layer Based Slice	Nytt lagbasert stykke
+New Selection	Ny markering
+New Smart Object via Copy	Nytt smart objekt via kopi
+New Snapshot	Nytt øyeblikksbilde
+New Spot Channel	Ny spotfargekanal
+New Spot Channel…	Ny spotfargekanal…
+New Style Preset	Ny stilforhåndsinnstilling
+New Video Group	Ny videogruppe
+New channel	Ny kanal
+New folder	Ny mappe
+New group	Ny gruppe
+New layer	Nytt lag
+New layer comp	Ny lagkomposisjon
+New note at the centre of the view	Nytt notat midt i visningen
+New path (saves the Work Path when it is selected)	Ny bane (lagrer arbeidsbanen når den er markert)
+New set	Nytt sett
+New size	Ny størrelse
+New style from the active layer	Ny stil fra det aktive laget
+New tool preset from the active tool	Ny verktøyforhåndsinnstilling fra det aktive verktøyet
+New {noun} from the active text layer	Ny {noun} fra det aktive tekstlaget
+New…	Ny…
+Next Blend Mode	Neste blandingsmodus
+No Color	Ingen farge
+No character styles yet. New records the active text layer's font, size and look.	Ingen tegnstiler ennå. Ny registrerer skrift, størrelse og utseende for det aktive tekstlaget.
+No command loads a channel as the selection in this build; the Select menu's Load Selection restores a saved selection instead	Ingen kommando laster inn en kanal som markering i denne versjonen; Last inn markering på Merk-menyen gjenoppretter i stedet en lagret markering
+No commands to bind	Ingen kommandoer å tilordne
+No document	Ingen dokumenter
+No document is open	Ingen dokumenter er åpne
+No export selected	Ingen eksport er markert
+No faces listed for this family name	Ingen snitt oppført for dette familienavnet
+No frames yet. Add frame makes an _a_ layer: each one is a frame, bottom first.	Ingen bilder ennå. Legg til bilde lager et _a_-lag: hvert er ett bilde, nederste først.
+No guide crosses the canvas	Ingen hjelpelinje krysser lerretet
+No installed family matches	Ingen installert familie samsvarer
+No layer comps yet. New Layer Comp records every layer's visibility, position and appearance.	Ingen lagkomposisjoner ennå. Ny lagkomposisjon registrerer synlighet, posisjon og utseende for hvert lag.
+No layers yet. Add one with the + button below.	Ingen lag ennå. Legg til ett med knappen + nedenfor.
+No layers yet: each top-level layer gets a bar on the timeline.	Ingen lag ennå: hvert lag på øverste nivå får en stolpe på tidslinjen.
+No notes yet. Click the canvas with the Note tool (I), or New Note pins one at the centre of the view; notes are saved with the document and never exported.	Ingen notater ennå. Klikk på lerretet med Notat-verktøyet (I), eller Nytt notat fester ett midt i visningen; notater lagres med dokumentet og eksporteres aldri.
+No open document is the same size as this one	Ingen åpne dokumenter har samme størrelse som dette
+No paragraph styles yet. New records the active text layer's alignment, indents and spacing.	Ingen avsnittsstiler ennå. Ny registrerer justering, innrykk og avstand for det aktive tekstlaget.
+No pattern chosen — the overlay paints nothing.	Intet mønster valgt — overlegget maler ingenting.
+No patterns are defined yet	Ingen mønstre er definert ennå
+No profile file was chosen	Ingen profilfil ble valgt
+No recent files yet	Ingen nylige filer ennå
+No selection has been saved	Ingen markering er lagret
+No source recorded for this object	Ingen kilde registrert for dette objektet
+No stop selected	Ingen stopp markert
+No style presets yet. Define one with Layer > Layer Style > Define Style Preset, or add a Photoshop library with File > Open (.asl).	Ingen stilforhåndsinnstillinger ennå. Definer en med Lag > Lagstil > Definer stilforhåndsinnstilling, eller legg til et Photoshop-bibliotek med Fil > Åpne (.asl).
+No styles yet. The + button saves the active layer's style; File > Open loads an .asl style library.	Ingen stiler ennå. Knappen + lagrer stilen til det aktive laget; Fil > Åpne laster inn et .asl-stilbibliotek.
+No such command	Ingen slik kommando
+No tool presets yet. New Tool Preset saves the active tool with its current options.	Ingen verktøyforhåndsinnstillinger ennå. Ny verktøyforhåndsinnstilling lagrer det aktive verktøyet med gjeldende alternativer.
+Noise	Støy
+None	Ingen
+Normal	Normal
+Normal Map…	Normalkart…
+Not a hex colour	Ikke en heksfarge
+Not installed — shaping with	Ikke installert — formgis med
+Not saved yet	Ikke lagret ennå
+Notes	Notater
+Nothing has changed	Ingenting er endret
+Nothing in this submenu is available right now	Ingenting i denne undermenyen er tilgjengelig akkurat nå
+Nothing is left to learn the background from: paint over it with the background brush.	Det er ingenting igjen å lære bakgrunnen fra: mal over den med bakgrunnspenselen.
+Nothing to measure yet — paint or place something on this layer first	Ingenting å måle ennå — mal eller plasser noe på dette laget først
+Nothing to preview.	Ingenting å forhåndsvise.
+OK	OK
+Oblique	Skrå
+Off: the wheel pans the view and Ctrl+wheel zooms	Av: hjulet panorerer visningen og Ctrl+hjul zoomer
+Offset…	Forskyvning…
+Oil Paint…	Oljemaleri…
+One page holding the flattened image; no vector content.	Én side med det sammenslåtte bildet; ikke noe vektorinnhold.
+Onion skin	Løkskall
+Only English is available in this build	Bare engelsk er tilgjengelig i denne versjonen
+Only a mask channel can be loaded as a selection here	Bare en maskekanal kan lastes inn som markering her
+Only web-safe colours	Bare nettsikre farger
+Opacity	Gjennomsiktighet
+Opacity 10%	Dekkevne 10 %
+Opacity 100%	Dekkevne 100 %
+Opacity 20%	Dekkevne 20 %
+Opacity 30%	Dekkevne 30 %
+Opacity 40%	Dekkevne 40 %
+Opacity 50%	Dekkevne 50 %
+Opacity 60%	Dekkevne 60 %
+Opacity 70%	Dekkevne 70 %
+Opacity 80%	Dekkevne 80 %
+Opacity 90%	Dekkevne 90 %
+Opacity jitter	Dekkevnevariasjon
+Opacity key	Dekkevnenøkkel
+Opacity must be between 0% and 100%	Dekkevnen må være mellom 0 % og 100 %
+Opacity scales the layer and its effects; Fill scales the layer's own pixels only.	Dekkevne skalerer laget og effektene; Fyll skalerer bare lagets egne piksler.
+Opacity stops sit above the bar, colour stops below it.	Dekkevnestopp sitter over linjen, fargestopp under den.
+Open	Åpne
+Open .ABR…	Åpne .ABR…
+Open .ACO…	Åpne .ACO…
+Open .ASL…	Åpne .ASL…
+Open Recent	Åpne nylig brukte
+Open a document first	Åpne et dokument først
+Open a document to animate it.	Åpne et dokument for å animere det.
+Open a document to apply styles to its layers.	Åpne et dokument for å bruke stiler på lagene.
+Open a document to insert glyphs into its text.	Åpne et dokument for å sette inn glyfer i teksten.
+Open a document to keep text styles in it.	Åpne et dokument for å lagre tekststiler i det.
+Open a document to lay guides out on it.	Åpne et dokument for å legge ut hjelpelinjer på det.
+Open a document to pin notes on it.	Åpne et dokument for å feste notater på det.
+Open a document to record layer comps.	Åpne et dokument for å registrere lagkomposisjoner.
+Open a document to see its CSS	Åpne et dokument for å se CSS-koden
+Open a document to see its facts.	Åpne et dokument for å se opplysningene.
+Open a document to see its histogram	Åpne et dokument for å se histogrammet
+Open a document to see its history	Åpne et dokument for å se historikken
+Open a document to see its properties	Åpne et dokument for å se egenskapene
+Open another document, or add another pixel layer, to match its colours.	Åpne et annet dokument, eller legg til enda et pikselag, for å tilpasse fargene.
+Open as	Åpne som
+Open editor…	Åpne redigerer…
+Open or close the folder	Åpne eller lukk mappen
+Open the Adjustments panel	Åpne Justeringer-panelet
+Open…	Åpne…
+Operation	Operasjon
+Orange	Oransje
+Other	Andre-filtre
+Out of gamut	Utenfor fargeomfang
+Outer Glow	Ytre glød
+Outer Glow…	Ytre glød…
+Outline the path	Omriss banen
+Output	Utdata
+Output channel	Utdatakanal
+Outside	Utsiden
+Overlay	Legg over
+PBM…	PBM…
+PDF Presentation…	PDF-presentasjon…
+PDF…	PDF…
+PGM…	PGM…
+PNG…	PNG…
+PPM…	PPM…
+Page	Side
+Page {n}	Side {n}
+Page {page} opens at {w} x {h} px	Side {page} åpnes med {w} x {h} px
+Pages	Sider
+Paint	Mal
+Paint Filter Mask	Mal filtermaske
+Paint Mask	Mal maske
+Paint over the part to keep with the foreground brush first.	Mal først over delen som skal beholdes, med forgrunnspenselen.
+Paint over what to keep and over what to drop	Mal over det som skal beholdes, og over det som skal bort
+Paint the inside of the path	Mal innsiden av banen
+Painting	Maling
+Paints a band along the active selection's border.	Maler et bånd langs kanten av den aktive markeringen.
+Pair kerning	Parkerning
+Palette	Palett
+Paragraph	Avsnitt
+Paragraph Style	Avsnittsstil
+Paragraph Styles	Avsnittsstiler
+Particles…	Partikler…
+Paste	Lim inn
+Paste Into	Lim inn i
+Paste Layer Style	Lim inn lagstil
+Paste Outside	Lim inn utenfor
+Paste Special	Lim inn spesielt
+Paste in Place	Lim inn på stedet
+Path	Bane
+Path Blur…	Baneuskarphet…
+Path editing lives in the Paths panel	Baneredigering skjer i Baner-panelet
+Paths	Baner
+Pattern	Mønster
+Pattern Dither	Mønsterraster
+Pattern Overlay	Mønsteroverlapping
+Pattern Overlay…	Mønsteroverlapping…
+Pattern Preview	Forhåndsvisning av mønster
+Pattern…	Mønster…
+Pencil 1px	Blyant 1 px
+Percent	Prosent
+Perceptual	Perseptuell
+Perspective	Perspektiv
+Perspective Warp	Perspektivforvrengning
+Photo Filter	Fotofilter
+Photo Filter…	Fotofilter…
+Photography	Fotografi
+Picas	Pica
+Pick a filter; it applies at its default settings.	Velg et filter; det brukes med standardinnstillingene.
+Pin Light	Punktlys
+Pinch…	Knip…
+Pixel Grid	Rutenett for bildepunkter
+Pixel dimensions	Pikselmål
+Pixel mask	Pikselmaske
+Pixel to Pixel	Piksel til piksel
+Pixelate	Bryt opp-filtre
+Pixels	Piksler
+Place Embedded…	Plasser innebygd…
+Place Linked…	Plasser koblet…
+Play	Spill av
+Play from step	Spill av fra trinn
+Play selection	Spill av markering
+Play this step (unchecked steps are passed over)	Spill av dette trinnet (trinn uten hake hoppes over)
+Plays a recorded Action on every image in the source folder and saves each result to the destination.	Spiller av en innspilt handling på hvert bilde i kildemappen og lagrer hvert resultat i målet.
+Pointer	Peker
+Pointillize…	Pointilist…
+Points	Punkter
+Polar Coordinates…	Polare koordinater…
+Position	Posisjon
+Position is locked — unlock it in the Layers panel to move or resize	Posisjonen er låst — lås den opp i Lag-panelet for å flytte eller endre størrelse
+Position key	Posisjonsnøkkel
+Posterize	Fargereduksjon
+Posterize…	Fargereduksjon…
+Precise Cursor	Presis peker
+Preferences…	Innstillinger…
+Preserve Transparency	Bevar gjennomsiktighet
+Preserve luminosity	Bevar luminans
+Preset Manager…	Forhåndsinnstillingsbehandling…
+Press a key…	Trykk på en tast…
+Pressure controls flow	Trykk styrer flyt
+Pressure controls size	Trykk styrer størrelse
+Preview	Forhåndsvis
+Preview against	Forhåndsvis mot
+Preview is off.	Forhåndsvisning er av.
+Previewed on the active layer; applied to its pixels as one undoable step.	Forhåndsvises på det aktive laget; brukes på pikslene som ett trinn som kan angres.
+Previous Blend Mode	Forrige blandingsmodus
+Print Size	Utskriftsstørrelse
+Print as PDF…	Skriv ut som PDF…
+Print size	Utskriftsstørrelse
+Prints the grayscale image through one to four inks, each through its own curve. The inks are applied to the pixels when the mode changes.	Skriver ut gråtonebildet med én til fire trykkfarger, hver gjennom sin egen kurve. Trykkfargene brukes på pikslene når modusen endres.
+Print…	Skriv ut…
+Profile	Profil
+Profile from File…	Profil fra fil…
+Profiles are assigned to RGB documents	Profiler tilordnes RGB-dokumenter
+Profiles are converted between in RGB documents	Det konverteres mellom profiler i RGB-dokumenter
+Profiles belong to RGB documents; convert to RGB first	Profiler hører til RGB-dokumenter; konverter til RGB først
+Proof Colors	Prøvetrykkfarger
+Properties	Egenskaper
+Puppet Warp	Marionettfordreining
+Purge	Tøm
+Purple	Lilla
+Quadtone	Firetone
+Quality	Kvalitet
+Quick Export Layer as PNG…	Hurtigeksporter lag som PNG…
+Quit	Avslutt
+RGB Color	RGB-farge
+Radial Blur…	Radial uskarphet…
+Radius	Radius
+Radius (px)	Radius (px)
+Range	Område
+Raster Studio Help	Hjelp for Raster Studio
+Rasterize	Rastrer
+Reassign anyway	Tilordne på nytt likevel
+Recent	Nylige
+Record	Start opptak
+Record Source Size	Registrer kildestørrelse
+Record an Action in the Actions panel first	Spill først inn en handling i Handlinger-panelet
+Record an edit, then replay the whole sequence on any document with at least as many layers.	Spill inn en redigering, og spill deretter av hele sekvensen på et hvilket som helst dokument med minst like mange lag.
+Record into set	Spill inn i sett
+Recording: every edit is captured until Stop	Innspilling: hver redigering registreres til Stopp
+Red	Rød
+Redefine the selected {noun} from the active text layer, restyling every layer that uses it	Definer valgt {noun} på nytt fra det aktive tekstlaget, og formater om hvert lag som bruker den
+Redo	Gjør om
+Reds	Rødtoner
+Reduce Colors	Færre farger
+Reduce Colors changed nothing: the layer already uses only colours of that palette	Reduser farger endret ingenting: laget bruker allerede bare farger fra den paletten
+Reduce Colors: the layer now uses at most {n} colours	Reduser farger: laget bruker nå høyst {n} farger
+Reduce Colors…	Færre farger…
+Reduce Noise…	Reduser støy…
+Reduces the grayscale image to pure black and white. The layers are flattened into one, over white.	Reduserer gråtonebildet til rent svart og hvitt. Lagene slås sammen til ett, over hvitt.
+Reference point: Bottom	Referansepunkt: bunn
+Reference point: Bottom Left	Referansepunkt: nede til venstre
+Reference point: Bottom Right	Referansepunkt: nede til høyre
+Reference point: Centre	Referansepunkt: midten
+Reference point: Left	Referansepunkt: venstre
+Reference point: Right	Referansepunkt: høyre
+Reference point: Top	Referansepunkt: topp
+Reference point: Top Left	Referansepunkt: oppe til venstre
+Reference point: Top Right	Referansepunkt: oppe til høyre
+Refine	Forbedre
+Refine Edge…	Finjuster kant…
+Refine Mask	Forbedre maske
+Refine Mask…	Forbedre maske…
+Regular	Normal
+Relative	Relativ
+Relative Colorimetric	Relativ kolorimetrisk
+Release Clipping Mask	Frigi utklippsmaske
+Release Notes	Versjonsmerknader
+Relink to File…	Koble til fil på nytt…
+Remove Black Matte	Fjern svart matt
+Remove Color Fringe	Fjern fargekant
+Remove Color Fringe…	Fjern fargekant…
+Remove Fringe	Fjern kant
+Remove White Matte	Fjern hvit matt
+Remove export	Fjern eksport
+Remove this instance of the effect	Fjern denne forekomsten av effekten
+Remove this shortcut	Fjern denne snarveien
+Rename Layer	Gi lag nytt navn
+Rename Layer…	Gi lag nytt navn…
+Rename set	Gi sett nytt navn
+Render	Gjengi-filtre
+Rendering the preview…	Gjengir forhåndsvisningen…
+Repeat…	Gjenta…
+Replace Color	Erstatt farge
+Replace Color…	Erstatt farge…
+Replace Contents	Erstatt innhold
+Replace Contents…	Erstatt innhold…
+Replace existing guides	Erstatt eksisterende hjelpelinjer
+Replay	Spill av på nytt
+Report an Issue	Rapporter et problem
+Reselect	Merk på nytt
+Reset	Nullstill
+Reset Transform	Tilbakestill transformering
+Reset View Rotation	Tilbakestill visningsrotasjon
+Reset all shortcuts	Tilbakestill alle snarveier
+Resize Canvas	Endre lerretsstørrelse
+Resize Images	Endre størrelse på bilder
+Resize Images…	Endre størrelse på bilder…
+Resolution	Oppløsning
+Resolution must be greater than zero	Oppløsningen må være større enn null
+Restore Layer	Gjenopprett lag
+Result	Resultat
+Return this tool to its defaults	Tilbakestill dette verktøyet til standardinnstillingene
+Reveal All	Vis alt
+Reveal Selection	Vis markering
+Reverse	Reverser
+Revert	Tilbakestill til lagret
+Rewrites every pixel layer's numbers so the picture looks the same under the destination profile, as one undo step.	Skriver om verdiene i hvert pikselag slik at bildet ser likt ut under målprofilen, som ett angretrinn.
+Right	Høyre
+Right (narrow)	Høyre (smal)
+Right (wide)	Høyre (bred)
+Right Edges	Høyre kanter
+Right indent	Høyre innrykk
+Right-click a swatch to remove it	Høyreklikk på en fargeprøve for å fjerne den
+Ring	Ring
+Ripple…	Krusninger…
+Rise	Stige
+Rotate	Roter
+Rotate 180°	Roter 180°
+Rotate 90° Clockwise	Roter 90° med klokken
+Rotate 90° Counter Clockwise	Roter 90° mot klokken
+Rotate Canvas	Roter lerret
+Rotate the active layer so the measured line is level (Enter)	Roter det aktive laget slik at den målte linjen blir vannrett (Enter)
+Rotates the canvas and every layer. Right angles are pixel-exact; other angles resample.	Roterer lerretet og hvert lag. Rette vinkler er pikselnøyaktige; andre vinkler samples på nytt.
+Rotation key	Rotasjonsnøkkel
+Round	Rund
+Round (computed)	Rund (beregnet)
+Rounded Steps	Avrundede trinn
+Roundness jitter	Rundhetsvariasjon
+Rows	Rader
+Rulers	Linjaler
+Run	Kjør
+SVG…	SVG…
+Same Radii	Lik hjørneavrunding
+Sample a colour from the canvas	Hent en farge fra lerretet
+Sample radius	Prøveradius
+Sampled	Hentet
+Sampled colour	Hentet farge
+Sampled tip not loaded; painting round	Hentet spiss ikke lastet inn; maler rundt
+Satin…	Sateng…
+Saturation	Metning
+Saturation jitter	Metningsvariasjon
+Save	Lagre
+Save As	Lagre som
+Save As…	Lagre som…
+Save Brush	Lagre pensel
+Save Selection	Lagre markering
+Save Selection…	Lagre markering…
+Save actions	Lagre handlinger
+Save as PSD…	Lagre som PSD…
+Save current brush	Lagre gjeldende pensel
+Save selection as channel	Lagre markering som kanal
+Saves every image in the source folder to the destination in another format, quality or size.	Lagrer hvert bilde i kildemappen i målet i et annet format, en annen kvalitet eller størrelse.
+Scale	Skala
+Scale %	Skala %
+Scale Effects	Skaler effekter
+Scale Effects…	Skaler effekter…
+Scale H	Skala H
+Scale V	Skala V
+Scale key	Skaleringsnøkkel
+Scale:	Skala:
+Scales every size and distance of the active layer's style as one undo step.	Skalerer hver størrelse og avstand i stilen til det aktive laget som ett angretrinn.
+Scaling by 100% changes nothing	Skalering med 100 % endrer ingenting
+Scratch directory	Arbeidsmappe
+Screen	Skjerm
+Screen, print and social presets	Forhåndsinnstillinger for skjerm, trykk og sosiale medier
+Script…	Skript…
+Scroll wheel zooms instead of scrolling	Rullehjulet zoomer i stedet for å rulle
+Search Commands…	Søk etter kommandoer…
+Search layers	Søk i lag
+Search layers by name	Søk i lag etter navn
+Select	Velg
+Select All	Merk alt
+Select Bottom Layer	Merk nederste lag
+Select Layer Above	Merk laget over
+Select Layer Below	Merk laget under
+Select Linked Layers	Merk koblede lag
+Select None	Merk ingenting
+Select Top Layer	Merk øverste lag
+Select a layer first	Merk et lag først
+Select a layer to see its CSS	Merk et lag for å se CSS-koden
+Select a layer to see its properties	Merk et lag for å se egenskapene
+Select a layer: a click on a style applies it to the active layer.	Merk et lag: et klikk på en stil bruker den på det aktive laget.
+Select a path first	Merk en bane først
+Select a text layer, or type into one: a click inserts the glyph at the caret.	Merk et tekstlag, eller skriv i et: et klikk setter inn glyfen ved innsettingspunktet.
+Select a text layer to edit its type	Merk et tekstlag for å redigere teksten
+Select every pixel near one colour	Merk hver piksel nær én farge
+Selection	Markering
+Selection Edges	Markeringskanter
+Selection: white is replaced, black is kept.	Markering: hvitt erstattes, svart beholdes.
+Selective Color	Selektiv farge
+Selective Color…	Selektiv farge…
+Selects a band of this width along the selection's edge	Merker et bånd med denne bredden langs kanten av markeringen
+Semi Condensed	Halvsmal
+Semi Expanded	Halvbred
+Semibold	Halvfet
+Send Backward	Flytt bakover
+Send to Back	Plasser lengst bak
+Separate documents	Separate dokumenter
+Separate keywords with commas or semicolons.	Skill nøkkelord med komma eller semikolon.
+Sepia	Sepia
+Set	Sett
+Set the History Brush to paint from this state (the marked row)	La historikkpenselen male fra denne tilstanden (den merkede raden)
+Shadows	Skygger
+Shadows/Highlights	Skygger/høylys
+Shadows/Highlights…	Skygger/høylys…
+Shape	Form
+Shape Dynamics	Figurdynamikk
+Shape Mosaic…	Figurmosaikk…
+Shape Properties	Figuregenskaper
+Sharpen	Gjør skarpere-filtre
+Sharpen Edges	Skarpere kanter
+Sharpen More	Gjør enda skarpere
+Sharpest, with a little ringing on hard edges.	Skarpest, med litt ringing ved harde kanter.
+Shear…	Klipp…
+Shift Edge	Forskyv kant
+Show	Vis
+Show / Hide Layer	Vis / skjul lag
+Show / hide layer	Vis / skjul lag
+Show / hide the effects list	Vis / skjul effektlisten
+Show / hide the layer style	Vis / skjul lagstilen
+Show / hide this channel	Vis / skjul denne kanalen
+Show / hide this effect	Vis / skjul denne effekten
+Show / hide this path	Vis / skjul denne banen
+Show / hide this smart filter	Vis / skjul dette smarte filteret
+Show Layers	Vis lag
+Show every layer	Vis alle lag
+Show or hide the position, size and alignment fields	Vis eller skjul feltene for posisjon, størrelse og justering
+Show or hide the recorded steps	Vis eller skjul de innspilte trinnene
+Show or hide the set's actions	Vis eller skjul handlingene i settet
+Show this alpha channel alone in grayscale and paint into it; click again to store it	Vis denne alfakanalen alene i gråtoner og mal i den; klikk igjen for å lagre den
+Sides	Sider
+Similar	Lignende
+Size	Størrelse
+Size jitter	Størrelsesvariasjon
+Skew	Forskyv
+Skewness	Skjevhet
+Slice Options	Alternativer for stykke
+Slice Options…	Alternativer for stykke…
+Slices	Stykker
+Slices from Guides	Stykker fra hjelpelinjer
+Slices…	Stykker…
+Small	Liten
+Small Caps	Kapitéler
+Smart Blur…	Smart uskarphet…
+Smart Filter	Smart filter
+Smart Filters	Smarte filtre
+Smart Guides	Smarte hjelpelinjer
+Smart Object	Smartobjekt
+Smart Sharpen…	Smart skarphet…
+Smart filter mask: click to paint on it	Smart filtermaske: klikk for å male på den
+Smooth	Jevn ut
+Smooth Selection	Jevn ut markering
+Smooth draws grey-scale edges; None draws hard, aliased edges. The glyph scaler has one smooth mode, so Sharp, Crisp and Strong are not offered.	Jevn tegner gråtonekanter; Ingen tegner harde, taggete kanter. Glyfskaleringen har én jevn modus, så Skarp, Klar og Kraftig tilbys ikke.
+Smooth…	Jevn ut…
+Snap	Fest
+Snap To	Fest til
+Soft Light	Mykt lys
+Soft Round 100	Myk rund 100
+Soft Round 24	Myk rund 24
+Soft and cheap. Good for a small enlargement.	Myk og rask. God for en liten forstørrelse.
+Softer Brush	Mykere pensel
+Solarize	Solariser
+Solid Color…	Ensfarget…
+Solidity	Fasthet
+Source	Kilde
+Source 1	Kilde 1
+Source 2	Kilde 2
+Source Space	Kildefargerom
+Spectrum	Spektrum
+Spherize…	Kuleformet…
+Spin Blur…	Rotasjonsuskarphet…
+Splits the active layer into Linear Light detail layers over a residual, finest on top; together they recomposite to the layer.	Deler det aktive laget i detaljlag med Lineært lys over en rest, det fineste øverst; sammen gjenskaper de laget.
+Spot Channel	Spotfargekanal
+Spot Channel Options…	Alternativer for spotfargekanal…
+Spot channel: composited over the image as its ink	Spotfargekanal: lagt over bildet som trykkfargen sin
+Square	Kvadratisk
+Squeeze	Trykk sammen
+Stack Mode	Stakkmodus
+Stamp Visible	Stemple synlige
+Standard	Standard
+Standard Deviation	Standardavvik
+Standard ligatures	Standardligaturer
+Step Backward	Gå tilbake
+Step Forward	Gå frem
+Stop	Stopp
+Straighten Layer	Rett lag
+Strength	Styrke
+Stroke	Strøk
+Stroke path with the foreground colour at the brush size, on a new shape layer	Strek banen med forgrunnsfargen i penselstørrelse, på et nytt figurlag
+Stroke…	Strøk…
+Style	Stil
+Styles	Stiler
+Styles enabled	Stiler aktivert
+Stylize	Spesialeffekter
+Sub	Senket
+Subject	Motiv
+Subtract	Trekk fra
+Subtract Front Shape	Subtraher fremre figur
+Subtract from Selection	Trekk fra markering
+Summation	Summering
+Sunset	Solnedgang
+Super	Hevet
+Superscript raises and shrinks the text; subscript lowers and shrinks it.	Hevet skrift løfter og forminsker teksten; senket skrift senker og forminsker den.
+Surface Blur…	Overflateuskarphet…
+Swap colours  (X)	Bytt farger  (X)
+Swap foreground and background (X)	Bytt forgrunn og bakgrunn (X)
+Swatches	Fargekart
+TGA…	TGA…
+TIF…	TIF…
+Templates	Maler
+Text	Tekst
+Text Properties	Tekstegenskaper
+Text overflows the box	Teksten flyter over boksen
+Text replacement	Teksterstatning
+Texture Dilation…	Teksturutvidelse…
+That channel is no longer in the document	Den kanalen er ikke lenger i dokumentet
+That file could not be used:	Den filen kunne ikke brukes:
+The CSV ends inside a quoted field	CSV-filen slutter inne i et felt i anførselstegn
+The CSV has a header but no data sets	CSV-filen har en overskrift, men ingen datasett
+The CSV is empty	CSV-filen er tom
+The CSV names a variable that is not defined:	CSV-filen navngir en variabel som ikke er definert:
+The active layer is not in the document	Det aktive laget er ikke i dokumentet
+The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	Det aktive smarte objektet viser hvert bilde i kildemappen etter tur; hvert resultat eksporteres som PNG til målmappen.
+The amount must be within	Mengden må ligge innenfor
+The angle must be a finite number of degrees	Vinkelen må være et endelig antall grader
+The balanced default for photographs.	Den balanserte standarden for fotografier.
+The canvas grows to fit the rotated image.	Lerretet vokser slik at det roterte bildet får plass.
+The canvas must be at least 1 x 1 pixel	Lerretet må være minst 1 x 1 piksel
+The cell size must be 2 to 200 pixels	Cellestørrelsen må være 2 til 200 piksler
+The cut is empty: paint more of the part to keep.	Snittet er tomt: mal mer av delen som skal beholdes.
+The destination is the profile the document already has	Målet er profilen dokumentet allerede har
+The destination must be another folder than the source.	Målet må være en annen mappe enn kilden.
+The document has no layers	Dokumentet har ingen lag
+The document is already in {name}	Dokumentet er allerede i {name}
+The document is already tagged with this profile	Dokumentet er allerede merket med denne profilen
+The document is already tagged {name}	Dokumentet er allerede merket {name}
+The document's own profile: {error}	Dokumentets egen profil: {error}
+The first {shown} of {n} pages are listed; a longer file opens only those.	De første {shown} av {n} sider vises; en lengre fil åpner bare dem.
+The image has no opaque pixels to count	Bildet har ingen ugjennomsiktige piksler å telle
+The ink is laid over the image; the selection, if there is one, is where it prints.	Trykkfargen legges over bildet; markeringen, hvis det finnes en, er der den trykkes.
+The last stop has no segment after it.	Det siste stoppet har ikke noe segment etter seg.
+The layer has no pixels to cut.	Laget har ingen piksler å klippe ut.
+The layer's pixels are locked	Lagets piksler er låst
+The list is empty	Listen er tom
+The margins and gutters leave no room for a column or a row	Margene og mellomrommene gir ikke plass til en kolonne eller rad
+The margins and gutters leave no room for a column or a row.	Margene og mellomrommene gir ikke plass til en kolonne eller rad.
+The name cannot be empty	Navnet kan ikke være tomt
+The name has not changed	Navnet er ikke endret
+The name is the file File > Export > Slices writes this slice as. The URL and Alt Tag go into the HTML page it writes beside the images.	Navnet er filen Fil > Eksporter > Stykker skriver dette stykket som. URL og Alt-kode havner på HTML-siden som skrives ved siden av bildene.
+The new canvas is smaller — content outside it will be clipped.	Det nye lerretet er mindre — innhold utenfor det beskjæres.
+The next text layer the Type tool creates starts with this style.	Det neste tekstlaget tekstverktøyet oppretter, begynner med denne stilen.
+The panel is already on this side	Panelet er allerede på denne siden
+The path encloses no pixel of the canvas	Banen omslutter ingen piksel på lerretet
+The position must be a finite number	Posisjonen må være et endelig tall
+The preview runs the real brush engine.	Forhåndsvisningen kjører den ekte penselmotoren.
+The resolution must be 1 to 2400 ppi	Oppløsningen må være 1 til 2400 ppi
+The resolution must be {min} to {max} dpi	Oppløsningen må være {min} til {max} dpi
+The rulers and the size readouts use this unit	Linjalene og størrelsesavlesningene bruker denne enheten
+The scale must be between 1% and 1000%	Skalaen må være mellom 1 % og 1000 %
+The selection is kept with the document under this name	Markeringen lagres med dokumentet under dette navnet
+The source and destination must be different folders	Kilden og målet må være forskjellige mapper
+The steps this snapshot named have been discarded	Trinnene dette øyeblikksbildet navnga, er forkastet
+The table needs a name	Tabellen må ha et navn
+The warp has not changed	Forvrengningen er ikke endret
+There are no guides to slice along	Det finnes ingen hjelpelinjer å dele opp langs
+There are no slices to clear	Det finnes ingen stykker å fjerne
+There is no history to clear	Det finnes ingen historikk å tømme
+There is no live selection to combine with	Det finnes ingen aktiv markering å kombinere med
+These are matrix-shaper profiles, which carry no perceptual or saturation tables: those two intents convert as Relative Colorimetric.	Dette er matrise-shaper-profiler, som ikke har perseptuelle tabeller eller metningstabeller: de to gjengivelsene konverteres som Relativ kolorimetrisk.
+Thin	Tynn
+Third-party notices	Merknader fra tredjeparter
+This Layer	Dette laget
+This adjustment has no panel controls	Denne justeringen har ingen panelkontroller
+This adjustment has no settings.	Denne justeringen har ingen innstillinger.
+This build keeps channels on layers; it has no free-standing alpha channels yet	Denne versjonen lagrer kanaler på lag; den har ennå ingen frittstående alfakanaler
+This effect is off. Tick it in the list to edit it.	Denne effekten er av. Huk den av i listen for å redigere den.
+This format cannot store CMYK, so the document is written as RGB. Choose JPEG or TIFF for CMYK.	Dette formatet kan ikke lagre CMYK, så dokumentet skrives som RGB. Velg JPEG eller TIFF for CMYK.
+This format could not be previewed.	Dette formatet kunne ikke forhåndsvises.
+This format has no metadata slot: nothing is embedded	Dette formatet har ikke plass til metadata: ingenting bygges inn
+This format has no palette, so the indexed colours are written as RGB. Choose PNG or GIF for the palette.	Dette formatet har ingen palett, så de indekserte fargene skrives som RGB. Velg PNG eller GIF for paletten.
+This format stores 8 bits per channel	Dette formatet lagrer 8 biter per kanal
+This is a Lab document. No format here stores Lab, so it is converted to RGB on export.	Dette er et Lab-dokument. Ingen formater her lagrer Lab, så det konverteres til RGB ved eksport.
+This layer has no mask	Dette laget har ingen maske
+This panel is already at the bottom of its dock	Dette panelet er allerede nederst i dokken
+This panel is already at the top of its dock	Dette panelet er allerede øverst i dokken
+This tool has no options	Dette verktøyet har ingen alternativer
+This tool is already at its defaults	Dette verktøyet står allerede på standardinnstillingene
+This window cannot read screen pixels, so the eyedropper is unavailable	Dette vinduet kan ikke lese skjermpiksler, så pipetten er ikke tilgjengelig
+This works on a pixel layer; the active layer is a {kind}	Dette virker på et pikselag; det aktive laget er et {kind}
+This works on an 8-bit document	Dette virker på et 8-biters dokument
+This works on an RGB document	Dette virker på et RGB-dokument
+Threshold	Terskel
+Threshold…	Terskel…
+Thumbnail Size	Miniatyrstørrelse
+Thumbnail size	Miniatyrstørrelse
+Thumbnails by Document	Miniatyrer etter dokument
+Thumbnails by Layer	Miniatyrer etter lag
+Tiles/List	Fliser/liste
+Tiles…	Fliser…
+Tilt-Shift…	Tilt-shift…
+Timeline	Tidslinje
+Tint	Toning
+Tint hue	Toningsfargetone
+Tint saturation	Toningsmetning
+To canvas	Til lerret
+Toggle Link	Slå kobling av/på
+Tonal width	Tonebredde
+Tone	Tone
+Tone and Detail	Tone og detalj
+Tool Presets	Forhåndsinnstillinger for verktøy
+Top	Øverst
+Top Edges	Øverste kanter
+Top Left	Øverst til venstre
+Top Left Pixel Color	Farge på piksel oppe til venstre
+Top Right	Øverst til høyre
+Top left	Oppe til venstre
+Top right	Oppe til høyre
+Trace Contour…	Spor kontur…
+Traces the active layer's colours into shape layers, one per colour.	Sporer fargene i det aktive laget til figurlag, ett per farge.
+Transform	Transformer
+Transform Layer	Transformer lag
+Transform Selection	Transformer markering
+Transparency	Gjennomsiktighet
+Transparent Pixels	Gjennomsiktige piksler
+Trim	Skjær til
+Trim Away	Beskjær bort
+Trim…	Skjær til…
+Tritone	Tritone
+Turn into JPG	Konverter til JPG
+Turn on Resample to change the pixel count.	Slå på Sample på nytt for å endre antall piksler.
+Twirl…	Snurr…
+Twist	Vri
+Two variables share a name	To variabler har samme navn
+Type	Type
+Type a zoom level	Skriv inn et zoomnivå
+Type is edited in Character and Paragraph	Tekst redigeres i Tegn og Avsnitt
+Type tool defaults	Standardinnstillinger for tekstverktøyet
+UI scale	Grensesnittskala
+URL	URL
+US Letter	US Letter
+Ultra Condensed	Ultrasmal
+Ultra Expanded	Ultrabred
+Underlying Layer	Underliggende lag
+Undo	Angre
+Ungroup Layers	Del opp laggruppe
+Uniform	Ensartet
+Unite Shapes	Foren figurer
+Units	Enheter
+Unmake Frames	Oppløs bilder
+Unsaved changes	Ulagrede endringer
+Unsharp Mask…	Uskarp maske…
+Update the applied comp from the layers	Oppdater den brukte komposisjonen fra lagene
+Use Black Point Compensation	Bruk svartpunktkompensasjon
+Use global light	Bruk globalt lys
+Using:	Bruker:
+Vanishing Point…	Forsvinningspunkt…
+Variables	Variabler
+Variance	Varians
+Vector Mask	Vektormaskering
+Vector density	Vektortetthet
+Vector enabled	Vektor aktivert
+Vector feather	Vektormyking
+Vector invert	Inverter vektor
+Vector mask	Vektormaske
+Vectorize	Vektoriser
+Vectorize Bitmap	Vektoriser punktgrafikk
+Vectorize Bitmap…	Vektoriser punktgrafikk…
+Vertical Centers	Loddrette midtpunkter
+Vertical Distortion	Vertikal forvrengning
+Vertical center guide	Hjelpelinje i loddrett midte
+Vertical scale, in percent: stretches the glyphs about the baseline; leading is unchanged	Loddrett skala, i prosent: strekker glyfene rundt grunnlinjen; linjeavstanden er uendret
+Vertically	vertikalt
+Vibrance	Dynamikk
+Vibrance…	Dynamikk…
+View	Visning
+Violet	Fiolett
+Visibility	Synlighet
+Visible adjustment layers	Synlige justeringslag
+Vivid Light	Sterkt lys
+W	B
+WEBP…	WEBP…
+Waiting for the composite…	Venter på det sammensatte bildet…
+Warm	Varm
+Warp	Fordrei
+Warp Style	Forvrengningsstil
+Warp Text	Forvreng tekst
+Warp Text…	Forvreng tekst…
+Wave	Bølge
+Wavelet Decompose	Wavelet-oppdeling
+Wavelet Decompose splits into 2 to 7 scales	Wavelet-oppdeling deler i 2 til 7 skalaer
+Wavelet Decompose works on an sRGB document	Wavelet-oppdeling virker på et sRGB-dokument
+Wavelet Decompose: the layer has no pixels	Wavelet-oppdeling: laget har ingen piksler
+Wavelet Decompose: {n} detail layers over a residual; the source layer is hidden	Wavelet-oppdeling: {n} detaljlag over en rest; kildelaget er skjult
+Wavelet Decompose…	Wavelet-oppdeling…
+Wave…	Bølge…
+Web (216)	Web (216)
+WebP (lossless)	WebP (tapsfri)
+WebP (lossy)	WebP (med tap)
+Weight	Vekt
+White	Hvit
+White to Black	Hvit til svart
+Whites	Hvite
+Width	Bredde
+Width and height must be at least 1 pixel	Bredde og høyde må være minst 1 piksel
+Width must be between 1 and 250 pixels	Bredden må være mellom 1 og 250 piksler
+Width to 110%	Bredde til 110 %
+Width to 125%	Bredde til 125 %
+Width to 80%	Bredde til 80 %
+Width to 90%	Bredde til 90 %
+Window	Vindu
+Wind…	Vind…
+With Handles	Med håndtak
+Work Path	Arbeidsbane
+Workspace	Arbeidsområde
+Wrap to box	Bryt i boksen
+Writes the visible adjustment layers, applied to an identity lattice, as a 3D LUT (.cube).	Skriver de synlige justeringslagene, brukt på et identitetsgitter, som en 3D-LUT (.cube).
+Written as CMYK: a naive ink model, not an ICC press profile.	Skrevet som CMYK: en enkel trykkfargemodell, ikke en ICC-trykkprofil.
+Written as XMP into PNG, JPEG and TIFF files by Export As.	Skrives som XMP i PNG-, JPEG- og TIFF-filer av Eksporter som.
+Written with the document's palette.	Skrevet med dokumentets palett.
+Yellow	Gul
+Yellow / Blue	Gul / blå
+Yellows	Gultoner
+ZIP for pixel data	ZIP for pikseldata
+ZigZag…	Sikksakk…
+Zoom In	Zoom inn
+Zoom Out	Zoom ut
+Zoom in	Zoom inn
+Zoom out	Zoom ut
+Zoom to Selection	Zoom til markering
+a layer could not be rewritten	et lag kunne ikke skrives om
+before / after	før / etter
+changed	endret
+content thumbnail — click to edit the layer's pixels	innholdsminiatyr — klikk for å redigere lagets piksler
+dpi	dpi
+edits are aimed at this mask — right-click for view and mask options	redigeringer rettes mot denne masken — høyreklikk for visnings- og maskealternativer
+lines past the box	linjer utenfor boksen
+mask off	maske av
+mask thumbnail — click to edit the layer's mask	maskeminiatyr — klikk for å redigere lagets maske
+minutes (0 is off)	minutter (0 er av)
+no drop	kan ikke slippes
+px	px
+records here	spiller inn her
+skipped on play:	hoppet over ved avspilling:
+the layers could not be added	lagene kunne ikke legges til
+the profile cannot be transformed ({error})	profilen kan ikke transformeres ({error})
+to	til
+vector mask thumbnail — click to edit the vector mask	vektormaskeminiatyr — klikk for å redigere vektormasken
+{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time	{format}: tidslinjen, {frames} bilder med {fps} b/s over {length} ms; hvert bilde viser lagene på sitt tidspunkt
+{label} is not answered by this route	{label} besvares ikke av denne ruten
+{label} was refused: {reason}	{label} ble avvist: {reason}
+{name} Residual	{name} rest
+{name} Scale {k}	{name} skala {k}
+{name}: {n} pages	{name}: {n} sider
+{n} slices from the guides ({cols} x {rows}); they replace the slices there were	{n} stykker fra hjelpelinjene ({cols} x {rows}); de erstatter stykkene som fantes
+{path} is a {space} profile; an RGB document takes an RGB profile	{path} er en {space}-profil; et RGB-dokument tar en RGB-profil
+{path} is {len} bytes, larger than any colour profile	{path} er {len} byte, større enn noen fargeprofil
+{reason}; this one is {space}	{reason}; denne er {space}
+There is no path; draw one or select it in the Paths panel	Det finnes ingen bane; tegn en eller merk den i Baner-panelet
+a	a
+b	b
+Open a document to see its memory	Åpne et dokument for å se minnet det bruker
+Image data	Bildedata
+{undo} undo / {redo} redo steps	{undo} angre- / {redo} gjør om-trinn
+Holds copied pixels	Inneholder kopierte piksler
+{size} ({tiles} tiles)	{size} ({tiles} fliser)
+Empty	Tom
+Purge Clipboard	Tøm utklippstavlen
+Purge Histories	Tøm historikker
+Purge All	Tøm alt
+Make	Lag
+Reverse pages	Reverser sider

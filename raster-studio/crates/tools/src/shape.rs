@@ -1119,6 +1119,10 @@ pub struct ShapeTool {
     /// W16-G: the Parametric Shape tool's options (`None` on every other
     /// shape tool); see [`ShapeTool::parametric_tool`].
     parametric: Option<ParametricOptions>,
+    /// W18-F: Photopea's Alt-from-centre: Alt centres the box once pressed
+    /// during the drag, or while Shift is held with it (its shape tools
+    /// read the modifiers only then).
+    alt: crate::select::AltFromCentre,
 }
 
 impl ShapeTool {
@@ -1134,6 +1138,7 @@ impl ShapeTool {
             work_path: None,
             arrows: LineArrows::default(),
             parametric: None,
+            alt: crate::select::AltFromCentre::default(),
         }
     }
 
@@ -1193,9 +1198,9 @@ impl ShapeTool {
                 }
             };
         }
-        if self.from_center
-            && !matches!(self.kind, ShapeKind::Line { .. } | ShapeKind::Arrow { .. })
-        {
+        // W18-F: Alt as Photopea reads it on a shape drag.
+        let centred = self.from_center || self.alt.centred() || (self.alt.held() && shift);
+        if centred && !matches!(self.kind, ShapeKind::Line { .. } | ShapeKind::Arrow { .. }) {
             let d = b - a;
             (a - d, a + d)
         } else {
@@ -1229,6 +1234,7 @@ impl Tool for ShapeTool {
         self.anchor = Some(event.pos);
         self.current = Some(event.pos);
         self.shift = event.modifiers.shift;
+        self.alt = crate::select::AltFromCentre::press(event.modifiers.alt, false);
         // A new outline replaces the Work Path, as a new pen path does.
         self.work_path = None;
         Ok(())
@@ -1242,6 +1248,7 @@ impl Tool for ShapeTool {
         if self.anchor.is_some() {
             self.current = Some(event.pos);
             self.shift = event.modifiers.shift;
+            self.alt.sample(event.modifiers.alt);
         }
         Ok(())
     }
@@ -1254,6 +1261,7 @@ impl Tool for ShapeTool {
         if self.anchor.is_none() {
             return Ok(());
         }
+        self.alt.sample(event.modifiers.alt);
         let (a, b) = self.corners(event.pos, event.modifiers.shift);
         self.anchor = None;
         self.current = None;
@@ -2035,5 +2043,51 @@ mod w13i_tests {
             registry::make(ToolId::Rectangle).set_setting("arrow_end", ON),
             Err(ToolError::UnknownOption { .. })
         ));
+    }
+}
+
+/// W18-F: Photopea's Alt-from-centre on a box shape: Alt pressed during the
+/// drag, or held with Shift, draws out from the press.
+#[cfg(test)]
+mod w18f_alt_from_centre_tests {
+    use super::*;
+    use crate::tiles::MemoryTiles;
+    use crate::tool::Modifiers;
+
+    #[test]
+    fn alt_pressed_during_the_drag_or_with_shift_centres_the_shape() {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, raster::PixelRect::new(0, 0, 96, 96));
+        let at = |x, y, m| PointerEvent::at(x, y).with_modifiers(m);
+        let alt = Modifiers::alt();
+        let alt_shift = Modifiers {
+            shift: true,
+            alt: true,
+            ctrl: false,
+        };
+        let mut tool = ShapeTool::new(ShapeKind::Rectangle, ShapeMode::VectorLayer);
+        // No Alt: corner to corner.
+        tool.on_pointer_down(&mut ctx, at(20.0, 20.0, Modifiers::NONE))
+            .unwrap();
+        tool.on_pointer_move(&mut ctx, at(30.0, 25.0, Modifiers::NONE))
+            .unwrap();
+        assert_eq!(tool.drag_size(), Some(Vec2::new(10.0, 5.0)));
+        // Alt pressed during the drag: out from the press.
+        tool.on_pointer_move(&mut ctx, at(30.0, 25.0, alt)).unwrap();
+        assert_eq!(tool.drag_size(), Some(Vec2::new(20.0, 10.0)));
+        tool.cancel(&mut ctx);
+        // Alt held from the press alone: not centred (Photopea reads it
+        // only once pressed afresh or with Shift)...
+        tool.on_pointer_down(&mut ctx, at(20.0, 20.0, alt)).unwrap();
+        tool.on_pointer_move(&mut ctx, at(30.0, 25.0, alt)).unwrap();
+        assert_eq!(tool.drag_size(), Some(Vec2::new(10.0, 5.0)));
+        // ...but with Shift it is: a centred square.
+        tool.on_pointer_move(&mut ctx, at(30.0, 25.0, alt_shift))
+            .unwrap();
+        assert_eq!(tool.drag_size(), Some(Vec2::new(20.0, 20.0)));
+        tool.on_pointer_up(&mut ctx, at(30.0, 25.0, alt_shift))
+            .unwrap();
+        let cmds = ctx.drain();
+        assert_eq!(cmds.len(), 1, "the centred square commits");
     }
 }

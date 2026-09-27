@@ -2,6 +2,41 @@
 # the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
 # Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
 @name	Español
+Artboards	Mesas de trabajo
+No Slices	Sin sectores
+All Slices	Todos los sectores
+User Slices	Sectores de usuario
+Put the file into ZIP	Poner el archivo en un ZIP
+16 Bits	16 bits
+8 Bits	8 bits
+AVIF…	AVIF…
+Blank preview image	Imagen de vista previa en blanco
+Byte Order	Orden de bytes
+Depth	Profundidad
+Duplicate Into…	Duplicar en…
+Guides from Layer	Guías desde capa
+Minify the file	Reducir el archivo
+Nothing under the pointer for this row	No hay nada bajo el puntero para esta opción
+Make Work Path	Hacer trazado de trabajo
+RAW…	RAW…
+Remove Anchor Point	Eliminar punto de ancla
+Remove Path	Eliminar trazado
+Make Selection	Hacer selección
+Divide…	Dividir…
+Right-click on an anchor point of the path	Haga clic derecho en un punto de ancla del trazado
+Right-click inside a path	Haga clic derecho dentro de un trazado
+Save PSD/PSB	Guardar PSD/PSB
+Save PSD/PSB…	Guardar PSD/PSB…
+Select or draw a path first	Primero seleccione o dibuje un trazado
+Right-click on a text layer	Haga clic derecho en una capa de texto
+Right-click inside a slice	Haga clic derecho dentro de un sector
+Divide Slices	Dividir sectores
+N equal parts	N partes iguales
+N pixels per part	N píxeles por parte
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Corta el sector en el que hizo clic derecho, o el lienzo si no había ninguno, en una cuadrícula de sectores.
+Tick Horizontally or Vertically	Marque Horizontalmente o Verticalmente
+These settings make no cut: raise N or pick a smaller pixel count	Esta configuración no produce ningún corte: aumente N o elija menos píxeles
  fps	 fps
  frames	 fotogramas
  ms	 ms
@@ -291,6 +326,10 @@ Columns	Columnas
 Columns and rows with gutters between them, inside optional margins, in pixels.	Columnas y filas con medianiles entre ellas, dentro de márgenes opcionales, en píxeles.
 Combine Shapes	Combinar formas
 Commit (Enter)	Confirmar (Intro)
+Cancel (Esc)	Cancelar (Esc)
+All Documents	Todos los documentos
+Select Source	Seleccionar origen
+Alt	Alt
 Commit Contents	Confirmar contenido
 Composite	Compuesto
 Condensed	Estrecho
@@ -857,7 +896,6 @@ New Folder	Nueva carpeta
 New Guide	Nueva guía
 New Guide Layout	Nuevo diseño de guía
 New Guide Layout…	Nuevo diseño de guía…
-New Guides from Shape	Nuevas guías desde forma
 New Guide…	Nueva guía…
 New Layer	Nueva capa
 New Layer Based Slice	Nuevo sector basado en capas
@@ -1494,6 +1532,7 @@ Trim	Cortar
 Trim Away	Recortar
 Trim…	Cortar…
 Tritone	Tritono
+Turn into JPG	Convertir en JPG
 Turn on Resample to change the pixel count.	Active Remuestrear para cambiar el número de píxeles.
 Twirl…	Molinete…
 Twist	Torcer
@@ -1587,6 +1626,7 @@ Written with the document's palette.	Escrito con la paleta del documento.
 Yellow	Amarillo
 Yellow / Blue	Amarillo / Azul
 Yellows	Amarillos
+ZIP for pixel data	ZIP para datos de píxeles
 ZigZag…	Zigzag…
 Zoom In	Acercar
 Zoom Out	Alejar
@@ -1621,3 +1661,17 @@ vector mask thumbnail — click to edit the vector mask	miniatura de la máscara
 {path} is a {space} profile; an RGB document takes an RGB profile	{path} es un perfil {space}; un documento RGB necesita un perfil RGB
 {path} is {len} bytes, larger than any colour profile	{path} ocupa {len} bytes, más que cualquier perfil de color
 {reason}; this one is {space}	{reason}; este es {space}
+a	a
+b	b
+Open a document to see its memory	Abra un documento para ver su memoria
+Image data	Datos de imagen
+{undo} undo / {redo} redo steps	{undo} deshacer / {redo} rehacer
+Holds copied pixels	Contiene píxeles copiados
+{size} ({tiles} tiles)	{size} ({tiles} mosaicos)
+Empty	Vacío
+Purge Clipboard	Purgar portapapeles
+Purge Histories	Purgar historias
+Purge All	Purgar todo
+Make	Crear
+There is no path; draw one or select it in the Paths panel	No hay ningún trazado; dibuje uno o selecciónelo en el panel Trazados
+Reverse pages	Invertir páginas

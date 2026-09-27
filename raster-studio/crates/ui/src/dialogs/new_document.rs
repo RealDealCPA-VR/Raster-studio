@@ -141,11 +141,26 @@ pub enum PresetGroup {
     Screen,
     Print,
     Social,
+    // W18-G: Photopea's other New-dialog shelves.
+    Photo,
+    Mobile,
+    Ads,
+    /// Photopea's "2ᴺ": power-of-two squares (textures, icons).
+    PowersOfTwo,
 }
 
 impl PresetGroup {
     /// Every group, in list order.
-    pub const ALL: &'static [PresetGroup] = &[Self::Screen, Self::Print, Self::Social];
+    pub const ALL: &'static [PresetGroup] = &[
+        Self::Screen,
+        Self::Print,
+        Self::Social,
+        // W18-G
+        Self::Photo,
+        Self::Mobile,
+        Self::Ads,
+        Self::PowersOfTwo,
+    ];
 
     /// Section header text.
     pub const fn label(self) -> &'static str {
@@ -153,6 +168,11 @@ impl PresetGroup {
             Self::Screen => "Screen",
             Self::Print => "Print",
             Self::Social => "Social",
+            Self::Photo => "Photo",
+            Self::Mobile => "Mobile",
+            Self::Ads => "Ads",
+            // Photopea writes 2ᴺ; the superscript N is not in the UI font.
+            Self::PowersOfTwo => "2^N",
         }
     }
 }
@@ -191,7 +211,71 @@ pub const PRESETS: &[DocumentPreset] = &[
     px("Facebook Cover", PresetGroup::Social, 1640.0, 856.0),
     px("X Header", PresetGroup::Social, 1500.0, 500.0),
     px("LinkedIn Banner", PresetGroup::Social, 1584.0, 396.0),
+    // ---- W18-G: Photopea's Photo, Mobile, Ads and 2ᴺ shelves, its values.
+    photo("Wallet", 2.0, 3.0),
+    photo("Enprint", 3.5, 5.0),
+    photo("5 x 7 in", 5.0, 7.0),
+    photo("8 x 12 in", 8.0, 12.0),
+    photo("12 x 18 in", 12.0, 18.0),
+    photo("16 x 24 in", 16.0, 24.0),
+    photo("20 x 30 in", 20.0, 30.0),
+    photo("24 x 36 in", 24.0, 36.0),
+    mobile("iPhone 4", 640.0, 900.0, 326.0),
+    mobile("iPhone 5", 640.0, 1136.0, 326.0),
+    mobile("iPhone 6 7 8", 750.0, 1334.0, 326.0),
+    mobile("iPhone 6+ 7+ 8+", 1080.0, 1920.0, 401.0),
+    mobile("iPhone X", 1125.0, 2436.0, 458.0),
+    mobile("Samsung A5", 720.0, 1280.0, 72.0),
+    mobile("Samsung S5", 1080.0, 1920.0, 72.0),
+    mobile("Samsung S6", 1440.0, 2560.0, 72.0),
+    mobile("Samsung S8+", 1440.0, 2560.0, 72.0),
+    mobile("Google Pixel", 1080.0, 1920.0, 72.0),
+    mobile("iPad Mini 4", 1536.0, 2048.0, 72.0),
+    mobile("iPad Air 2", 1536.0, 2048.0, 72.0),
+    mobile("iPad Pro 9.7\"", 1536.0, 2048.0, 72.0),
+    mobile("iPad Pro 10.5\"", 1668.0, 2224.0, 72.0),
+    mobile("iPad Pro 12.9\"", 2048.0, 2732.0, 72.0),
+    px("Small Square", PresetGroup::Ads, 200.0, 200.0),
+    px("Square", PresetGroup::Ads, 250.0, 250.0),
+    px("Medium Rect", PresetGroup::Ads, 300.0, 250.0),
+    px("Large Rect", PresetGroup::Ads, 336.0, 280.0),
+    px("Mobile Leaderboard", PresetGroup::Ads, 320.0, 50.0),
+    px("Large Mobile", PresetGroup::Ads, 320.0, 100.0),
+    px("Banner", PresetGroup::Ads, 468.0, 60.0),
+    px("Leaderboard", PresetGroup::Ads, 728.0, 90.0),
+    px("Large Leaderboard", PresetGroup::Ads, 970.0, 90.0),
+    px("Billboard", PresetGroup::Ads, 970.0, 250.0),
+    px("Vertical Rect", PresetGroup::Ads, 240.0, 400.0),
+    px("Skyscraper", PresetGroup::Ads, 120.0, 600.0),
+    px("Wide Skyscraper", PresetGroup::Ads, 160.0, 600.0),
+    px("Half Page", PresetGroup::Ads, 300.0, 600.0),
+    px("Portrait", PresetGroup::Ads, 300.0, 1050.0),
+    px("16 x 16", PresetGroup::PowersOfTwo, 16.0, 16.0),
+    px("32 x 32", PresetGroup::PowersOfTwo, 32.0, 32.0),
+    px("64 x 64", PresetGroup::PowersOfTwo, 64.0, 64.0),
+    px("128 x 128", PresetGroup::PowersOfTwo, 128.0, 128.0),
+    px("256 x 256", PresetGroup::PowersOfTwo, 256.0, 256.0),
+    px("512 x 512", PresetGroup::PowersOfTwo, 512.0, 512.0),
+    px("1024 x 1024", PresetGroup::PowersOfTwo, 1024.0, 1024.0),
+    px("2048 x 2048", PresetGroup::PowersOfTwo, 2048.0, 2048.0),
+    px("4096 x 4096", PresetGroup::PowersOfTwo, 4096.0, 4096.0),
 ];
+
+/// W18-G: a Photopea Photo preset, in inches at 300 ppi.
+const fn photo(name: &'static str, w: f64, h: f64) -> DocumentPreset {
+    DocumentPreset {
+        group: PresetGroup::Photo,
+        ..print(name, w, h)
+    }
+}
+
+/// W18-G: a Photopea Mobile preset, in pixels at the device's own ppi.
+const fn mobile(name: &'static str, w: f64, h: f64, ppi: f64) -> DocumentPreset {
+    DocumentPreset {
+        ppi,
+        ..px(name, PresetGroup::Mobile, w, h)
+    }
+}
 
 const fn px(name: &'static str, group: PresetGroup, w: f64, h: f64) -> DocumentPreset {
     DocumentPreset {
@@ -837,6 +921,45 @@ mod tests {
                 spec.height
             );
         }
+    }
+
+    /// W18-G: Photopea's Photo, Mobile, Ads and 2ᴺ shelves are in the list
+    /// the dialog draws (every group of `PresetGroup::ALL`), with Photopea's
+    /// values: picking one fills the fields with its size and resolution.
+    #[test]
+    fn photopeas_photo_mobile_ads_and_power_of_two_shelves_are_offered() {
+        let pick = |name: &str| {
+            let index = PRESETS
+                .iter()
+                .position(|p| p.name == name)
+                .unwrap_or_else(|| panic!("no {name} preset"));
+            let mut dialog = NewDocumentDialog::default();
+            dialog.apply_preset(index);
+            (
+                PRESETS[index].group,
+                dialog.pixel_width(),
+                dialog.pixel_height(),
+                dialog.resolution_ppi(),
+            )
+        };
+        for group in [
+            PresetGroup::Photo,
+            PresetGroup::Mobile,
+            PresetGroup::Ads,
+            PresetGroup::PowersOfTwo,
+        ] {
+            assert!(PresetGroup::ALL.contains(&group), "{group:?} is not drawn");
+        }
+        assert_eq!(pick("Enprint"), (PresetGroup::Photo, 1050, 1500, 300.0));
+        assert_eq!(pick("iPhone X"), (PresetGroup::Mobile, 1125, 2436, 458.0));
+        assert_eq!(pick("Leaderboard"), (PresetGroup::Ads, 728, 90, 72.0));
+        let squares: Vec<u32> = PRESETS
+            .iter()
+            .filter(|p| p.group == PresetGroup::PowersOfTwo)
+            .map(|p| p.width as u32)
+            .collect();
+        assert_eq!(squares, (4..=12).map(|n| 1u32 << n).collect::<Vec<_>>());
+        assert_eq!(PresetGroup::PowersOfTwo.label(), "2^N");
     }
 
     #[test]

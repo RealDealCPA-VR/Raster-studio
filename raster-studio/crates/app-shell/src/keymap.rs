@@ -1678,6 +1678,33 @@ mod tests {
         }
     }
 
+    /// W18-G: the transform chords, checked against Photopea and kept as
+    /// Photoshop's — a documented deviation. Photopea paints Free Transform
+    /// on Alt+Ctrl+T and Again on Shift+Alt+Ctrl+T (its menus, and its learn
+    /// page: "Edit - Free Transform, or Alt + Ctrl + T") because a browser
+    /// keeps Ctrl+T (new tab) and Shift+Ctrl+T for itself. A desktop editor
+    /// owns those, so this build keeps Photoshop's set, where Photopea's two
+    /// chords already mean Free Transform a Copy and Again with Copy: taking
+    /// them would leave those two rows with no chord at all.
+    #[test]
+    fn the_transform_chords_are_photoshops_a_documented_deviation_from_photopea() {
+        use ui::menu::MenuAction as M;
+        let map = Keymap::default();
+        let t = Key::character('t');
+        for (chord, action) in [
+            (Chord::ctrl(t), M::FreeTransform),
+            (Chord::ctrl_shift(t), M::TransformAgain),
+            (Chord::ctrl_alt(t), M::DuplicateFreeTransform),
+            (Chord::ctrl_alt_shift(t), M::TransformAgainCopy),
+        ] {
+            assert_eq!(
+                map.resolve_any(&chord),
+                Some(Resolved::Menu(action)),
+                "{chord} does not reach {action:?}"
+            );
+        }
+    }
+
     /// W10-J: Photoshop's remaining chords resolve, through the keymap the
     /// key handler consults, to their own menu actions and to nothing else:
     /// Ctrl+H Extras, Alt+Ctrl+T duplicate-and-transform, Shift+[ / Shift+]

@@ -2340,6 +2340,20 @@ pub enum MenuAction {
     /// The Crop options bar's Crop by ▸ Current Layer: the canvas cropped to
     /// the active layer's ink bounds.
     CropToLayer,
+    // ---- W18-G: Photopea's Layer / File rows -----------------------------
+    /// Layer ▸ Smart Object ▸ Turn into JPG (Photopea's last row there): the
+    /// active smart object's embedded source re-encoded as a JPEG, its
+    /// pixels the decoded JPEG, one undo step.
+    TurnIntoJpg,
+    /// Layer ▸ Duplicate Into… (Photopea's): the Duplicate Layer dialog,
+    /// whose Destination picks the document the copy lands in. The row
+    /// resolves to [`MenuAction::DuplicateLayer`]'s intent, so both roads
+    /// open the one dialog.
+    DuplicateInto,
+    /// File ▸ Save PSD/PSB… (Photopea's): a layered save written with the
+    /// Save PSD/PSB options (`dialogs::psd_options`): PSD or PSB, a blank
+    /// preview image, ZIP for pixel data.
+    SavePsdPsb,
 }
 
 /// W16-K: View ▸ Mode's rows, in Photopea's order.
@@ -2735,6 +2749,10 @@ fn active_smart_object(doc: &Document) -> Option<&layer_model::SmartObjectLayer>
         _ => None,
     }
 }
+
+/// W18-G: why Turn into JPG is greyed out over a linked smart object.
+pub const TURN_INTO_JPG_LINKED: &str =
+    "The smart object is linked: its source is its file, so embed it first";
 
 /// W10-I: why Relink to File is greyed over an embedded smart object.
 pub const RELINK_EMBEDDED: &str =
@@ -3333,6 +3351,19 @@ impl MenuAction {
                 .map(MenuAction::ArtboardNeighbour),
         );
         out.push(MenuAction::CropToLayer);
+        // ---- W18-G ----
+        out.extend([
+            MenuAction::TurnIntoJpg,
+            MenuAction::DuplicateInto,
+            MenuAction::SavePsdPsb,
+        ]);
+        out.extend(
+            ExportFormat::WRITE_ONLY
+                .iter()
+                .copied()
+                .map(MenuAction::Export),
+        );
+        out.extend(ExportFormat::RAW.iter().copied().map(MenuAction::Export));
         out
     }
 
@@ -3515,7 +3546,7 @@ impl MenuAction {
             MenuAction::SnapToAll => "All".into(),
             MenuAction::SnapToNone => "None".into(),
             MenuAction::NewGuideLayout => "New Guide Layout…".into(),
-            MenuAction::NewGuidesFromShape => "New Guides from Shape".into(),
+            MenuAction::NewGuidesFromShape => "Guides from Layer".into(),
             MenuAction::DuplicateFreeTransform => "Free Transform a Copy".into(),
             MenuAction::BrushHardness(false) => "Softer Brush".into(),
             MenuAction::BrushHardness(true) => "Harder Brush".into(),
@@ -3579,6 +3610,10 @@ impl MenuAction {
             MenuAction::ArtboardNeighbour(ArtboardSide::Above) => "Add Artboard Above".into(),
             MenuAction::ArtboardNeighbour(ArtboardSide::Below) => "Add Artboard Below".into(),
             MenuAction::CropToLayer => "Current Layer".into(),
+            // W18-G
+            MenuAction::TurnIntoJpg => "Turn into JPG".into(),
+            MenuAction::DuplicateInto => "Duplicate Into…".into(),
+            MenuAction::SavePsdPsb => "Save PSD/PSB…".into(),
             // W13-N
             MenuAction::ApplyStyleAt(i) => format!("Apply Style {}", i + 1),
             MenuAction::MagicCut => "Magic Cut…".into(),
@@ -4474,9 +4509,9 @@ impl MenuAction {
                 act(self),
             ),
             MenuAction::NewGuideLayout => gate(ctx.need_document(), act(self)),
+            // W18-G: Photopea's Guides from Layer — any selected layer.
             MenuAction::NewGuidesFromShape => match ctx.need_layer() {
-                Ok(l) if l.class == LayerClass::Shape => act(self),
-                Ok(_) => Resolution::Disabled("The active layer is not a shape layer"),
+                Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
             },
             MenuAction::DuplicateFreeTransform => match ctx.need_layer() {
@@ -4663,6 +4698,21 @@ impl MenuAction {
                 Ok(_) => act(self),
                 Err(r) => Resolution::Disabled(r),
             },
+            // ---- W18-G ----
+            MenuAction::TurnIntoJpg => match ctx.need_layer() {
+                Ok(l) if l.class != LayerClass::SmartObject => {
+                    Resolution::Disabled("The active layer is not a smart object")
+                }
+                Ok(_) if ctx.smart_object_linked => Resolution::Disabled(TURN_INTO_JPG_LINKED),
+                Ok(_) => act(self),
+                Err(r) => Resolution::Disabled(r),
+            },
+            // The Duplicate Layer dialog, whose Destination is the document.
+            MenuAction::DuplicateInto => match MenuAction::DuplicateLayer.resolve(ctx) {
+                Resolution::Enabled(_) => act(MenuAction::DuplicateLayer),
+                disabled => disabled,
+            },
+            MenuAction::SavePsdPsb => gate(ctx.need_document(), act(self)),
             // ---- W13-N ----
             MenuAction::ApplyStyleAt(_) => match ctx.need_layer() {
                 Ok(l) if l.locked.all => Resolution::Disabled("The layer is locked"),
@@ -4977,6 +5027,8 @@ fn file_menu(recent_files: usize) -> Menu {
             item(MenuAction::Save),
             item(MenuAction::SaveAs),
             item(MenuAction::SaveAsPsd),
+            // W18-G: Photopea's Save PSD/PSB, with its options.
+            item(MenuAction::SavePsdPsb),
             // W11-D.
             item(MenuAction::Revert),
             Entry::Separator,
@@ -4990,6 +5042,9 @@ fn file_menu(recent_files: usize) -> Menu {
                     .chain(&ExportFormat::VIDEO)
                     // W16-K: and PDF, EMF and DXF.
                     .chain(&ExportFormat::VECTOR)
+                    // W18-G: and Photopea's AVIF and RAW.
+                    .chain(&ExportFormat::WRITE_ONLY)
+                    .chain(&ExportFormat::RAW)
                     .map(|f| item(MenuAction::Export(*f)))
                     .collect(),
             ),
@@ -5198,6 +5253,8 @@ fn layer_menu() -> Menu {
             ),
             item(MenuAction::EditAdjustmentLayer),
             item(MenuAction::DuplicateLayer),
+            // W18-G: Photopea's Duplicate Into…, below Duplicate Layer.
+            item(MenuAction::DuplicateInto),
             item(MenuAction::DeleteLayer),
             item(MenuAction::RenameLayer),
             Entry::submenu("Lock", items(LayerLock::ALL, MenuAction::LockLayer)),
@@ -5277,6 +5334,8 @@ fn layer_menu() -> Menu {
                             MenuAction::LayerExtra(LayerExtraOp::StackMode(m))
                         }),
                     ),
+                    // W18-G: Photopea's last Smart Object row.
+                    item(MenuAction::TurnIntoJpg),
                 ],
             ),
             // W10-I: Layer ▸ Smart Filter — the filters' shared mask.
@@ -5454,10 +5513,13 @@ fn view_menu() -> Menu {
     );
     entries.push(Entry::submenu(
         "Show",
-        // W16-K: Photopea's Show > Paths row stays out until the canvas
-        // path overlay reads a flag; a ticking row that hides nothing is
-        // worse than no row.
-        vec![item(MenuAction::ToggleView(ViewFlag::Slices))],
+        // W18-E: Photopea's View > Show, in its order: Selection, Paths,
+        // Guides, Grid, Pixel Grid, Slices. Paths gates the canvas path
+        // overlay (`app-shell` `paths_w18::paint_paths`).
+        ViewFlag::SHOW
+            .iter()
+            .map(|f| item(MenuAction::ToggleView(*f)))
+            .collect(),
     ));
     let mut snap_to = items(ViewFlag::SNAP_TO, MenuAction::ToggleView);
     snap_to.push(Entry::Separator);
@@ -6391,8 +6453,13 @@ mod tests {
                 .iter()
                 .position(|e| matches!(e, Entry::Item(i) if *i == a))
         };
+        // W18-G: Save PSD/PSB… joined the saves, above Revert.
         assert_eq!(
             at(MenuAction::Revert),
+            at(MenuAction::SavePsdPsb).map(|i| i + 1)
+        );
+        assert_eq!(
+            at(MenuAction::SavePsdPsb),
             at(MenuAction::SaveAsPsd).map(|i| i + 1)
         );
     }
@@ -7988,8 +8055,15 @@ mod w10j_view_tests {
         assert!(snap.contains(&MenuAction::SnapToAll) && snap.contains(&MenuAction::SnapToNone));
         assert_eq!(
             actions(submenu(&view, "Show")),
-            // W16-K: no inert Paths row (the overlay reads no flag yet).
-            vec![MenuAction::ToggleView(ViewFlag::Slices)]
+            // W18-E: Photopea's View > Show rows, in its order.
+            vec![
+                MenuAction::ToggleView(ViewFlag::SelectionEdges),
+                MenuAction::ToggleView(ViewFlag::Paths),
+                MenuAction::ToggleView(ViewFlag::Guides),
+                MenuAction::ToggleView(ViewFlag::Grid),
+                MenuAction::ToggleView(ViewFlag::PixelGrid),
+                MenuAction::ToggleView(ViewFlag::Slices),
+            ]
         );
         assert_eq!(
             MenuAction::ToggleView(ViewFlag::Extras).shortcut(),

@@ -550,11 +550,15 @@ pub(crate) fn dismissed_by_a_click_outside(
 pub fn tool_options(w: &mut Workspace, ctx: &egui::Context) {
     // W13-I: the Eyedropper's sampling ring rides the bar's frame.
     super::eyedropper_ring::paint(w, ctx);
+    // W18-F: K held for a clone-source pick, read where egui sees the keys.
+    w18::observe_keys(ctx);
     let tool = w.palette.active();
     let Some(info) = crate::palette::info(tool) else {
         return;
     };
     let specs = crate::tool_options::shown_schema(&w.options, info);
+    // W18-F: the Parametric Shape bar shows only the picked shape's keys.
+    let specs = w18::shown(&w.options, tool, specs);
     let t = design::current_theme(ctx).tokens();
 
     egui::TopBottomPanel::top("raster-tool-options")
@@ -603,7 +607,9 @@ pub fn tool_options(w: &mut Workspace, ctx: &egui::Context) {
                         // W16-C: the Commit button, beside the tool name
                         // where a long bar cannot scroll it away, while a
                         // transform, crop box or pen path is pending.
+                        // W18-F: Photopea's Cancel cross before it.
                         if pending_edit(w) {
+                            w18::cancel_button(ui, tool);
                             commit_button(w, ui);
                             separator(ui);
                         }
@@ -644,6 +650,13 @@ pub fn tool_options(w: &mut Workspace, ctx: &egui::Context) {
                             w.emit(Intent::ResetToolOptions(tool));
                         }
                         separator(ui);
+                        // W18-E: the Pen bar's Make Selection / Mask / Shape,
+                        // near the front as Photopea keeps it, where a long
+                        // pen row (stroke, dash, fill) cannot scroll it away.
+                        if PEN_MAKE_TOOLS.contains(&tool) {
+                            pen_make_row(w, ui, tool);
+                            separator(ui);
+                        }
                         // W9-L: Free Transform's numeric row reads the live
                         // session back, so it is drawn by `transform_row`.
                         if tool == ToolId::FreeTransform {
@@ -796,6 +809,65 @@ fn path_arrange_row(w: &mut Workspace, ui: &mut Ui) {
         if response.clicked() {
             tools::path_select::request_component_op(op);
             w.emit(Intent::ConfirmTool);
+        }
+    }
+}
+
+/// W18-E: the pen tools whose options bar carries Make.
+pub const PEN_MAKE_TOOLS: [ToolId; 3] = [ToolId::Pen, ToolId::FreeformPen, ToolId::CurvaturePen];
+
+/// W18-E: what one Pen bar Make button makes of the current path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PenMakeButton {
+    /// Load it as the selection.
+    Selection,
+    /// Layer > Vector Mask > Current Path on the active layer.
+    Mask,
+    /// A shape layer filled with the foreground colour.
+    Shape,
+}
+
+/// W18-E: the Pen bar's Make buttons, their pseudo-keys
+/// (`ids::tool_option(tool, ..)`) and caption string keys, in Photoshop's
+/// order.
+pub const PEN_MAKE_KEYS: [(PenMakeButton, &str, &str); 3] = [
+    (
+        PenMakeButton::Selection,
+        "make_selection",
+        "ui.toolbar.pen.make.selection",
+    ),
+    (PenMakeButton::Mask, "make_mask", "ui.toolbar.pen.make.mask"),
+    (
+        PenMakeButton::Shape,
+        "make_shape",
+        "ui.toolbar.pen.make.shape",
+    ),
+];
+
+/// W18-E: Make — the current path (the Paths panel's selected path, else the
+/// Work Path the pen is drawing) as a selection, a vector mask or a shape.
+/// Mask raises Layer > Vector Mask > Current Path itself; Selection and
+/// Shape park a request (`tools::path_select::request_pen_make`) the shell
+/// answers with the document on the same frame. Greyed while there is no
+/// current path.
+fn pen_make_row(w: &mut Workspace, ui: &mut Ui, tool: ToolId) {
+    use tools::path_select::{request_pen_make, PenMake};
+    let tr = crate::strings::tr;
+    let has_path = w.paths.work_path.is_some() || w.paths.selected.is_some();
+    ui.label(hint(ui, tr("ui.toolbar.pen.make")));
+    for (button, key, label) in PEN_MAKE_KEYS {
+        let response =
+            super::labelled_button(ui, tr(label), has_path, super::ids::tool_option(tool, key));
+        let response = response.on_disabled_hover_text(tr("ui.toolbar.pen.make.no.path"));
+        if !response.clicked() {
+            continue;
+        }
+        match button {
+            PenMakeButton::Selection => request_pen_make(PenMake::Selection),
+            PenMakeButton::Shape => request_pen_make(PenMake::Shape),
+            PenMakeButton::Mask => w.emit(Intent::Action(MenuAction::VectorMask(
+                crate::menu::VectorMaskOp::CurrentPath,
+            ))),
         }
     }
 }
@@ -1102,16 +1174,27 @@ fn straighten_button(w: &mut Workspace, ui: &mut Ui) {
 #[path = "toolbar_w16k.rs"]
 pub mod w16k;
 
+// W18-F: the Cancel cross, the view toggles, the clone source toggle, the
+// pattern picker and the Parametric Shape filter.
+#[path = "toolbar_w18.rs"]
+pub mod w18;
+
 /// W16-C: the options bar's pseudo-key for its Commit (check) button, under
 /// which it is marked (`ids::tool_option(tool, COMMIT_KEY)`).
 pub const COMMIT_KEY: &str = "commit";
 
 /// W16-C: whether a held edit is waiting for Commit — a Free Transform quad
 /// (Warp and Perspective are its modes), a crop box or a pen path, as the
-/// application publishes them into the canvas sessions.
+/// application publishes them into the canvas sessions. W18-F: or whatever
+/// the shell publishes as held for the active tool (a Type run, a
+/// Perspective Crop quad, a Show Transform Controls drag); the Move tool's
+/// transform session is its Show Transform Controls box, held or not, so
+/// only that publication counts for it.
 pub(crate) fn pending_edit(w: &Workspace) -> bool {
     let s = &w.canvas.sessions;
-    s.transform.is_some() || s.crop.is_some() || s.path.is_some()
+    let tool = w.palette.active();
+    let transform = s.transform.is_some() && tool != ToolId::Move;
+    transform || s.crop.is_some() || s.path.is_some() || w18::published_pending(tool)
 }
 
 /// W16-C: Photopea's check-mark Commit: the held edit is confirmed exactly
@@ -2047,3 +2130,7 @@ mod w16c_tests;
 #[cfg(test)]
 #[path = "toolbar_w16k_tests.rs"]
 mod w16k_tests;
+
+#[cfg(test)]
+#[path = "toolbar_w18_tests.rs"]
+mod w18_tests;

@@ -2,6 +2,41 @@
 # the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
 # Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
 @name	Polski
+Artboards	Obszary robocze
+No Slices	Bez plasterków
+All Slices	Wszystkie plasterki
+User Slices	Plasterki użytkownika
+Put the file into ZIP	Umieść plik w archiwum ZIP
+16 Bits	16 bitów
+8 Bits	8 bitów
+AVIF…	AVIF…
+Blank preview image	Pusty obraz podglądu
+Byte Order	Kolejność bajtów
+Depth	Głębia
+Duplicate Into…	Powiel do…
+Guides from Layer	Prowadnice z warstwy
+Minify the file	Zmniejsz plik
+Nothing under the pointer for this row	Pod wskaźnikiem nie ma nic dla tej pozycji
+Make Work Path	Utwórz ścieżkę roboczą
+RAW…	RAW…
+Remove Anchor Point	Usuń punkt kontrolny
+Remove Path	Usuń ścieżkę
+Make Selection	Utwórz zaznaczenie
+Divide…	Podziel…
+Right-click on an anchor point of the path	Kliknij prawym przyciskiem punkt kontrolny ścieżki
+Right-click inside a path	Kliknij prawym przyciskiem wewnątrz ścieżki
+Save PSD/PSB	Zapisz PSD/PSB
+Save PSD/PSB…	Zapisz PSD/PSB…
+Select or draw a path first	Najpierw zaznacz lub narysuj ścieżkę
+Right-click on a text layer	Kliknij prawym przyciskiem warstwę tekstową
+Right-click inside a slice	Kliknij prawym przyciskiem wewnątrz plasterka
+Divide Slices	Podziel plasterki
+N equal parts	N równych części
+N pixels per part	N pikseli na część
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Tnie plasterek kliknięty prawym przyciskiem, a gdy go nie było, obszar roboczy, na siatkę plasterków.
+Tick Horizontally or Vertically	Zaznacz Poziomo lub Pionowo
+These settings make no cut: raise N or pick a smaller pixel count	Te ustawienia niczego nie tną: zwiększ N lub wybierz mniejszą liczbę pikseli
  fps	 kl./s
  frames	 klatek
  ms	 ms
@@ -291,6 +326,10 @@ Columns	Kolumny
 Columns and rows with gutters between them, inside optional margins, in pixels.	Kolumny i wiersze z odstępami między nimi, w opcjonalnych marginesach, w pikselach.
 Combine Shapes	Połącz kształty
 Commit (Enter)	Zatwierdź (Enter)
+Cancel (Esc)	Anuluj (Esc)
+All Documents	Wszystkie dokumenty
+Select Source	Wybierz źródło
+Alt	Alt
 Commit Contents	Zatwierdź zawartość
 Composite	Kompozyt
 Condensed	Zwężony
@@ -857,7 +896,6 @@ New Folder	Nowy folder
 New Guide	Nowa linia pomocnicza
 New Guide Layout	Nowy układ linii pomocniczych
 New Guide Layout…	Nowy układ linii pomocniczych…
-New Guides from Shape	Nowe linie pomocnicze z kształtu
 New Guide…	Nowa linia pomocnicza…
 New Layer	Nowa warstwa
 New Layer Based Slice	Nowy plasterek na podstawie warstwy
@@ -1494,6 +1532,7 @@ Trim	Przytnij
 Trim Away	Przytnij
 Trim…	Przytnij…
 Tritone	Trzytonowy
+Turn into JPG	Zamień na JPG
 Turn on Resample to change the pixel count.	Włącz Ponowne próbkowanie, aby zmienić liczbę pikseli.
 Twirl…	Wir…
 Twist	Skręcenie
@@ -1587,6 +1626,7 @@ Written with the document's palette.	Zapisano z paletą dokumentu.
 Yellow	Żółty
 Yellow / Blue	Żółty / Niebieski
 Yellows	Żółte
+ZIP for pixel data	ZIP dla danych pikseli
 ZigZag…	Zygzak…
 Zoom In	Powiększ
 Zoom Out	Pomniejsz
@@ -1621,3 +1661,17 @@ vector mask thumbnail — click to edit the vector mask	miniatura maski wektorow
 {path} is a {space} profile; an RGB document takes an RGB profile	{path} to profil {space}; dokument RGB przyjmuje profil RGB
 {path} is {len} bytes, larger than any colour profile	{path} ma {len} bajtów, więcej niż jakikolwiek profil koloru
 {reason}; this one is {space}	{reason}; ten jest {space}
+a	a
+b	b
+Open a document to see its memory	Otwórz dokument, aby zobaczyć jego pamięć
+Image data	Dane obrazu
+{undo} undo / {redo} redo steps	{undo} cofnięć / {redo} ponowień
+Holds copied pixels	Zawiera skopiowane piksele
+{size} ({tiles} tiles)	{size} ({tiles} kafelków)
+Empty	Pusty
+Purge Clipboard	Wyczyść schowek
+Purge Histories	Wyczyść historie
+Purge All	Wyczyść wszystko
+Make	Utwórz
+There is no path; draw one or select it in the Paths panel	Brak ścieżki; narysuj ją lub zaznacz w panelu Ścieżki
+Reverse pages	Odwróć kolejność stron

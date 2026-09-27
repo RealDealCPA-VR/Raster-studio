@@ -32,6 +32,18 @@
 //! What was chosen is remembered per document, so File > Revert reads the
 //! same pages at the same resolution back ([`reopen_for_revert`]).
 //!
+//! W18-H: each chosen page opens as **layers**, as Photopea opens a PDF:
+//! its paths as shape layers and its text as text layers (the W16-I page
+//! reader, `pdf::layers`), inside the page's artboard, scaled to the chosen
+//! resolution (a shape or text layer carries the scale in its transform).
+//! A page the reader cannot keep live (an image, a clip, a shading on it),
+//! or one whose flattened elements would need resampling at a resolution
+//! other than 72 dpi, opens as one picture inside its artboard, and the
+//! import report says which page and why. "Separate documents" opens each
+//! page the same way as a document of its own. File > Revert rebuilds the
+//! same layers. W18-H also routes File > Revert of a `.kra` / `.dxf` to its
+//! layered reader (`import_layered_w16::reopen_layered_for_revert`).
+//!
 //! # Paint.NET: layers
 //!
 //! A `.pdn` whose object graph [`pdn::read_layers`] can follow opens as one
@@ -57,12 +69,16 @@ use editor_core::pixels::{PixelKey, TileDelta, TileEdit};
 use editor_core::{Document, History};
 use layer_model::{BlendMode, Layer, LayerId};
 use raster::codec::formats::pdf;
+use raster::codec::formats::vector_docs::design_files::{
+    Affine, DesignDocument, DesignKind, DesignNode,
+};
 use raster::codec::formats::vector_docs::pdn::{self, PdnBlend, PdnDocument};
+use raster::codec::svg_import::layers::VectorLayers;
 use raster::{DecodedSurface, ImportFormat, ImportLimits, TileGrid};
 use ui::dialogs::pdf_import::{PdfImportDialog, PdfImportSpec, PdfOpenMode, PdfPageThumb};
 
 use super::super::{Action, ActionError, DocumentId, Editor, Effect, OpenDocument};
-use super::open_pages::{document_from_pages, w13d_format};
+use super::open_pages::w13d_format;
 use crate::import::{DecodedImage, ImportedDocument, PsdImport, PsdNotes};
 
 /// The longest side of a page thumbnail in the import dialog, in pixels.
@@ -187,74 +203,299 @@ fn page_list(pages: &[usize]) -> String {
     }
 }
 
-/// The artboard document of `pages` (rendered, in `indices` order), its
-/// "Page <n>" layers named by their page numbers in the file.
-fn artboards_of(
-    pages: &[DecodedSurface],
-    indices: &[usize],
-    title: &str,
-    depth: usize,
-) -> Result<ImportedDocument, String> {
-    let mut imported = document_from_pages(pages, title, depth)?;
-    let tree = &mut imported.document.layers;
-    for id in tree.iter_depth_first() {
-        if let Some(layer) = tree.get_mut(id) {
-            let number = layer
-                .name
-                .strip_prefix("Page ")
-                .and_then(|n| n.parse::<usize>().ok());
-            if let Some(page) = number.and_then(|n| indices.get(n.wrapping_sub(1))) {
-                layer.name = format!("Page {}", page + 1);
+/// W18-H: `node` and its subtree placed by `outer` (a translation after a
+/// uniform `scale`, applied after each node's own transform). A shape or
+/// text node whose own transform is a translation takes the scale into its
+/// geometry (the path's points, the stroke width, the text size), so the
+/// layer draws its edges at the chosen resolution rather than resampling a
+/// 72 dpi rendering; a shape with a live gradient (`keep`, by walk index,
+/// counted in `index`) keeps the scale in its transform, where the gradient
+/// geometry expects it.
+fn place(
+    node: &mut DesignNode,
+    outer: Affine,
+    scale: f64,
+    index: &mut usize,
+    keep: &HashSet<usize>,
+) {
+    let here = *index;
+    *index += 1;
+    let bake =
+        (scale - 1.0).abs() > 1e-9 && node.transform.is_translation() && !keep.contains(&here);
+    let full = outer.then(node.transform);
+    match &mut node.kind {
+        DesignKind::Shape {
+            path_svg, stroke, ..
+        } if bake => {
+            if let Ok(path) = vector::parse_svg(path_svg) {
+                *path_svg = vector::to_svg(&path.transform(&vector::Affine::new(full.0)));
+                if let Some(s) = stroke {
+                    s.width *= scale as f32;
+                }
+                node.transform = Affine::IDENTITY;
+                node.width *= scale;
+                node.height *= scale;
+                return;
             }
         }
+        DesignKind::Text {
+            size, box_width, ..
+        } if bake => {
+            *size *= scale as f32;
+            if let Some(w) = box_width {
+                *w *= scale as f32;
+            }
+            node.transform = Affine::translate(full.0[4], full.0[5]);
+            node.width *= scale;
+            node.height *= scale;
+            return;
+        }
+        _ => {}
     }
-    imported.document.mark_saved();
-    Ok(imported)
+    node.transform = full;
+    if let DesignKind::Artboard { children, .. } | DesignKind::Group { children } = &mut node.kind {
+        for child in children {
+            place(child, outer, scale, index, keep);
+        }
+    }
 }
 
-/// The document(s) a confirmed import opens, each with the pages it holds.
-fn documents_for(
-    editor: &mut Editor,
+/// W18-H: whether `nodes` hold pixels (which the layer mapping places but
+/// does not resample).
+fn holds_pixels(nodes: &[DesignNode]) -> bool {
+    nodes
+        .iter()
+        .any(|n| matches!(n.kind, DesignKind::Bitmap { .. }) || holds_pixels(n.children()))
+}
+
+/// W18-H: page `page` of `bytes` as layer nodes placed at `origin` and
+/// scaled from points to `dpi`, with their live gradients (keyed in the
+/// page's own walk order) and the reader's notes; or why the page does not
+/// open as layers.
+fn page_as_layers(
+    bytes: &[u8],
+    page: usize,
+    dpi: u32,
+    origin: (u32, u32),
+    limits: ImportLimits,
+) -> Result<VectorLayers, String> {
+    let mut layers = pdf::layers::page_layers(bytes, page, limits).map_err(|e| e.to_string())?;
+    let scale = f64::from(dpi) / 72.0;
+    if (scale - 1.0).abs() > 1e-9 && holds_pixels(&layers.design.nodes) {
+        return Err(format!(
+            "{} of its elements open as pixels, which are not resampled to {dpi} dpi",
+            layers.flattened.max(1)
+        ));
+    }
+    let outer = Affine::translate(f64::from(origin.0), f64::from(origin.1))
+        .then(Affine([scale, 0.0, 0.0, scale, 0.0, 0.0]));
+    let keep: HashSet<usize> = layers.gradients.iter().map(|(i, _)| *i).collect();
+    let mut index = 0;
+    for node in &mut layers.design.nodes {
+        place(node, outer, scale, &mut index, &keep);
+    }
+    Ok(layers)
+}
+
+/// W18-H: the chosen pages (rendered at the chosen resolution, in `pages`
+/// order) as one layer tree: an artboard per page, page 1 on top, holding
+/// the page's layers, or its picture when it does not open as layers.
+fn layered_artboards(
+    bytes: &[u8],
+    rendered: &[DecodedSurface],
+    pages: &[usize],
+    dpi: u32,
+    limits: ImportLimits,
+) -> Result<VectorLayers, String> {
+    if rendered.is_empty() || rendered.len() != pages.len() {
+        return Err("the PDF has no pages".into());
+    }
+    let sizes: Vec<(u32, u32)> = rendered.iter().map(|p| (p.width, p.height)).collect();
+    let (origins, (canvas_w, canvas_h)) = super::open_pages::page_layout(&sizes);
+    let mut nodes = Vec::with_capacity(pages.len());
+    let mut notes = Vec::new();
+    let mut gradients = Vec::new();
+    let mut flattened = 0usize;
+    // The combined walk index of the next artboard.
+    let mut at = 0usize;
+    // Last page first: the first node is the bottom-most, so page 1 ends on
+    // top of the Layers panel.
+    for k in (0..pages.len()).rev() {
+        let (page, surface, origin) = (pages[k], &rendered[k], origins[k]);
+        let name = format!("Page {}", page + 1);
+        let children = match page_as_layers(bytes, page, dpi, origin, limits) {
+            Ok(layers) => {
+                let walked = layers.design.walk().len();
+                gradients.extend(
+                    layers
+                        .gradients
+                        .iter()
+                        .map(|(i, g)| (at + 1 + i, g.clone())),
+                );
+                flattened += layers.flattened;
+                notes.extend(
+                    layers
+                        .design
+                        .notes
+                        .iter()
+                        .map(|n| format!("page {}: {n}", page + 1)),
+                );
+                at += 1 + walked;
+                layers.design.nodes
+            }
+            Err(why) => {
+                notes.push(format!("page {} opened as one picture: {why}", page + 1));
+                at += 2;
+                vec![DesignNode {
+                    name: name.clone(),
+                    visible: true,
+                    opacity: 1.0,
+                    transform: Affine::translate(f64::from(origin.0), f64::from(origin.1)),
+                    width: f64::from(surface.width),
+                    height: f64::from(surface.height),
+                    kind: DesignKind::Bitmap {
+                        width: surface.width,
+                        height: surface.height,
+                        rgba: surface.pixels.clone().into_rgba8(),
+                    },
+                }]
+            }
+        };
+        nodes.push(DesignNode {
+            name,
+            visible: true,
+            opacity: 1.0,
+            transform: Affine::translate(f64::from(origin.0), f64::from(origin.1)),
+            width: f64::from(surface.width),
+            height: f64::from(surface.height),
+            kind: DesignKind::Artboard {
+                background: Some([1.0, 1.0, 1.0, 1.0]),
+                children,
+            },
+        });
+    }
+    let what = if pages.len() == 1 { "page" } else { "pages" };
+    Ok(VectorLayers {
+        design: DesignDocument {
+            format: ImportFormat::Pdf,
+            nodes,
+            notes,
+            opened: format!("{what} {}", page_list(pages)),
+        },
+        width: canvas_w,
+        height: canvas_h,
+        flattened,
+        gradients,
+    })
+}
+
+/// W18-H: one chosen page as a document of its own, as layers (see the
+/// module docs); `Err` with why when it does not open as layers.
+fn separate_layers(
+    bytes: &[u8],
+    surface: &DecodedSurface,
+    page: usize,
+    dpi: u32,
+    limits: ImportLimits,
+) -> Result<VectorLayers, String> {
+    let mut layers = page_as_layers(bytes, page, dpi, (0, 0), limits)?;
+    layers.width = surface.width;
+    layers.height = surface.height;
+    Ok(layers)
+}
+
+/// W18-H: the document(s) an import opens, each with the pages it holds,
+/// and the import report's notes.
+type BuiltDocuments = (Vec<(OpenDocument, Vec<usize>)>, Vec<String>);
+
+/// A confirmed import's document(s) as `id_for` names them, each with the
+/// pages it holds, and the import report's notes (W18-H: see the module
+/// docs).
+fn build_documents(
     path: &Path,
     spec: &PdfImportSpec,
-) -> Result<Vec<(OpenDocument, Vec<usize>)>, String> {
+    depth: usize,
+    mut id_for: impl FnMut() -> DocumentId,
+) -> Result<BuiltDocuments, String> {
     let limits = ImportLimits::default();
     let bytes = read_limited(path, limits)?;
     let rendered =
         pdf::render_selected(&bytes, &spec.pages, spec.dpi, limits).map_err(|e| e.to_string())?;
-    let depth = editor.prefs.history_depth;
     let title = DecodedImage::title_for(path);
+    let as_doc = |id: DocumentId, imported: ImportedDocument| {
+        OpenDocument::open_psd_import(
+            id,
+            path,
+            PsdImport {
+                imported,
+                notes: PsdNotes::default(),
+                merged_preview: None,
+            },
+        )
+    };
     match spec.mode {
         PdfOpenMode::Artboards => {
-            let imported = artboards_of(&rendered, &spec.pages, &title, depth)?;
-            let doc = OpenDocument::open_psd_import(
-                editor.mint_id(),
-                path,
-                PsdImport {
-                    imported,
-                    notes: PsdNotes::default(),
-                    merged_preview: None,
-                },
-            );
-            Ok(vec![(doc, spec.pages.clone())])
+            let layers = layered_artboards(&bytes, &rendered, &spec.pages, spec.dpi, limits)?;
+            let mut import =
+                super::open_pages::vector_w16::document_from_vector(&layers, &title, depth)?;
+            // The layer mapping makes the top-most leaf active; the first
+            // page's artboard is the one a page import selects.
+            if let Some(&board) = import.imported.document.layers.root().first() {
+                let _ = import.imported.document.set_active_layer(Some(board));
+                import.imported.layer = board;
+            }
+            import.imported.document.mark_saved();
+            let doc = as_doc(id_for(), import.imported);
+            Ok((vec![(doc, spec.pages.clone())], import.notes))
         }
         PdfOpenMode::SeparateDocuments => {
             let mut out = Vec::with_capacity(rendered.len());
-            for (surface, &page) in rendered.into_iter().zip(&spec.pages) {
-                let mut doc = OpenDocument::open_image_decoded(
-                    editor.mint_id(),
-                    path,
-                    image_of(surface),
-                    depth,
-                )
-                .map_err(|e| e.to_string())?;
-                doc.document.meta.title = format!("{title} - Page {}", page + 1);
+            let mut notes = Vec::new();
+            for (surface, &page) in rendered.iter().zip(&spec.pages) {
+                let name = format!("{title} - Page {}", page + 1);
+                let layered =
+                    separate_layers(&bytes, surface, page, spec.dpi, limits).and_then(|l| {
+                        super::open_pages::vector_w16::document_from_vector(&l, &name, depth)
+                    });
+                let mut doc = match layered {
+                    Ok(import) => {
+                        notes.extend(
+                            import
+                                .notes
+                                .iter()
+                                .map(|n| format!("page {}: {n}", page + 1)),
+                        );
+                        as_doc(id_for(), import.imported)
+                    }
+                    Err(why) => {
+                        notes.push(format!("page {} opened as one picture: {why}", page + 1));
+                        OpenDocument::open_image_decoded(
+                            id_for(),
+                            path,
+                            image_of(surface.clone()),
+                            depth,
+                        )
+                        .map_err(|e| e.to_string())?
+                    }
+                };
+                doc.document.meta.title = name;
                 doc.document.mark_saved();
                 out.push((doc, vec![page]));
             }
-            Ok(out)
+            Ok((out, notes))
         }
     }
+}
+
+/// The document(s) a confirmed import opens, each with the pages it holds,
+/// and the import report's notes.
+fn documents_for(
+    editor: &mut Editor,
+    path: &Path,
+    spec: &PdfImportSpec,
+) -> Result<BuiltDocuments, String> {
+    let depth = editor.prefs.history_depth;
+    build_documents(path, spec, depth, || editor.mint_id())
 }
 
 /// W13X-7: File > Revert of a document opened through the import dialog
@@ -268,31 +509,20 @@ pub(crate) fn reopen_for_revert(
     if w13d_format(path) == Some(ImportFormat::Pdn) {
         return reopen_pdn_for_revert(id, path, depth);
     }
+    // W18-H: a `.kra` / `.dxf` comes back as its layers.
+    if let Some(result) =
+        crate::editor::resource_import::w16::layered::reopen_layered_for_revert(id, path, depth)
+    {
+        return Some(result);
+    }
     let spec = OPENED_WITH.with(|m| m.borrow().get(&id).cloned())?;
-    let limits = ImportLimits::default();
-    let result = (|| {
-        let bytes = read_limited(path, limits)?;
-        let rendered = pdf::render_selected(&bytes, &spec.pages, spec.dpi, limits)
-            .map_err(|e| e.to_string())?;
-        let title = DecodedImage::title_for(path);
-        if spec.mode == PdfOpenMode::SeparateDocuments {
-            let surface = rendered.into_iter().next().ok_or("no page was rendered")?;
-            let mut doc = OpenDocument::open_image_decoded(id, path, image_of(surface), depth)
-                .map_err(|e| e.to_string())?;
-            doc.document.meta.title = format!("{title} - Page {}", spec.pages[0] + 1);
-            return Ok(doc);
-        }
-        let imported = artboards_of(&rendered, &spec.pages, &title, depth)?;
-        Ok(OpenDocument::open_psd_import(
-            id,
-            path,
-            PsdImport {
-                imported,
-                notes: PsdNotes::default(),
-                merged_preview: None,
-            },
-        ))
-    })();
+    // W18-H: the same layers the open built (see the module docs).
+    let result = build_documents(path, &spec, depth, || id).and_then(|(docs, _)| {
+        docs.into_iter()
+            .next()
+            .map(|(doc, _)| doc)
+            .ok_or_else(|| "no page was rendered".to_string())
+    });
     Some(result)
 }
 
@@ -496,7 +726,7 @@ impl Editor {
 
     /// Open the pages a confirmed import dialog chose.
     fn open_pdf_pages(&mut self, path: &Path, spec: &PdfImportSpec) -> Result<Effect, String> {
-        let docs = documents_for(self, path, spec)?;
+        let (docs, notes) = documents_for(self, path, spec)?;
         let count = docs.len();
         for (doc, pages) in docs {
             let id = doc.id();
@@ -513,12 +743,30 @@ impl Editor {
             PdfOpenMode::Artboards => format!("{n} {what}, one artboard each"),
             PdfOpenMode::SeparateDocuments => format!("{count} documents, one per page"),
         };
-        self.status = Some(format!(
+        let mut status = format!(
             "Opened {}: {how} ({what} {}) at {} dpi",
             path.display(),
             page_list(&spec.pages),
             spec.dpi
-        ));
+        );
+        // W18-H: what did not open as layers, in the import report.
+        if let Some(text) = super::import_design::report(ImportFormat::Pdf, &notes, path) {
+            status.push_str(&format!(
+                ", as layers ({} not mapped exactly; see the import report)",
+                if notes.len() == 1 {
+                    "1 thing".to_string()
+                } else {
+                    format!("{} things", notes.len())
+                }
+            ));
+            self.dialogs.report_notice(
+                &format!("{} import report", ImportFormat::Pdf.name()),
+                &text,
+            );
+        } else {
+            status.push_str(", as layers");
+        }
+        self.status = Some(status);
         self.touch();
         Ok(Effect::DocumentSet)
     }

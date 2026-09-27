@@ -134,8 +134,8 @@ fn the_zoom_bar_is_photopeas_pixel_to_pixel_and_fit_the_area() {
         actions(&bar.click(id(ToolId::Zoom, FIT_KEY))),
         vec![MenuAction::Zoom(ZoomCommand::FitOnScreen)]
     );
-    // Photopea's Hand bar has neither (its one control, All Documents, is
-    // not built), nor has a tool without the row.
+    // Photopea's Hand bar has neither (W18-F: its one control is All
+    // Documents), nor has a tool without the row.
     for tool in [ToolId::Hand, ToolId::Brush] {
         let mut other = Bar::new(tool);
         assert!(other.rect(id(tool, FIT_KEY)).is_none(), "{tool:?}");
@@ -280,7 +280,7 @@ fn the_brush_picker_applies_a_preset_as_the_brushes_panel_does() {
 }
 
 #[test]
-fn crop_by_lists_photopeas_four_rows_and_current_layer_crops_to_it() {
+fn crop_by_lists_photopeas_four_rows_and_current_layer_boxes_it() {
     let mut bar = Bar::new(ToolId::Crop);
     bar.click(id(ToolId::Crop, CROP_BY_KEY));
     for action in CROP_BY {
@@ -291,9 +291,13 @@ fn crop_by_lists_photopeas_four_rows_and_current_layer_crops_to_it() {
     for caption in ["All Layers", "Current Layer", "Trim", "Selection"] {
         assert!(words.iter().any(|w| w == caption), "{caption}: {words:?}");
     }
+    // W18-F: the row sets the crop box (a request the shell performs) and
+    // crops nothing by itself.
+    tools::registry::bar_w18::reset();
+    assert!(actions(&bar.click(crop_by_id(MenuAction::CropToLayer))).is_empty());
     assert_eq!(
-        actions(&bar.click(crop_by_id(MenuAction::CropToLayer))),
-        vec![MenuAction::CropToLayer]
+        tools::registry::bar_w18::take_crop_by(),
+        Some(tools::registry::bar_w18::CropBy::CurrentLayer)
     );
 }
 

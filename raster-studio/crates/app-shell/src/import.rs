@@ -1719,6 +1719,7 @@ pub fn document_from_psd(
                 | r::ID_WORK_PATH
                 | r::ID_ALPHA_NAMES
                 | r::ID_UNICODE_ALPHA_NAMES
+                | psd::layer_comps::ID_LAYER_COMPS
         ) || (r::ID_SAVED_PATH_FIRST..=r::ID_SAVED_PATH_LAST).contains(&id)
     };
     let dropped: Vec<u16> = file
@@ -1759,6 +1760,8 @@ pub fn document_from_psd(
     // W16-B: the file's own colour mode.
     document.meta.color_mode = opened.mode;
     let mut tiles = MemoryTileSource::new();
+    // W18-B: the layers' comp rows, gathered as the tree is built.
+    let mut comps = psd_boards::ImportedComps::default();
 
     let mut stack = vec![Frame {
         parent: None,
@@ -1954,6 +1957,12 @@ pub fn document_from_psd(
         }
 
         let id = document.layers.insert_at(layer, parent, index)?;
+        // W18-B: a Photoshop artboard gets its background plate; every
+        // layer's `cmls` comp rows are gathered.
+        if source.is_group() {
+            psd_boards::import_artboard(source, id, &mut document, &mut tiles, &mut notes)?;
+        }
+        comps.collect(source, id, &document);
         // W13-B: the `lclr` sheet colour becomes the layer's colour label.
         if let Some(index) = source.sheet_color {
             let label = layer_model::ColorLabel::from_psd_index(index);
@@ -1974,6 +1983,12 @@ pub fn document_from_psd(
                 }
                 document.set_asset_origin(p.asset.clone());
                 placed = DocRect::from_psd(source.bounds);
+                // W18-J: its smart-filter mask, from the document's `FEid`.
+                let mask =
+                    psd_live::import_filter_mask(&file.extra, source, id, &mut document, &mut tiles);
+                if let Err(why) = mask {
+                    notes.push(format!("the smart object “{}”: {why}", source.name));
+                }
             }
             psd_live::Live::Shape(_) => placed = DocRect::from_psd(source.bounds),
             _ => {}
@@ -2127,6 +2142,8 @@ pub fn document_from_psd(
     }
     // W11-C: saved and work paths as path layers (the Paths panel's rows).
     psd_resources::push_path_layers(&mut document, saved_paths, &mut notes)?;
+    // W18-B: resource 1065 and the gathered rows become the layer comps.
+    comps.finish(&file, &mut document, &mut notes);
 
     tally.record(&mut notes);
 
@@ -2303,6 +2320,10 @@ mod psd_vector_mask;
 #[path = "psd_resources.rs"]
 mod psd_resources;
 
+// W18-B: artboards (`artb`) and layer comps (1065 + `cmls`) in and out.
+#[path = "psd_boards.rs"]
+mod psd_boards;
+
 // W16-B: every Photoshop colour mode in, CMYK / Lab / Indexed / Grayscale out.
 #[path = "psd_colour_modes.rs"]
 mod psd_colour_modes;
@@ -2358,15 +2379,17 @@ fn psd_layers_for(
         let mut render_fallback = false;
         match &layer.kind {
             LayerKind::Group(group) => {
-                let children = psd_layers_for(
-                    document,
-                    tiles,
-                    &group.children,
-                    canvas,
-                    depth + 1,
-                    tally,
-                    extras,
-                )?;
+                // W18-B: an artboard is its `artb` block; its plate is not a
+                // record (Photoshop draws the background from the block).
+                let plate = psd_boards::export_artboard(document, id, &mut record)?;
+                let kids: Vec<LayerId> = group
+                    .children
+                    .iter()
+                    .copied()
+                    .filter(|c| Some(*c) != plate)
+                    .collect();
+                let children =
+                    psd_layers_for(document, tiles, &kids, canvas, depth + 1, tally, extras)?;
                 let pass_through = group.blending == GroupBlending::PassThrough;
                 if pass_through && layer.blend_mode != BlendMode::Normal {
                     tally.pass_through_blend.push(layer.name.clone());
@@ -2688,6 +2711,8 @@ fn psd_layers_for(
             }
         }
 
+        // W18-B: the layer's row of every layer comp, as `cmls` settings.
+        psd_boards::export_comp_states(document, id, &mut record)?;
         out.push(record);
     }
     Ok(out)
@@ -2753,6 +2778,8 @@ pub fn psd_from_document(
     if extras.deep {
         psd_live::widen_to_sixteen(&mut file.layers);
     }
+    // W18-J: the smart-filter masks' pixels, for the `FEid` block.
+    psd_live::write_filter_masks(document, tiles, &mut extras)?;
     // W9-M: pattern-overlay patterns share the one `Patt` block.
     for pattern in std::mem::take(&mut extras.patterns) {
         if !tally.fill_patterns.iter().any(|p| p.id == pattern.id) {

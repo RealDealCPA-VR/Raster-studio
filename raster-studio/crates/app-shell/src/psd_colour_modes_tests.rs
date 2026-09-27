@@ -231,7 +231,7 @@ fn a_greyscale_psd_opens_in_grayscale_mode_and_saves_as_greyscale() {
 }
 
 #[test]
-fn a_one_bit_bitmap_psd_opens_in_bitmap_mode_and_saves_as_greyscale() {
+fn a_one_bit_bitmap_psd_opens_in_bitmap_mode_and_saves_as_a_bitmap_psd() {
     let (w, h) = (9u32, 1u32);
     let grey = [0u8, 255, 0, 0, 255, 255, 0, 255, 0];
     let mut s = psd::bytes::Sink::new();
@@ -246,8 +246,112 @@ fn a_one_bit_bitmap_psd_opens_in_bitmap_mode_and_saves_as_greyscale() {
     let rgba = flatten(&import);
     let got: Vec<u8> = rgba.chunks(4).map(|p| p[0]).collect();
     assert_eq!(got, grey);
-    assert_eq!(saved.header.color_mode, ColorMode::Grayscale);
-    assert!(notes.iter().any(|n| n.contains("1-bit")), "{notes:?}");
+    // W18-H: written back as a 1-bit Bitmap file, the same black and white.
+    assert_eq!(saved.header.color_mode, ColorMode::Bitmap);
+    assert_eq!(saved.header.channels, 1);
+    assert_eq!(saved.merged.as_ref().unwrap().channels, vec![grey.to_vec()]);
+    assert!(!notes.iter().any(|n| n.contains("Grayscale")), "{notes:?}");
+}
+
+/// W18-H: a Duotone `.psd` saved again is a Duotone `.psd`: the same grey
+/// base under the same ink record.
+#[test]
+fn a_duotone_psd_saves_back_as_duotone_with_its_ink_record() {
+    let record = DuotoneRecord {
+        inks: vec![
+            DuotoneInkRecord {
+                color: InkColor::Rgb([0, 0, 0]),
+                name: "Black".into(),
+                curve: vec![[0.0, 0.0], [1.0, 1.0]],
+            },
+            DuotoneInkRecord {
+                color: InkColor::Rgb([65535, 32896, 0]),
+                name: "Orange".into(),
+                curve: vec![[0.0, 0.0], [0.5, 0.3], [1.0, 0.5]],
+            },
+        ],
+    };
+    let mut file = PsdFile::new(header(ColorMode::Duotone, 1, Depth::Eight, 4, 1));
+    file.color_mode_data = record.encode();
+    file.merged = Some(MergedImage {
+        channels: vec![vec![0, 60, 200, 255]],
+    });
+    let (import, saved, notes) = open_and_save(&psd::write(&file).unwrap());
+    assert_eq!(import.imported.document.meta.color_mode, mode::DUOTONE);
+    assert_eq!(saved.header.color_mode, ColorMode::Duotone, "{notes:?}");
+    assert_eq!(
+        DuotoneRecord::parse(&saved.color_mode_data).unwrap(),
+        record
+    );
+    assert_eq!(
+        saved.merged.as_ref().unwrap().channels[0],
+        vec![0, 60, 200, 255]
+    );
+}
+
+/// W18-H: a Duotone document made with the dialog's default inks saves as
+/// Duotone; one whose colours no known inks print saves as RGB and says so.
+#[test]
+fn a_default_ink_duotone_saves_as_duotone_and_an_unprintable_one_as_rgb() {
+    let spec = color::duotone::DuotoneSpec::default();
+    let greys = [0u8, 64, 128, 250];
+    let mut file = PsdFile::new(header(ColorMode::Rgb, 3, Depth::Eight, 4, 1));
+    let prints: Vec<[u8; 3]> = greys.iter().map(|g| spec.render(*g)).collect();
+    file.merged = Some(MergedImage {
+        channels: (0..3)
+            .map(|c| prints.iter().map(|p| p[c]).collect())
+            .collect(),
+    });
+    let mut import = document_from_psd(&psd::write(&file).unwrap(), "in.psd", 10).unwrap();
+    import.imported.document.meta.color_mode = mode::DUOTONE;
+    let composite = flatten(&import);
+    let (bytes, notes) = psd_from_document(
+        &import.imported.document,
+        &import.imported.tiles,
+        &composite,
+    )
+    .unwrap();
+    let saved = psd::read(&bytes).unwrap();
+    assert_eq!(
+        saved.header.color_mode,
+        ColorMode::Duotone,
+        "{:?}",
+        notes.notes()
+    );
+    assert_eq!(saved.merged.as_ref().unwrap().channels[0], greys.to_vec());
+    let back = document_from_psd(&bytes, "back.psd", 10).unwrap();
+    assert_eq!(back.imported.document.meta.color_mode, mode::DUOTONE);
+    let reopened = flatten(&back);
+    for (i, p) in prints.iter().enumerate() {
+        for c in 0..3 {
+            assert!(
+                reopened[i * 4 + c].abs_diff(p[c]) <= 1,
+                "pixel {i}: {:?} vs {p:?}",
+                &reopened[i * 4..i * 4 + 3]
+            );
+        }
+    }
+
+    // Colours no known inks print: RGB, with the reason.
+    let mut odd = PsdFile::new(header(ColorMode::Rgb, 3, Depth::Eight, 1, 1));
+    odd.merged = Some(MergedImage {
+        channels: vec![vec![10], vec![200], vec![30]],
+    });
+    let mut import = document_from_psd(&psd::write(&odd).unwrap(), "odd.psd", 10).unwrap();
+    import.imported.document.meta.color_mode = mode::DUOTONE;
+    let composite = flatten(&import);
+    let (bytes, notes) = psd_from_document(
+        &import.imported.document,
+        &import.imported.tiles,
+        &composite,
+    )
+    .unwrap();
+    assert_eq!(psd::read(&bytes).unwrap().header.color_mode, ColorMode::Rgb);
+    assert!(
+        notes.notes().iter().any(|n| n.contains("saved as RGB")),
+        "{:?}",
+        notes.notes()
+    );
 }
 
 fn duotone_file(record: Vec<u8>) -> Vec<u8> {

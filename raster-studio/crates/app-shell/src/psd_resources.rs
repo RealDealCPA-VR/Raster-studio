@@ -7,6 +7,7 @@
 //! | 2000–2997 saved paths, 1025 work path | path layers: shape layers with no fill and no stroke, the Paths panel's rows ([`ui::panels::paths::new_path_layer`] makes the same kind) |
 //! | merged-image alpha channels named by 1006 / 1045 | [`editor_core::Document::saved_selections`] (the Channels panel's alpha channels) |
 //! | 1050 slices (user and layer slices) | [`editor_core::Document::slices`], which [`crate::slices_export::restore_saved_slices`] loads into the Slice tool's store |
+//! | 1065 layer comps (with each layer's `cmls` rows) | [`layer_model::DocumentExtras::layer_comps`], mapped in `psd_boards` (W18-B) |
 //!
 //! The parsing and building is the `psd` crate's ([`psd::resource`]), bounded
 //! there; this module only maps. A path layer goes out as a saved-path
@@ -234,6 +235,9 @@ pub(crate) fn export_resources(
     }
     res::set_alpha_channels(file, &channels)?;
     file.resources.extend(spot_info);
+    // W18-B: the layer comps as resource 1065 (their per-layer rows ride on
+    // the records as `cmls`).
+    super::psd_boards::export_document(document, file, notes)?;
     Ok(())
 }
 

@@ -1,0 +1,1677 @@
+# Raster Studio interface strings, et. One row per line: the English source, a TAB,
+# the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
+# Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
+@name	Eesti
+ fps	 kaadrit/s
+ frames	 kaadrit
+ ms	 ms
+ px	 px
+0 bytes	0 baiti
+16 Bits/Channel	16 bitti/kanal
+16 bit	16 bitti
+32 Bits/Channel	32 bitti/kanal
+3D	3D
+50% Grey	50% hall
+50% Threshold	50% lävi
+8 Bits/Channel	8 bitti/kanal
+8 bit	8 bitti
+90° Clockwise	90° päripäeva
+90° Counter Clockwise	90° vastupäeva
+A CSV row has the wrong number of fields, at line	CSV rea väljade arv on vale, real
+A blank canvas at any size	Mis tahes suurusega tühi lõuend
+A colour channel cannot be deleted	Värvikanalit ei saa kustutada
+A layered raster editor	Kihtidega rastergraafika redaktor
+A palette holds 2 to 256 colours	Palett sisaldab 2 kuni 256 värvi
+A saved selection already has that name	Selle nimega salvestatud valik on juba olemas
+A saved selection: click to open Select > Load Selection, then choose it by name there	Salvestatud valik: klõpsa, et avada Vali > Laadi valik, ja vali see seal nime järgi
+A slice needs a name	Lõik vajab nime
+AV1 (smaller, newer players)	AV1 (väiksem, uuemad mängijad)
+About Raster Studio	Teave Raster Studio kohta
+Absolute Colorimetric	Absoluutne kolorimeetriline
+Action sets	Toimingukomplektid
+Actions	Makros
+Adaptive (median cut)	Kohanduv (mediaanlõige)
+Add "copy" to copied layers	Lisa kopeeritud kihtidele „koopia“
+Add Artboard Above	Lisa joonistusala üles
+Add Artboard Below	Lisa joonistusala alla
+Add Artboard Left	Lisa joonistusala vasakule
+Add Artboard Right	Lisa joonistusala paremale
+Add Filter Mask	Lisa Filtri Mask
+Add Media	Lisa meedia
+Add Noise…	Lisa Müra…
+Add a layer mask	Lisa kihimask
+Add a smart filter mask	Lisa nutika filtri mask
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Paiguta pildi- või videofail (Fail > Paiguta manustatuna); video muutub esituspea kohal videokihiks
+Add an adjustment layer	Lisa korrigeerimiskiht
+Add another instance of this effect	Lisa selle efekti veel üks eksemplar
+Add current colour	Lisa praegune värv
+Add export	Lisa eksport
+Add frame	Lisa kaader
+Add or remove room around the image. Pixels are not resampled.	Lisa või eemalda pildi ümber ruumi. Piksleid ei ümberdiskreetita.
+Add shortcut	Lisa kiirklahv
+Add to Selection	Lisa valikule
+Adds one guide at a document coordinate, in pixels.	Lisab dokumendi koordinaadile ühe juhtjoone, pikslites.
+Adjustment	Korrigeerimine
+Adjustments	Kohandused
+Advanced	Täpsem
+Again	Uuesti
+Again with Copy	Uuesti koopiaga
+Aliased (pencil)	Sakiline (pliiats)
+Align	Joonda
+Align the bottom edge to the canvas	Joonda alumine serv lõuendiga
+Align the left edge to the canvas	Joonda vasak serv lõuendiga
+Align the right edge to the canvas	Joonda parem serv lõuendiga
+Align the top edge to the canvas	Joonda ülemine serv lõuendiga
+Align with layer	Joonda Kihiga
+All	Kõik
+All Caps	Kõik suurtähed
+All Caps shapes every lowercase letter as its capital; Small Caps shapes it as a capital at 70 % size. The stored text keeps the case you typed.	Kõik suurtähed kujundab iga väiketähe suurtäheks; Kapiteelkiri kujundab selle suurtäheks 70 % suuruses. Salvestatud tekst säilitab sinu sisestatud tähesuuruse.
+All Layers	Kõik kihid
+Alpha	Alfa
+Already used by	Juba kasutusel:
+Alt Tag	Alt-silt
+Amount	Mõju
+An export needs at least one output	Eksport vajab vähemalt ühte väljundit
+An image or project from this computer	Pilt või projekt sellest arvutist
+Angle	Nurk
+Angle (degrees)	Nurk (kraadid)
+Angle jitter	Nurga kõikumine
+Animation	Animatsioon
+Another slice already has this name	Teisel lõigul on juba see nimi
+Appearance	Välimus
+Applied	Rakendatud
+Apply	Rakenda
+Apply Guides	Rakenda juhtjooned
+Apply Image	Rakenda pilt
+Apply Image…	Rakenda pilt…
+Apply Mask	Rakenda mask
+Apply Style	Rakenda stiil
+Apply Style 1	Rakenda stiil 1
+Apply Style Preset…	Rakenda stiili eelseadistus…
+Apply the next comp	Rakenda järgmine kompositsioon
+Apply the previous comp	Rakenda eelmine kompositsioon
+Apply this mask	Rakenda see mask
+Approximate. The composited result is what the canvas shows.	Ligikaudne. Liittulemus on see, mida lõuend näitab.
+Arbitrary…	Suvaline…
+Arc	Kaar
+Arc Lower	Alumine kaar
+Arc Upper	Ülemine kaar
+Arch	Kaared
+Arrange	Järjesta
+Artboard	Joonistusala
+Artboard from Layers	Joonistusala kihtidest
+Artboards in one document	Joonistusalad ühes dokumendis
+Artboards to Files…	Joonistusalad failideks…
+Assign Profile	Määra profiil
+Assigned {name}: the pixel numbers are unchanged, so the colours look different	Määrati {name}: pikslite väärtused ei muutu, seega värvid näevad teistsugused välja
+Author	Autor
+Auto Color	Auto Värv
+Auto Contrast	Auto Kontrast
+Auto Tone	Auto Toon
+Auto leading	Automaatne reavahe
+Auto-Align Layers…	Joonda kihid automaatselt…
+Auto-Blend Layers…	Sega kihid automaatselt…
+Automate	Automeeri
+Autosaves of never-saved documents go here; empty uses the default	Siia lähevad kunagi salvestamata dokumentide automaatsalvestused; tühi tähendab vaikimisi asukohta
+Average	Keskmine
+BMP…	BMP…
+Back to the colour this opened on	Tagasi värvi juurde, millega see avati
+Background — double-click for the picker	Taust — topeltklõps avab valija
+Based On	Aluseks
+Baseline shift	Baasjoone nihe
+Baseline to baseline. Auto leading follows the type size.	Põhijoonest põhijooneni. Automaatne reavahe järgib kirja suurust.
+Batch	Pakktöötlus
+Batch…	Pakktöötlus…
+Bend	Painuta
+Bevel	Faas
+Bevel & Emboss	Faas ja reljeef
+Bevel & Emboss…	Faas ja reljeef…
+Bind a text replacement variable to a text layer, or a visibility variable to any layer.	Seo teksti asendamise muutuja tekstikihiga või nähtavuse muutuja mis tahes kihiga.
+Bitmap	Bittraster
+Bitmap…	Bittraster…
+Black	Must
+Black & White	Must & Valge
+Black & White…	Must & Valge…
+Black to Transparent	Mustast läbipaistvani
+Black to White	Mustast valgeni
+Black to white through the inks	Mustast valgeni läbi tintide
+Blacks	Mustad
+Blend If	Sega, kui
+Blend Mode: Color	Segamisrežiim: Värv
+Blend Mode: Color Burn	Segamisrežiim: Värvi tumendamine
+Blend Mode: Color Dodge	Segamisrežiim: Värvi heledamaks
+Blend Mode: Darken	Segamisrežiim: Tumedamaks
+Blend Mode: Difference	Segamisrežiim: Erinevus
+Blend Mode: Dissolve	Segamisrežiim: Lahustumine
+Blend Mode: Exclusion	Segamisrežiim: Välistus
+Blend Mode: Hard Light	Segamisrežiim: Kõva valgus
+Blend Mode: Hard Mix	Segamisrežiim: Kõva segu
+Blend Mode: Hue	Segamisrežiim: Värvitoon
+Blend Mode: Lighten	Segamisrežiim: Heledamaks
+Blend Mode: Linear Burn	Segamisrežiim: Lineaarne tumendamine
+Blend Mode: Linear Dodge (Add)	Segamisrežiim: Lineaarne heledamaks (liitmine)
+Blend Mode: Linear Light	Segamisrežiim: Lineaarne valgus
+Blend Mode: Luminosity	Segamisrežiim: Heledus
+Blend Mode: Multiply	Segamisrežiim: Korrutamine
+Blend Mode: Normal	Segamisrežiim: Tavaline
+Blend Mode: Overlay	Segamisrežiim: Ülekate
+Blend Mode: Pin Light	Segamisrežiim: Punktvalgus
+Blend Mode: Saturation	Segamisrežiim: Küllastus
+Blend Mode: Screen	Segamisrežiim: Ekraan
+Blend Mode: Soft Light	Segamisrežiim: Pehme valgus
+Blend Mode: Vivid Light	Segamisrežiim: Ere valgus
+Blending	Segamine
+Blending Options	Segamise seaded
+Blending Options…	Segamise seaded…
+Blending options	Segamissuvandid
+Blends a source document, layer or channel into the active layer as one step.	Segab lähtedokumendi, -kihi või -kanali aktiivsesse kihti ühe sammuga.
+Blends one channel of each of two sources into a new channel, a selection or a new document.	Segab kahest allikast kummastki ühe kanali uueks kanaliks, valikuks või uueks dokumendiks.
+Blue	Sinine
+Blues	Sinised
+Blur	Udu
+Blur Gallery	Hägustamise galerii
+Blur More	Uduta rohkem
+Bold	Paks
+Border Selection	Äärise valik
+Border…	Serv…
+Both axes	Mõlemad teljed
+Bottom	All
+Bottom Edges	Alumised servad
+Bottom Left	All vasakul
+Bottom Right	All paremal
+Bottom Right Pixel Color	Alumise parema piksli värv
+Bottom left	All vasakul
+Bottom right	All paremal
+Box Blur…	Kandiline Udu…
+Box height	Kasti kõrgus
+Brightness	Heledus
+Brightness jitter	Heleduse kõikumine
+Brightness/Contrast	Heledus/Kontrast
+Brightness/Contrast…	Heledus/Kontrast…
+Bring Forward	Too ettepoole
+Bring to Front	Too Esimeseks
+Brush Editor	Pintslite redaktor
+Brush: Background	Pintsel: taust
+Brush: Foreground	Pintsel: esiplaan
+Brushes	Pintslid
+Bulge	Mõhk
+Butt	Nüri
+CMYK Color	CMYK-värv
+Calculations	Arvutused
+Calculations…	Arvutused…
+Camera Raw…	Camera Raw…
+Canvas Size	Lõuendi Suurus
+Canvas Size…	Lõuendi Suurus…
+Canvas extension	Lõuendi laiendus
+Caps	Suurtähed
+Carries the XMP; the source's EXIF goes into JPEG only	Sisaldab XMP-d; allika EXIF läheb ainult JPEG-i
+Cell size (pixels)	Lahtri suurus (pikslid)
+Center	Keskel
+Center horizontally on the canvas	Tsentreeri lõuendil horisontaalselt
+Center vertically on the canvas	Tsentreeri lõuendil vertikaalselt
+Centimeters	Sentimeeter
+Centre	Keskel
+Centre the view on this note	Tsentreeri vaade sellele märkmele
+Change Bit Depth	Muuda bitisügavust
+Change Colour Mode	Muuda värvirežiimi
+Change Layer Properties	Muuda kihi atribuute
+Change how many pixels the document has, or how large it prints.	Muuda, mitu pikslit dokumendil on või kui suurena see prinditakse.
+Channel	Kanal
+Channel Mixer	Kanalite mikser
+Channel Mixer…	Kanalite mikser…
+Channel thumbnail	Kanali pisipilt
+Channels	Kanalid
+Character	Kiri
+Character Style	Märgistiil
+Character Styles	Märgistiilid
+Checkerboard	Malelaud
+Choose 2 to 256 colours	Vali 2 kuni 256 värvi
+Choose a colour profile	Vali värviprofiil
+Choose a destination folder	Vali sihtkaust
+Choose a source folder	Vali lähtekaust
+Choose at least one page to open	Vali avamiseks vähemalt üks lehekülg
+Choose at least one side to trim	Vali kärpimiseks vähemalt üks külg
+Choose the Action to play	Vali esitatav toiming
+Choose the open grayscale document each channel of the new RGB document comes from.	Vali avatud halltoonides dokument, kust tuleb uue RGB-dokumendi iga kanal.
+Choose the pages to open, their resolution and how they open.	Vali avatavad leheküljed, nende eraldusvõime ja avamisviis.
+Choose the source and the destination folders.	Vali lähte- ja sihtkaust.
+Choose…	Vali…
+Clear	Tühjenda
+Clear All	Tühjenda kõik
+Clear Guides	Tühjenda juhtjooned
+Clear History	Tühjenda ajalugu
+Clear Layer Style	Tühjenda kihistiil
+Clear Slices	Tühjenda lõigud
+Clear Strokes	Tühjenda tõmbed
+Clear existing guides	Tühjenda olemasolevad juhtjooned
+Clear the {noun} from the active text layer	Eemalda aktiivselt tekstikihilt {noun}
+Cleared {n} slice(s)	Tühjendatud lõike: {n}
+Click an item in the panel first	Klõpsa esmalt paneelil mõnda üksust
+Click anywhere to sample a colour	Klõpsa kuhu tahes, et võtta värvinäidis
+Click anywhere to sample a colour, or press Escape.	Klõpsa kuhu tahes, et võtta värvinäidis, või vajuta Escape.
+Click the graph to add a point, drag a point to bend the curve, drag it off the graph to remove it	Klõpsa graafikul punkti lisamiseks, lohista punkti kõvera painutamiseks, lohista see graafikult välja selle eemaldamiseks
+Click the preview to sample a colour from it	Klõpsa eelvaadet, et võtta sealt värvinäidis
+Click the preview to sample the colour to replace	Klõpsa eelvaadet, et võtta asendatava värvi näidis
+Click the ramp to edit its stops.	Klõpsa üleminekuribal, et muuta selle peatuspunkte.
+Clip to layer below	Kärbi alumise kihi järgi
+Clipboard	Lõikelaud
+Clipping	Kärpimine
+Close	Sulge
+Close All	Sulge kõik
+Close Alpha Channel	Sulge alfakanal
+Close Others	Sulge teised
+Close panel	Sulge paneel
+Clouds	Pilved
+Codec	Koodek
+Color	Värv
+Color Balance	Värvi tasakaal
+Color Balance…	Värvi tasakaal…
+Color Burn	Värvi tumendamine
+Color Dodge	Värvi heledamaks
+Color Dynamics	Värvi dünaamika
+Color Halftone…	Värvide pooltoonid…
+Color Intensity	Värvi intensiivsus
+Color Label	Värvisilt
+Color Lookup	Värvi leidja
+Color Lookup Tables…	Värviotsingu tabelid…
+Color Lookup…	Värvi leidja…
+Color Overlay	Värvi ülekate
+Color Overlay…	Värvi ülekate…
+Color Picker	Värvi Korjaja
+Color Range	Värvi Piirkond
+Color Range…	Värvi Piirkond…
+Color fringe cleanup: pulls the boundary pixels' color toward the nearby interior ink — a separate edit from mask refinement.	Värviääriste puhastus: tõmbab piiripikslite värvi lähedase sisemise tindi poole — maski täpsustamisest eraldi muudatus.
+Color to Alpha…	Värv alfaks…
+Colors	Värvid
+Colour	Värv
+Colour varies once per stroke.	Värv muutub kord tõmbe kohta.
+Colours	Värvid
+Colours must be 1 to 64, the tolerance above 0 and the corner length at least 1	Värve peab olema 1 kuni 64, tolerants üle 0 ja nurga pikkus vähemalt 1
+Columns	Veerud
+Columns and rows with gutters between them, inside optional margins, in pixels.	Veerud ja read vahedega, valikuliste veeriste sees, pikslites.
+Combine Shapes	Kombineeri kujundid
+Commit (Enter)	Kinnita (Enter)
+Commit Contents	Kinnita sisu
+Composite	Liitpilt
+Condensed	Kitsendatud
+Cone	Koonus
+Constant	Konstantne
+Constrain proportions	Säilita proportsioonid
+Content-Aware	Sisuteadlik
+Content-Aware Scale	Sisuteadlik skaleerimine
+Contour	Kontuur
+Contract Selection	Ahenda valikut
+Contract by	Ahenda
+Contract…	Tõmba koomale…
+Contrast	Kontrast
+Conversion Options	Teisendussuvandid
+Convert Formats	Teisenda vorminguid
+Convert Formats…	Teisenda vorminguid…
+Convert for Smart Filters	Teisenda nutikate filtrite jaoks
+Convert to Layers	Teisenda kihtideks
+Convert to Linked…	Teisenda lingituks…
+Convert to Paragraph Text	Teisenda lõigutekstiks
+Convert to Point Text	Teisenda punkttekstiks
+Convert to Profile	Teisenda profiiliks
+Convert to Profile works on 8- and 16-bit documents	Teisenda profiiliks töötab 8- ja 16-bitiste dokumentidega
+Convert to Profile…	Teisenda profiiliks…
+Convert to Shape	Teisenda Kujuks
+Convert to Smart Object	Teisenda Targaks Objektiks
+Converted to {name} ({intent}): the numbers changed so the colours look the same	Teisendati {name} ({intent}): väärtused muutusid, et värvid näeksid välja samad
+Cool	Jahe
+Copper	Vask
+Copy	Kopeeri
+Copy Layer Style	Kopeeri kihistiil
+Copy Merged	Kopeeri Kõik
+Copyright Notice	Autoriõiguse teade
+Corner length	Nurga pikkus
+Corner radius	Nurga raadius
+Corner radius applies to rectangles; this path has no corners to round	Nurga raadius kehtib ristkülikutele; sellel teel pole ümardatavaid nurki
+Corners	Nurgad
+Count jitter	Arvu kõikumine
+Create Clipping Mask	Loo lõikemask
+Create Layer	Loo kiht
+Create Layers	Loo kihid
+Crop	Kärbi
+Crop and Straighten Photos	Kärbi ja sirgenda fotod
+Crops the canvas to the content, judged by the basis below.	Kärbib lõuendi sisuni, alloleva aluse järgi.
+Crystallize…	Kristalliseeri…
+Current Layer	Praegune kiht
+Current Path	Praegune tee
+Curve tolerance	Kõvera tolerants
+Curves	Kurvid
+Curves…	Kurvid…
+Custom	Juhuslik
+Custom Brush	Kohandatud pintsel
+Custom: with the Move tool, drag the 16 mesh handles on the canvas	Kohandatud: lohista teisaldustööriistaga lõuendil 16 võrgusilma pidet
+Custom…	Juhuslik…
+Cut	Lõika
+Cyan	Tsüaan
+Cyan / Red	Tsüaan / punane
+Cyans	Tsüaanid
+DDS…	DDS…
+DXF…	DXF…
+Dark	Tume
+Dark Blue	Tumesinine
+Dark Grey	Tumehall
+Darken	Tumedamaks
+Darker Color	Tumedam värv
+Dash	Kriipsjoon
+Data Set	Andmekogum
+Data Sets	Andmekogumid
+Data Sets…	Andmekogumid…
+Default	Vaikimisi
+Default colours  (D)	Vaikevärvid  (D)
+Default colours (D)	Vaikevärvid (D)
+Define	Määratle
+Define Brush Preset…	Määratle pintsli eelseadistus…
+Define Custom Shape…	Määratle kohandatud kujund…
+Define New	Defineeri uus
+Define Pattern…	Määratle muster…
+Define…	Määratle…
+Delete	Kustuta
+Delete Filter Mask	Kustuta Filtri Mask
+Delete Layer	Kustuta Kiht
+Delete Mask	Kustuta mask
+Delete Vector Mask	Kustuta Vektormask
+Delete action	Kustuta toiming
+Delete channel	Kustuta kanal
+Delete frame	Kustuta kaader
+Delete path	Kustuta tee
+Delete selected layers	Kustuta valitud kihid
+Delete set and its actions	Kustuta komplekt ja selle toimingud
+Delete stop	Kustuta peatuspunkt
+Delete the applied comp	Kustuta rakendatud kompositsioon
+Delete the selected keyframe	Kustuta valitud võtmekaader
+Delete the selected tool preset	Kustuta valitud tööriista eelseadistus
+Delete the selected {noun}	Kustuta valitud {noun}
+Delete the smart filter mask	Kustuta nutika filtri mask
+Delete this note	Kustuta see märge
+Delete this smart filter	Kustuta see nutikas filter
+Delete this spot channel	Kustuta see spotvärvi kanal
+Density	Tugevus
+Dents…	Mõlgid…
+Desaturate	Desatureeri
+Description	Kirjeldus
+Deselect	Eemalda Märgistus
+Deselect Layers	Tühista kihtide valik
+Despeckle	Despeckle
+Destination	Sihtpunkt
+Destination Space	Sihtruum
+Detail	Detail
+Detail scales	Detailiastmed
+Diamond	Teemant
+Difference	Erinevus
+Difference Clouds	Eriilmelised pilved
+Diffuse…	Hajutus…
+Diffusion	Hajutus
+Diffusion Dither	Hajutusdithering
+Disable / Enable Filter Mask	Keela / luba filtri mask
+Disable / Enable Mask	Keela / luba mask
+Disable / Enable Vector Mask	Keela / luba vektormask
+Disable Mask	Keela mask
+Disable Vector Mask	Keela Vektormask
+Displace…	Paiguta ümber…
+Dissolve	Lahustumine
+Distance	Vahemaa
+Distort	Vääna
+Distribute	Jaota
+Dither	Dithering
+Dither…	Dithering…
+Divide	Jaga
+Dock this panel here	Dokki see paneel siia
+Document	Dokument
+Document Bounds	Dokumendi Piirid
+Document Info	Dokumendi teave
+Document Title	Dokumendi pealkiri
+Document size	Dokumendi suurus
+Double-click to edit in Layer Style; drag to the trash to delete	Topeltklõps muudab kihistiilis; lohista prügikasti kustutamiseks
+Double-click to edit this filter's settings	Topeltklõps muudab selle filtri sätteid
+Double-click to rename	Topeltklõps nimetab ümber
+Drag a line with the Ruler first	Tõmba esmalt joonlauaga joon
+Drag to zoom the view	Lohista vaate suumimiseks
+Drop Shadow	Vari
+Drop Shadow…	Vari…
+Duotone	Duotoon
+Duotone Options	Duotooni suvandid
+Duotone…	Duotoon…
+Duplicate	Tee koopia
+Duplicate Layer	Koopia Kihist
+Duplicate Layer…	Koopia Kihist…
+Duplicate frame	Dubleeri kaader
+Dust & Scratches…	Mustus & Kriimud…
+EMF…	EMF…
+EXIF and XMP writing is not implemented — only ICC is embedded	EXIF-i ja XMP kirjutamine pole teostatud — manustatakse ainult ICC
+EXR…	EXR…
+Ease In	Sujuv algus
+Ease Out	Sujuv lõpp
+Edge Glow	Servade kuma
+Edge refinement: feather, shift, smooth, and contrast over the mask's existing coverage — not subject recognition.	Servade täpsustamine: sulestamine, nihe, silumine ja kontrast maski olemasoleva katvuse peal — mitte objektituvastus.
+Edges	Servad
+Edit	Muuda
+Edit Adjustment	Muuda korrigeerimist
+Edit Adjustment…	Muuda korrigeerimist…
+Edit Alpha Channel	Muuda alfakanalit
+Edit Contents…	Muuda sisu…
+Edit Document Records	Muuda dokumendi kirjeid
+Edit Fill	Muuda täidet
+Edit Filter Mask	Muuda filtri maski
+Edit Generator	Muuda generaatorit
+Edit Group	Muuda rühma
+Edit Guides	Muuda juhtjooni
+Edit Raster	Muuda rastrit
+Edit Saved Selection	Muuda salvestatud valikut
+Edit Shape	Muuda kujundit
+Edit Slices	Muuda lõike
+Edit Smart object	Muuda nutikat objekti
+Edit Text	Muuda teksti
+Edit Timeline	Muuda ajaskaalat
+Edit brush…	Muuda pintslit…
+Edit fill	Muuda täidet
+Edit gradient stops — click to open the editor	Muuda ülemineku peatuspunkte — klõpsa redaktori avamiseks
+Edit in Quick Mask Mode	Muuda kiirmaski režiimis
+Edit this ramp	Muuda seda üleminekuriba
+Effects	Efektid
+Effects apply to the whole layer and undo as one step.	Efektid rakenduvad kogu kihile ja võetakse tagasi ühe sammuga.
+Embed EXIF and XMP	Manusta EXIF ja XMP
+Embed Linked	Manusta lingitu
+Embed colour profile	Manusta värviprofiil
+Embedded source	Manustatud allikas
+Emboss…	Emboss…
+Enable / disable the smart filter mask	Luba / keela nutika filtri mask
+Enable Mask	Luba mask
+Enable Vector Mask	Võimalda Vektormask
+Enable at least one export	Luba vähemalt üks eksport
+Enabled	Lubatud
+Enlarge smaller images	Suurenda väiksemaid pilte
+Enter a colour like #3366CC	Sisesta värv, näiteks #3366CC
+Entropy	Entroopia
+Equalize	Ühtlusta
+Essentials	Põhiline
+Every enabled row is written when you export.	Iga lubatud rida kirjutatakse eksportimisel.
+Every image in the source folder is fitted into the box and written to the destination folder in its own format.	Iga lähtekausta pilt sobitatakse kasti ja kirjutatakse sihtkausta oma vormingus.
+Every parameter is at its neutral value — there is nothing to clean	Kõik parameetrid on neutraalväärtusel — pole midagi puhastada
+Every parameter is at its neutral value — there is nothing to refine	Kõik parameetrid on neutraalväärtusel — pole midagi täpsustada
+Every variable needs a name	Iga muutuja vajab nime
+Exact	Täpne
+Exclude Overlapping Shapes	Välista kattuvad kujundid
+Exclusion	Välistus
+Expand Selection	Laienda valikut
+Expand by	Laienda
+Expand the dock	Laienda dokki
+Expanded	Laiendatud
+Expand…	Laienda…
+Export	Ekspordi
+Export As	Ekspordi kui
+Export Color Lookup	Ekspordi värviotsing
+Export Contents…	Ekspordi sisu…
+Export Diagnostics…	Ekspordi diagnostika…
+Export Layers…	Ekspordi kihid…
+Export PDF	Ekspordi PDF
+Export as .ABR…	Ekspordi kui .ABR…
+Export as .ACO…	Ekspordi kui .ACO…
+Export as .ASL…	Ekspordi kui .ASL…
+Export set as .atn	Ekspordi komplekt kui .atn
+Export…	Ekspordi…
+Exposure	Säri
+Exposure…	Säri…
+Extra Bold	Eriti paks
+Extra Condensed	Eriti kitsendatud
+Extra Expanded	Eriti laiendatud
+Extra Light	Eriti peen
+Extras	Lisad
+Extrude…	Välja kasvatama…
+Eyedropper	Pipett
+Face	Kirjalõige
+Facet	Facet
+Fade	Tuhmuma
+Fade…	Tuhmuma…
+Family	Perekond
+Feather	Pehme Serv
+Feather Selection	Sulesta valik
+Feather radius	Sulestuse raadius
+Feather…	Pehme Serv…
+Fibers…	Kiud…
+Field Blur…	Välja hägu…
+File	Fail
+File Info	Faili Info
+File Info…	Faili Info…
+File name	Faili nimi
+Files that fail are listed in batch-errors.txt in the destination.	Ebaõnnestunud failid on loetletud sihtkoha failis batch-errors.txt.
+Fill	Täida
+Fill Filter Mask	Täida filtri mask
+Fill Layer	Täitekiht
+Fill Mask	Täida mask
+Fill Screen	Täida ekraan
+Fill in File Info, or open a file that has EXIF, to embed metadata	Täida faili teave või ava EXIF-iga fail, et manustada metaandmed
+Fill path with the foreground colour, on a new shape layer	Täida tee esiplaani värviga uuel kujundikihil
+Fill type	Täite tüüp
+Fills the active selection with the chosen contents.	Täidab aktiivse valiku valitud sisuga.
+Fill…	Täida…
+Filter	Filter
+Filter Gallery	Filtrite galerii
+Filter Gallery…	Filtrite galerii…
+Find Edges	Leia servad
+First line	Esimene rida
+Fish	Kala
+Fisheye	Kalasilm
+Fit The Area	Mahuta piirkonda
+Fit on Screen	Sobita ekraanile
+Fit the whole image in the window	Sobita kogu pilt aknasse
+Fixed height	Fikseeritud kõrgus
+Flag	Lipp
+Flame…	Leek…
+Flat Angled 40	Lame kaldus 40
+Flatten Image	Lamenda pilt
+Flip Canvas Horizontal	Pööra lõuend horisontaalselt ümber
+Flip Canvas Vertical	Pööra lõuend vertikaalselt ümber
+Flip Horizontal	Pööra horisontaalselt ümber
+Flip Vertical	Pööra vertikaalselt ümber
+Flip View Horizontal	Pööra vaade horisontaalselt ümber
+Flip View Vertical	Pööra vaade vertikaalselt ümber
+Flow jitter	Voolu kõikumine
+Folders	Kaustad
+Font: 	Font: 
+Foreground strokes mark what to keep, background strokes what to drop; Preview shows the cut.	Esiplaani tõmbed märgivad, mida hoida, tausta tõmbed, mida visata; eelvaade näitab lõiget.
+Foreground — double-click for the picker	Esiplaan — topeltklõps avab valija
+Foreground/background jitter	Esiplaani/tausta kõikumine
+Format	Formaat
+Fourier	Fourier
+Fourier Transform	Fourier' teisendus
+Fragment	Fragment
+Frame	Kaader
+Frames	Kaadrid
+Free Transform	Vaba Transformatsioon
+Free Transform a Copy	Koopia vaba teisendus
+From Transparency	Läbipaistvusest
+Fullscreen	Täisekraan
+Fuzziness	Lubatud kõrvalekalle
+GIF…	GIF…
+Gamma	Gamma
+Gamut Warning	Värviruumi hoiatus
+Gaussian	Gaussi
+Gaussian Blur…	Gaussiani Udu…
+Generate Mockups	Loo maketid
+Generate Mockups…	Loo maketid…
+Give the brush a name	Anna pintslile nimi
+Give the export a file name	Anna ekspordile failinimi
+Glass Menus	Klaasmenüüd
+Global light	Globaalne valgus
+Glyphs	Glüüfid
+Gradient	Gradient
+Gradient Editor	Gradiendi muutja
+Gradient Map	Gradiendi kaart
+Gradient Map…	Gradiendi kaart…
+Gradient Overlay	Gradiendiga ülekate
+Gradient Overlay…	Gradiendiga ülekate…
+Gradient…	Gradient…
+Gray	Hall
+Grayscale	Halltoonid
+Green	Roheline
+Greens	Rohelised
+Grid	Võrk
+Grid points	Ruudustiku punktid
+Group	Rühm
+Group Layers	Grupeeri Kihid
+Grow	Kasvata
+Guide Guy	Guide Guy
+Guides	Abijooned
+Gutter	Vahe
+H	K
+H.264 (plays everywhere)	H.264 (mängib kõikjal)
+HDR Toning	HDR-toonimine
+HDR Toning…	HDR-toonimine…
+HSB/HSL…	HSB/HSL…
+Halftone Screen	Pooltoonraster
+Hard Light	Kõva valgus
+Hard Mix	Kõva segu
+Hard Round 24	Kõva ümar 24
+Hard Round 4	Kõva ümar 4
+Hard edges, no blending. Pixel art only — it aliases on downscale.	Kõvad servad, ilma segamiseta. Ainult pikslikunstile — vähendamisel tekib sakilisus.
+Harder Brush	Kõvem pintsel
+Height	Kõrgus
+Height to 110%	Kõrgus 110%
+Height to 125%	Kõrgus 125%
+Height to 80%	Kõrgus 80%
+Height to 90%	Kõrgus 90%
+Help	Abi
+Hide All	Peida kõik
+Hide Layers	Peida kihid
+Hide Selection	Peida Märgistust
+Hide the source layer	Peida lähtekiht
+High Contrast	Kõrge kontrast
+High Pass…	Kõrge läbilase…
+Highlights	Heledad
+Histogram	Histogramm
+Histories	Ajalood
+History	Kulgemine
+Hold	Hoia
+Horizontal Centers	Horisontaalsed keskpunktid
+Horizontal Distortion	Horisontaalne painutus
+Horizontal center guide	Horisontaalne keskjuhtjoon
+Horizontal scale, in percent: widens or narrows the glyphs and their spacing	Horisontaalne skaala protsentides: laiendab või kitsendab glüüfe ja nende vahesid
+Horizontally	Horisontaalne
+Hue	Toon
+Hue jitter	Värvitooni kõikumine
+Hue/Saturation	Toon/Küllastus
+Hue/Saturation…	Toon/Küllastus…
+ICC profile	ICC-profiil
+ICO…	ICO…
+Image	Pilt
+Image Options	Pildi suvandid
+Image Rotation	Pildi pööramine
+Image Size	Pildi Suurus
+Image Size…	Pildi Suurus…
+Image size	Pildi suurus
+Import CSV…	Impordi CSV…
+Import PDF	Impordi PDF
+Import a CSV of data sets first	Impordi esmalt andmekogumite CSV
+Import a CSV: the first row names the variables, every further row is one data set.	Impordi CSV: esimene rida nimetab muutujad, iga järgmine rida on üks andmekogum.
+In use	Kasutusel
+Inches	Toll
+Indexed Color	Indekseeritud värv
+Indexed Color…	Indekseeritud värv…
+Inflate	Täidetud
+Info	Info
+Ink	Tint
+Ink Color	Tindi värv
+Ink printed at 0, 25, 50, 75 and 100% tint	Tint trükituna 0, 25, 50, 75 ja 100% toonis
+Inner Glow	Sisemine helendus
+Inner Glow…	Sisemine helendus…
+Inner Radius	Sisemine raadius
+Inner Shadow	Sisemine vari
+Inner Shadow…	Sisemine vari…
+Inside	Seespool
+Intent	Eesmärk
+Intersect Shape Areas	Lõika kujundialad
+Intersect with Selection	Lõika valikuga
+Inverse	Pööra Ringi
+Inverse Fourier Transform	Fourier' pöördteisendus
+Invert	Pööra ringi
+Invert coverage	Pööra katvus
+Invert has no parameters	Värvide pööramisel pole parameetreid
+Iris Blur…	Iirishägu…
+Italic	Kaldkiri
+JPEG carries the XMP and the source's EXIF	JPEG sisaldab XMP-d ja allika EXIF-i
+JPG…	JPG…
+Justify	Rööpjoonda
+Kaleidoscope…	Kaleidoskoop…
+Keep as it was	Hoia nagu oli
+Kept when a comp is first applied	Säilitatakse, kui kompositsioon esimest korda rakendatakse
+Kerning	Märgipaaride vahe
+Keyboard Shortcut Sheet…	Kiirklahvide leht…
+Keyboard Shortcuts…	Klaviatuuri kiirkäsud…
+Keywords	Märksõnad
+Kind	Liik
+Kurtosis	Järsakus
+Lab Color	Lab-värv
+Landscape	Rõhtpaigutus
+Language	Keel
+Large	Suur
+Last Document State	Dokumendi viimane olek
+Last Filter	Viimati kasutatud filter
+Last line	Viimane rida
+Layer	Kiht
+Layer Comps	Kihikomplektid
+Layer Edges	Kihi servad
+Layer Mask	Kihimask
+Layer Properties	Kihi atribuudid
+Layer Style	Kihi Stiil
+Layer knocks out drop shadow	Kiht lõikab langeva varju välja
+Layer via Copy	Kiht kopeerimise teel
+Layer via Cut	Kiht lõikamise teel
+Layers	Kihid
+Layers panel options	Kihtide paneeli suvandid
+Left	Vasak
+Left Edges	Vasakud servad
+Left indent	Vasak taane
+Length	Pikkus
+Lens Blur…	Läätse udu…
+Lens Correction…	Läätsekorrektsioon…
+Lens Flare…	Objektiivi helk…
+Level	Tase
+Levels	Heledustasemed
+Levels…	Heledustasemed…
+Light	Hele
+Light Grey	Helehall
+Lighten	Heledamaks
+Lighter Color	Heledam värv
+Lighting Effects…	Valgusefektid…
+Lightness	Heledus
+Line	Joon
+Linear	Lineaarne
+Linear Burn	Lineaarne tumendamine
+Linear Dodge (Add)	Lineaarne heledamaks (liitmine)
+Linear Light	Lineaarne valgus
+Link / Unlink Mask	Lingi / eemalda maski link
+Link Layers	Ühenda Kihid
+Link selected layers	Lingi valitud kihid
+Link with layer	Lingi kihiga
+Linked	Lingitud
+Linked file	Lingitud fail
+Liquify…	Vedelda…
+Live Shape	Muudetavad Kujundid
+Live preview	Otseeelvaade
+Live preview is off.	Otseeelvaade on väljas.
+Load	Laadi
+Load .atn	Laadi .atn
+Load .cube file…	Laadi .cube-fail…
+Load Selection	Laadi valik
+Load Selection…	Laadi valik…
+Load actions	Laadi toimingud
+Load channel as selection	Laadi kanal valikuna
+Load path as a selection	Laadi tee valikuna
+Loaded file	Laaditud fail
+Lock	Lukk
+Lock All	Lukusta kõik
+Lock Guides	Lukusta juhtjooned
+Lock Image Pixels	Lukusta pildi pikslid
+Lock Position	Lukusta asukoht
+Lock Transparent Pixels	Lukusta läbipaistvad pikslid
+Lock all	Lukusta kõik
+Lock pixels	Lukusta pikslid
+Lock position	Lukusta asukoht
+Lock transparent pixels	Lukusta läbipaistvad pikslid
+Long-tap as a right click	Pikk puudutus paremklõpsuna
+Lookup table	Otsingutabel
+Luminance	Luminants
+Luminance of the preview source; the markers are the black and white points.	Eelvaate allika luminants; märgised on must ja valge punkt.
+Luminosity	Värvi heledus
+MP4…	MP4…
+Magenta	Magenta
+Magenta / Green	Magenta / roheline
+Magentas	Magentad
+Magic Cut	Võlulõige
+Magic Cut…	Võlulõige…
+Make Frames	Loo kaadrid
+Make a selection first	Tee esmalt valik
+Make work path from selection	Loo valikust töötee
+Manual	Käsitsi
+Maps every colour onto one palette. The document keeps RGBA pixels; GIF and PNG export write this palette.	Kaardistab iga värvi ühele paletile. Dokument säilitab RGBA-pikslid; GIF- ja PNG-eksport kirjutab selle paleti.
+Maps the active layer onto a palette as one undo step; the document stays RGB.	Kaardistab aktiivse kihi paletile ühe tagasivõetava sammuga; dokument jääb RGB-ks.
+Margins	Veerised
+Mark this state so you can come back to it	Märgi see olek, et saaksid selle juurde tagasi tulla
+Mask	Mask
+Mask Properties	Maski atribuudid
+Mask source	Maski allikas
+Match Color	Sobita värv
+Match Color…	Sobita värv…
+Matting	Halo eemaldamine
+Maximum	Maksimum
+Maximum…	Maksimum…
+Mean	Keskväärtus
+Median	Mediaan
+Median…	Mediaan…
+Medium	Keskmine
+Memory	Mälu
+Menu Bar and Canvas	Menüüriba ja lõuend
+Merge	Liida
+Merge Channels	Ühenda kanalid
+Merge Channels…	Ühenda kanalid…
+Merge Down	Liida alumisega
+Merge Layers	Liida Kihid
+Merge Visible	Ühenda nähtavad
+Merged	Ühendatud
+Method	Meetod
+Metrics	Meetriline
+Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.	Meetriline kasutab fondi enda märgipaaride vahesid; 0 lülitab märgipaaride vahe välja; Käsitsi paneb ühe väärtuse (1/1000 em) teksti iga paari vahele nii, nagu tekst praegu on, ja hiljem sisestatud märgid algavad ilma vaheta; see vajab vähemalt kahte märki, seega lühem tekst ja tekstitööriista vaikesätted seda ei paku. Kujundajal pole optilist märgipaaride vahet, seega seda režiimi ei pakuta.
+Mezzotint…	Mezzotint…
+Midtones	Kesktoonid
+Millimeters	Millimeeter
+Min diameter	Min läbimõõt
+Min roundness	Min ümarus
+Min size	Min suurus
+Minimal	Minimaalne
+Minimum	Miinimum
+Minimum size only applies when pressure controls size.	Minimaalne suurus kehtib ainult siis, kui surve juhib suurust.
+Minimum…	Miinimum…
+Miter	Terav nurk
+Mode	Reziim
+Modify	Muuda
+Monochrome	Monokroomne
+Monotone	Monotoon
+More readouts	Veel näite
+More tabs	Veel sakke
+Mosaic…	Mosaiik…
+Motion Blur…	Liikuv udu…
+Move Layer	Teisalda kiht
+Move a control first: these settings would change nothing	Liiguta esmalt mõnda juhtelementi: need sätted ei muudaks midagi
+Move this panel	Teisalda see paneel
+Move this panel within its dock	Teisalda see paneel oma dokis
+Move to	Teisalda asukohta
+Move with the layer	Liigu koos kihiga
+Multiply	Korrutamine
+Name	Nimi
+Name Change	Nime Muutus
+Name the channel first.	Anna esmalt kanalile nimi.
+Navigator	Navigaator
+Nearest Neighbour	Lähim naaber
+Neutralize	Neutraliseeri
+Neutrals	Neutraalsed
+New	Uus
+New Adjustment Layer	Uus Kohanduskiht
+New Channel	Uus kanal
+New Document	Uus dokument
+New Fill Layer	Uus Täitekiht
+New Folder	Uus Kaust
+New Guide	Uus juhtjoon
+New Guide Layout	Uus juhtjoonte paigutus
+New Guide Layout…	Uus juhtjoonte paigutus…
+New Guide…	Uus juhtjoon…
+New Layer	Uus Kiht
+New Layer Based Slice	Uus kihipõhine lõik
+New Selection	Uus valik
+New Smart Object via Copy	Uus nutikas objekt kopeerimise teel
+New Snapshot	Uus hetktõmmis
+New Spot Channel	Uus spotvärvi kanal
+New Spot Channel…	Uus spotvärvi kanal…
+New Style Preset	Uus stiili eelseadistus
+New Video Group	Uus videorühm
+New channel	Uus kanal
+New folder	Uus kaust
+New group	Uus rühm
+New layer	Uus kiht
+New layer comp	Uus kihikompositsioon
+New note at the centre of the view	Uus märge vaate keskel
+New path (saves the Work Path when it is selected)	Uus tee (salvestab töötee, kui see on valitud)
+New set	Uus komplekt
+New size	Uus suurus
+New style from the active layer	Uus stiil aktiivsest kihist
+New tool preset from the active tool	Uus tööriista eelseadistus aktiivsest tööriistast
+New {noun} from the active text layer	Uus {noun} aktiivsest tekstikihist
+New…	Uus…
+Next Blend Mode	Järgmine segamisrežiim
+No Color	Värvita
+No character styles yet. New records the active text layer's font, size and look.	Märgistiile veel pole. Uus salvestab aktiivse tekstikihi fondi, suuruse ja välimuse.
+No command loads a channel as the selection in this build; the Select menu's Load Selection restores a saved selection instead	Selles versioonis ükski käsk ei laadi kanalit valikuna; Vali-menüü Laadi valik taastab selle asemel salvestatud valiku
+No commands to bind	Pole käske, mida siduda
+No document	Dokument puudub
+No document is open	Ühtegi dokumenti pole avatud
+No export selected	Eksporti pole valitud
+No faces listed for this family name	Selle perekonnanime jaoks pole kirjalõikeid
+No frames yet. Add frame makes an _a_ layer: each one is a frame, bottom first.	Kaadreid veel pole. Lisa kaader loob _a_-kihi: igaüks on üks kaader, alustades alt.
+No guide crosses the canvas	Ükski juhtjoon ei ristu lõuendiga
+No installed family matches	Ükski paigaldatud perekond ei sobi
+No layer comps yet. New Layer Comp records every layer's visibility, position and appearance.	Kihikompositsioone veel pole. Uus kihikompositsioon salvestab iga kihi nähtavuse, asukoha ja välimuse.
+No layers yet. Add one with the + button below.	Kihte veel pole. Lisa üks alloleva nupuga +.
+No layers yet: each top-level layer gets a bar on the timeline.	Kihte veel pole: iga ülemise taseme kiht saab ajaskaalal riba.
+No notes yet. Click the canvas with the Note tool (I), or New Note pins one at the centre of the view; notes are saved with the document and never exported.	Märkmeid veel pole. Klõpsa lõuendit märkmetööriistaga (I) või Uus märge kinnitab ühe vaate keskele; märkmed salvestatakse koos dokumendiga ja neid ei ekspordita kunagi.
+No open document is the same size as this one	Ükski avatud dokument pole selle dokumendiga sama suur
+No paragraph styles yet. New records the active text layer's alignment, indents and spacing.	Lõigustiile veel pole. Uus salvestab aktiivse tekstikihi joonduse, taanded ja vahed.
+No pattern chosen — the overlay paints nothing.	Mustrit pole valitud — ülekate ei maali midagi.
+No patterns are defined yet	Mustreid pole veel määratletud
+No profile file was chosen	Profiilifaili ei valitud
+No recent files yet	Hiljutisi faile veel pole
+No selection has been saved	Ühtegi valikut pole salvestatud
+No source recorded for this object	Selle objekti jaoks pole allikat salvestatud
+No stop selected	Peatuspunkti pole valitud
+No style presets yet. Define one with Layer > Layer Style > Define Style Preset, or add a Photoshop library with File > Open (.asl).	Stiili eelseadistusi veel pole. Määratle üks menüüst Kiht > Kihistiil > Määratle stiili eelseadistus või lisa Photoshopi teek menüüst Fail > Ava (.asl).
+No styles yet. The + button saves the active layer's style; File > Open loads an .asl style library.	Stiile veel pole. Nupp + salvestab aktiivse kihi stiili; Fail > Ava laadib .asl-stiiliteegi.
+No such command	Sellist käsku pole
+No tool presets yet. New Tool Preset saves the active tool with its current options.	Tööriista eelseadistusi veel pole. Uus tööriista eelseadistus salvestab aktiivse tööriista koos praeguste suvanditega.
+Noise	Müra
+None	Ei ole
+Normal	Tavaline
+Normal Map…	Normaalkaart…
+Not a hex colour	See pole kuueteistkümnendvärv
+Not installed — shaping with	Pole paigaldatud — kujundatakse fondiga
+Not saved yet	Pole veel salvestatud
+Notes	Märkmed
+Nothing has changed	Midagi ei muutunud
+Nothing in this submenu is available right now	Selles alammenüüs pole praegu midagi saadaval
+Nothing is left to learn the background from: paint over it with the background brush.	Pole jäänud midagi, millest tausta õppida: maali see taustapintsliga üle.
+Nothing to measure yet — paint or place something on this layer first	Veel pole midagi mõõta — maali või paiguta sellele kihile esmalt midagi
+Nothing to preview.	Pole midagi eelvaadata.
+OK	Okei
+Oblique	Kaldu
+Off: the wheel pans the view and Ctrl+wheel zooms	Väljas: ratas nihutab vaadet ja Ctrl+ratas suumib
+Offset…	Nihe…
+Oil Paint…	Õlimaal…
+One page holding the flattened image; no vector content.	Üks lehekülg lamendatud pildiga; vektorsisuta.
+Onion skin	Sibulakoor
+Only English is available in this build	Selles versioonis on saadaval ainult inglise keel
+Only a mask channel can be loaded as a selection here	Siin saab valikuna laadida ainult maskikanali
+Only web-safe colours	Ainult veebiturvalised värvid
+Opacity	Nähtavus
+Opacity 10%	Läbipaistmatus 10%
+Opacity 100%	Läbipaistmatus 100%
+Opacity 20%	Läbipaistmatus 20%
+Opacity 30%	Läbipaistmatus 30%
+Opacity 40%	Läbipaistmatus 40%
+Opacity 50%	Läbipaistmatus 50%
+Opacity 60%	Läbipaistmatus 60%
+Opacity 70%	Läbipaistmatus 70%
+Opacity 80%	Läbipaistmatus 80%
+Opacity 90%	Läbipaistmatus 90%
+Opacity jitter	Läbipaistmatuse kõikumine
+Opacity key	Läbipaistmatuse võti
+Opacity must be between 0% and 100%	Läbipaistmatus peab olema vahemikus 0% kuni 100%
+Opacity scales the layer and its effects; Fill scales the layer's own pixels only.	Läbipaistmatus skaleerib kihti ja selle efekte; täide skaleerib ainult kihi enda piksleid.
+Opacity stops sit above the bar, colour stops below it.	Läbipaistmatuse peatuspunktid on riba kohal, värvi peatuspunktid selle all.
+Open	Ava
+Open .ABR…	Ava .ABR…
+Open .ACO…	Ava .ACO…
+Open .ASL…	Ava .ASL…
+Open Recent	Ava hiljutine
+Open a document first	Ava esmalt dokument
+Open a document to animate it.	Ava dokument, et seda animeerida.
+Open a document to apply styles to its layers.	Ava dokument, et rakendada selle kihtidele stiile.
+Open a document to insert glyphs into its text.	Ava dokument, et lisada selle teksti glüüfe.
+Open a document to keep text styles in it.	Ava dokument, et hoida selles tekstistiile.
+Open a document to lay guides out on it.	Ava dokument, et paigutada sellele juhtjooni.
+Open a document to pin notes on it.	Ava dokument, et kinnitada sellele märkmeid.
+Open a document to record layer comps.	Ava dokument, et salvestada kihikompositsioone.
+Open a document to see its CSS	Ava dokument, et näha selle CSS-i
+Open a document to see its facts.	Ava dokument, et näha selle andmeid.
+Open a document to see its histogram	Ava dokument, et näha selle histogrammi
+Open a document to see its history	Ava dokument, et näha selle ajalugu
+Open a document to see its properties	Ava dokument, et näha selle atribuute
+Open another document, or add another pixel layer, to match its colours.	Ava teine dokument või lisa teine pikslikiht, et sobitada selle värve.
+Open as	Ava kui
+Open editor…	Ava redaktor…
+Open or close the folder	Ava või sulge kaust
+Open the Adjustments panel	Ava korrigeerimiste paneel
+Open…	Ava…
+Operation	Tehe
+Orange	Oranz
+Other	Teine
+Out of gamut	Värviruumist väljas
+Outer Glow	Helendav serv
+Outer Glow…	Helendav serv…
+Outline the path	Joonista tee kontuur
+Output	Väljund
+Output channel	Väljundkanal
+Outside	Väljaspool
+Overlay	Ülekate
+PBM…	PBM…
+PDF Presentation…	PDF-esitlus…
+PDF…	PDF…
+PGM…	PGM…
+PNG…	PNG…
+PPM…	PPM…
+Page	Lehekülg
+Page {n}	Lehekülg {n}
+Page {page} opens at {w} x {h} px	Lehekülg {page} avaneb suuruses {w} x {h} px
+Pages	Leheküljed
+Paint	Maali
+Paint Filter Mask	Maali filtri maski
+Paint Mask	Maali maski
+Paint over the part to keep with the foreground brush first.	Maali esmalt esiplaani pintsliga üle osa, mida hoida.
+Paint over what to keep and over what to drop	Maali üle see, mida hoida, ja see, mida visata
+Paint the inside of the path	Värvi tee sisemus
+Painting	Maalimine
+Paints a band along the active selection's border.	Maalib riba piki aktiivse valiku äärist.
+Pair kerning	Märgipaaride vahe
+Palette	Palett
+Paragraph	Lõik
+Paragraph Style	Lõigustiil
+Paragraph Styles	Lõigustiilid
+Particles…	Osakesed…
+Paste	Kleebi
+Paste Into	Kleebi sisse
+Paste Layer Style	Kleebi kihistiil
+Paste Outside	Kleebi välja
+Paste Special	Erikleebe
+Paste in Place	Kleebi kohale
+Path	Joon
+Path Blur…	Tee hägu…
+Path editing lives in the Paths panel	Teede muutmine käib teede paneelil
+Paths	Vektorjooned
+Pattern	Muster
+Pattern Dither	Mustriga dithering
+Pattern Overlay	Mustriga ülekate
+Pattern Overlay…	Mustriga ülekate…
+Pattern Preview	Mustri eelvaade
+Pattern…	Muster…
+Pencil 1px	Pliiats 1px
+Percent	Protsent
+Perceptual	Pertseptuaalne
+Perspective	Perspektiiv
+Perspective Warp	Perspektiivi kõverdus
+Photo Filter	Foto filter
+Photo Filter…	Foto filter…
+Photography	Fotograafia
+Picas	Piikad
+Pick a filter; it applies at its default settings.	Vali filter; see rakendub vaikesätetega.
+Pin Light	Punktvalgus
+Pinch…	Venita kokku…
+Pixel Grid	Pikslite Võrk
+Pixel dimensions	Pikslimõõtmed
+Pixel mask	Pikslimask
+Pixel to Pixel	Piksel pikslile
+Pixelate	Pikseliseeri
+Pixels	Pikslid
+Place Embedded…	Paiguta manustatuna…
+Place Linked…	Paiguta lingituna…
+Play	Esita
+Play from step	Esita sammust
+Play selection	Esita valik
+Play this step (unchecked steps are passed over)	Esita see samm (märkimata sammud jäetakse vahele)
+Plays a recorded Action on every image in the source folder and saves each result to the destination.	Esitab salvestatud toimingu lähtekausta igal pildil ja salvestab iga tulemuse sihtkohta.
+Pointer	Kursor
+Pointillize…	Punktita…
+Points	Punktid
+Polar Coordinates…	Polaarkordinaadid…
+Position	Positsioon
+Position is locked — unlock it in the Layers panel to move or resize	Asukoht on lukus — ava see kihtide paneelil, et teisaldada või suurust muuta
+Position key	Asukoha võti
+Posterize	Posteriseeri
+Posterize…	Posteriseeri…
+Precise Cursor	Täpne kursor
+Preferences…	Seaded…
+Preserve Transparency	Säilita läbipaistvus
+Preserve luminosity	Säilita heledus
+Preset Manager…	Eelseadistuste haldur…
+Press a key…	Vajuta klahvi…
+Pressure controls flow	Surve juhib voolu
+Pressure controls size	Surve juhib suurust
+Preview	Eelvaade
+Preview against	Eelvaade taustal
+Preview is off.	Eelvaade on väljas.
+Previewed on the active layer; applied to its pixels as one undoable step.	Eelvaade aktiivsel kihil; rakendatakse selle pikslitele ühe tagasivõetava sammuga.
+Previous Blend Mode	Eelmine segamisrežiim
+Print Size	Trükisuurus
+Print as PDF…	Prindi PDF-iks…
+Print size	Trükisuurus
+Prints the grayscale image through one to four inks, each through its own curve. The inks are applied to the pixels when the mode changes.	Prindib halltoonides pildi ühe kuni nelja tindiga, igaüks oma kõvera kaudu. Tindid rakendatakse pikslitele režiimi muutmisel.
+Print…	Prindi…
+Profile	Profiil
+Profile from File…	Profiil failist…
+Profiles are assigned to RGB documents	Profiile määratakse RGB-dokumentidele
+Profiles are converted between in RGB documents	Profiile teisendatakse omavahel RGB-dokumentides
+Profiles belong to RGB documents; convert to RGB first	Profiilid kuuluvad RGB-dokumentidele; teisenda esmalt RGB-ks
+Proof Colors	Tõmmisevärvid
+Properties	Seaded
+Puppet Warp	Nukukõverdus
+Purge	Vabasta mälu
+Purple	Lilla
+Quadtone	Kvadrotoon
+Quality	Kvaliteet
+Quick Export Layer as PNG…	Kiht kiireksportimisega PNG-na…
+Quit	Välju
+RGB Color	RGB-värv
+Radial Blur…	Radiaalne udu…
+Radius	Raadius
+Radius (px)	Raadius (px)
+Range	Piirkond
+Raster Studio Help	Raster Studio abi
+Rasterize	Rasteriseeri
+Reassign anyway	Määra ikkagi uuesti
+Recent	Hiljutised
+Record	Salvesta
+Record Source Size	Salvesta allika suurus
+Record an Action in the Actions panel first	Salvesta esmalt toiming toimingute paneelil
+Record an edit, then replay the whole sequence on any document with at least as many layers.	Salvesta muudatus ja esita seejärel kogu jada mis tahes dokumendil, millel on vähemalt sama palju kihte.
+Record into set	Salvesta komplekti
+Recording: every edit is captured until Stop	Salvestamine: iga muudatus salvestatakse kuni Peata
+Red	Punane
+Redefine the selected {noun} from the active text layer, restyling every layer that uses it	Määratle valitud {noun} aktiivsest tekstikihist uuesti, muutes iga seda kasutava kihi stiili
+Redo	Tee uuesti
+Reds	Punased
+Reduce Colors	Vähenda värve
+Reduce Colors changed nothing: the layer already uses only colours of that palette	Vähenda värve ei muutnud midagi: kiht kasutab juba ainult selle paleti värve
+Reduce Colors: the layer now uses at most {n} colours	Vähenda värve: kiht kasutab nüüd kuni {n} värvi
+Reduce Colors…	Vähenda värve…
+Reduce Noise…	Vähenda müra…
+Reduces the grayscale image to pure black and white. The layers are flattened into one, over white.	Taandab halltoonides pildi puhtaks mustaks ja valgeks. Kihid lamendatakse üheks valgel taustal.
+Reference point: Bottom	Lähtepunkt: all
+Reference point: Bottom Left	Lähtepunkt: all vasakul
+Reference point: Bottom Right	Lähtepunkt: all paremal
+Reference point: Centre	Lähtepunkt: keskel
+Reference point: Left	Lähtepunkt: vasakul
+Reference point: Right	Lähtepunkt: paremal
+Reference point: Top	Lähtepunkt: üleval
+Reference point: Top Left	Lähtepunkt: üleval vasakul
+Reference point: Top Right	Lähtepunkt: üleval paremal
+Refine	Täpsusta
+Refine Edge…	Täpsusta Serva…
+Refine Mask	Täpsusta maski
+Refine Mask…	Täpsusta maski…
+Regular	Tavaline
+Relative	Relatiivne
+Relative Colorimetric	Suhteline kolorimeetriline
+Release Clipping Mask	Vabasta lõikemask
+Release Notes	Väljalaskemärkmed
+Relink to File…	Lingi uuesti failiga…
+Remove Black Matte	Eemalda must taust
+Remove Color Fringe	Eemalda värviääris
+Remove Color Fringe…	Eemalda värviääris…
+Remove Fringe	Eemalda ääris
+Remove White Matte	Eemalda valge taust
+Remove export	Eemalda eksport
+Remove this instance of the effect	Eemalda see efekti eksemplar
+Remove this shortcut	Eemalda see kiirklahv
+Rename Layer	Nimeta kiht ümber
+Rename Layer…	Nimeta kiht ümber…
+Rename set	Nimeta komplekt ümber
+Render	Renderda
+Rendering the preview…	Eelvaate renderdamine…
+Repeat…	Korda…
+Replace Color	Asenda Värv
+Replace Color…	Asenda Värv…
+Replace Contents	Asenda sisu
+Replace Contents…	Asenda sisu…
+Replace existing guides	Asenda olemasolevad juhtjooned
+Replay	Esita uuesti
+Report an Issue	Teata probleemist
+Reselect	Vali uuesti
+Reset	Lähtesta
+Reset Transform	Lähtesta teisendus
+Reset View Rotation	Lähtesta vaate pööre
+Reset all shortcuts	Lähtesta kõik kiirklahvid
+Resize Canvas	Muuda lõuendi suurust
+Resize Images	Muuda piltide suurust
+Resize Images…	Muuda piltide suurust…
+Resolution	Resolutsioon
+Resolution must be greater than zero	Eraldusvõime peab olema suurem kui null
+Restore Layer	Taasta kiht
+Result	Tulemus
+Return this tool to its defaults	Taasta selle tööriista vaikesätted
+Reveal All	Näita kõike
+Reveal Selection	Näita Märgistust
+Reverse	Pööra Ümber
+Revert	Taasta salvestatu
+Rewrites every pixel layer's numbers so the picture looks the same under the destination profile, as one undo step.	Kirjutab iga pikslikihi väärtused ümber nii, et pilt näeks sihtprofiilis välja sama, ühe tagasivõetava sammuga.
+Right	Parem
+Right (narrow)	Parem (kitsas)
+Right (wide)	Parem (lai)
+Right Edges	Paremad servad
+Right indent	Parem taane
+Right-click a swatch to remove it	Paremklõpsa värvinäidist, et see eemaldada
+Ring	Rõngas
+Ripple…	Lainetus…
+Rise	Tõus
+Rotate	Pööra
+Rotate 180°	Pööra 180°
+Rotate 90° Clockwise	Pööra 90° päripäeva
+Rotate 90° Counter Clockwise	Pööra 90° vastupäeva
+Rotate Canvas	Pööra lõuendit
+Rotate the active layer so the measured line is level (Enter)	Pööra aktiivset kihti nii, et mõõdetud joon oleks rõhtne (Enter)
+Rotates the canvas and every layer. Right angles are pixel-exact; other angles resample.	Pöörab lõuendit ja iga kihti. Täisnurgad on piksli täpsusega; muud nurgad ümberdiskreeditakse.
+Rotation key	Pöörde võti
+Round	Ümar
+Round (computed)	Ümar (arvutatud)
+Rounded Steps	Ümardatud astmed
+Roundness jitter	Ümaruse kõikumine
+Rows	Read
+Rulers	Joonlauad
+Run	Käivita
+SVG…	SVG…
+Same Radii	Sama raadius
+Sample a colour from the canvas	Võta lõuendilt värvinäidis
+Sample radius	Näidise raadius
+Sampled	Näidistatud
+Sampled colour	Näidistatud värv
+Sampled tip not loaded; painting round	Näidistatud otsa pole laaditud; maalitakse ümarana
+Satin…	Satiin…
+Saturation	Küllastus
+Saturation jitter	Küllastuse kõikumine
+Save	Salvesta
+Save As	Salvesta kui
+Save As…	Salvesta kui…
+Save Brush	Salvesta pintsel
+Save Selection	Salvesta valik
+Save Selection…	Salvesta valik…
+Save actions	Salvesta toimingud
+Save as PSD…	Salvesta nagu PSD…
+Save current brush	Salvesta praegune pintsel
+Save selection as channel	Salvesta valik kanalina
+Saves every image in the source folder to the destination in another format, quality or size.	Salvestab lähtekausta iga pildi sihtkohta teises vormingus, kvaliteedis või suuruses.
+Scale	Skaala
+Scale %	Skaala %
+Scale Effects	Skaleeri efekte
+Scale Effects…	Skaleeri efekte…
+Scale H	Skaala H
+Scale V	Skaala V
+Scale key	Skaala võti
+Scale:	Skaala:
+Scales every size and distance of the active layer's style as one undo step.	Skaleerib aktiivse kihi stiili iga suuruse ja kauguse ühe tagasivõetava sammuga.
+Scaling by 100% changes nothing	100% skaleerimine ei muuda midagi
+Scratch directory	Ajutine kataloog
+Screen	Ekraan
+Screen, print and social presets	Ekraani, trüki ja sotsiaalmeedia eelseadistused
+Script…	Skript…
+Scroll wheel zooms instead of scrolling	Kerimisratas suumib kerimise asemel
+Search Commands…	Otsi käske…
+Search layers	Otsi kihte
+Search layers by name	Otsi kihte nime järgi
+Select	Märgista
+Select All	Vali kõik
+Select Bottom Layer	Vali alumine kiht
+Select Layer Above	Vali ülemine naaberkiht
+Select Layer Below	Vali alumine naaberkiht
+Select Linked Layers	Vali lingitud kihid
+Select None	Tühista valik
+Select Top Layer	Vali ülemine kiht
+Select a layer first	Vali esmalt kiht
+Select a layer to see its CSS	Vali kiht, et näha selle CSS-i
+Select a layer to see its properties	Vali kiht, et näha selle atribuute
+Select a layer: a click on a style applies it to the active layer.	Vali kiht: klõps stiilil rakendab selle aktiivsele kihile.
+Select a path first	Vali esmalt tee
+Select a text layer, or type into one: a click inserts the glyph at the caret.	Vali tekstikiht või kirjuta sellesse: klõps lisab glüüfi kursori kohale.
+Select a text layer to edit its type	Vali tekstikiht, et muuta selle kirja
+Select every pixel near one colour	Vali iga ühe värvi lähedane piksel
+Selection	Märgistus
+Selection Edges	Valiku servad
+Selection: white is replaced, black is kept.	Valik: valge asendatakse, must säilitatakse.
+Selective Color	Valikuline Värv
+Selective Color…	Valikuline Värv…
+Selects a band of this width along the selection's edge	Valib selle laiusega riba piki valiku serva
+Semi Condensed	Poolkitsendatud
+Semi Expanded	Poollaiendatud
+Semibold	Poolpaks
+Send Backward	Saada Tahapoole
+Send to Back	Saada Tagumiseks
+Separate documents	Eraldi dokumendid
+Separate keywords with commas or semicolons.	Eralda märksõnad komade või semikoolonitega.
+Sepia	Seepia
+Set	Komplekt
+Set the History Brush to paint from this state (the marked row)	Määra ajaloopintsel maalima sellest olekust (märgitud rida)
+Shadows	Varjud
+Shadows/Highlights	Varjud/heledad toonid
+Shadows/Highlights…	Varjud/heledad toonid…
+Shape	Kujund
+Shape Dynamics	Kujundi dünaamika
+Shape Mosaic…	Kujundimosaiik…
+Shape Properties	Kujundi atribuudid
+Sharpen	Teravusta
+Sharpen Edges	Teravusta servi
+Sharpen More	Teravusta rohkem
+Sharpest, with a little ringing on hard edges.	Teravaim, kõvadel servadel veidi halo.
+Shear…	Rebi…
+Shift Edge	Nihuta serva
+Show	Näita
+Show / Hide Layer	Näita / peida kiht
+Show / hide layer	Näita / peida kiht
+Show / hide the effects list	Näita / peida efektide loend
+Show / hide the layer style	Näita / peida kihistiil
+Show / hide this channel	Näita / peida see kanal
+Show / hide this effect	Näita / peida see efekt
+Show / hide this path	Näita / peida see tee
+Show / hide this smart filter	Näita / peida see nutikas filter
+Show Layers	Näita kihte
+Show every layer	Näita kõiki kihte
+Show or hide the position, size and alignment fields	Näita või peida asukoha, suuruse ja joonduse väljad
+Show or hide the recorded steps	Näita või peida salvestatud sammud
+Show or hide the set's actions	Näita või peida komplekti toimingud
+Show this alpha channel alone in grayscale and paint into it; click again to store it	Näita ainult seda alfakanalit halltoonides ja maali sellesse; klõpsa uuesti, et see salvestada
+Sides	Küljed
+Similar	Sarnane
+Size	Suurus
+Size jitter	Suuruse kõikumine
+Skew	Kalle
+Skewness	Asümmeetria
+Slice Options	Lõigu suvandid
+Slice Options…	Lõigu suvandid…
+Slices	Lõigud
+Slices from Guides	Lõigud juhtjoontest
+Slices…	Lõigud…
+Small	Väike
+Small Caps	Kapiteelkiri
+Smart Blur…	Tark Udu…
+Smart Filter	Nutikas filter
+Smart Filters	Targad Filtrid
+Smart Guides	Nutikad juhtjooned
+Smart Object	Nutikas objekt
+Smart Sharpen…	Tark teravustamine…
+Smart filter mask: click to paint on it	Nutika filtri mask: klõpsa, et sellele maalida
+Smooth	Pehme
+Smooth Selection	Silu valikut
+Smooth draws grey-scale edges; None draws hard, aliased edges. The glyph scaler has one smooth mode, so Sharp, Crisp and Strong are not offered.	Sile joonistab halltoonides servad; Puudub joonistab kõvad sakilised servad. Glüüfiskaleerijal on ainult üks sile režiim, seega Terav, Selge ja Tugev ei ole saadaval.
+Smooth…	Pehme…
+Snap	Napsa
+Snap To	Tõmme
+Soft Light	Pehme valgus
+Soft Round 100	Pehme ümar 100
+Soft Round 24	Pehme ümar 24
+Soft and cheap. Good for a small enlargement.	Pehme ja kiire. Sobib väikeseks suurendamiseks.
+Softer Brush	Pehmem pintsel
+Solarize	Solariseeri
+Solid Color…	Ühtlane värv…
+Solidity	Tihkus
+Source	Allikas
+Source 1	Allikas 1
+Source 2	Allikas 2
+Source Space	Lähteruum
+Spectrum	Spekter
+Spherize…	Sfääri…
+Spin Blur…	Pöörlemishägu…
+Splits the active layer into Linear Light detail layers over a residual, finest on top; together they recomposite to the layer.	Jagab aktiivse kihi lineaarse valguse detailikihtideks jäägi kohal, peenim üleval; koos moodustavad nad kihi uuesti.
+Spot Channel	Spotvärvi kanal
+Spot Channel Options…	Spotvärvi kanali suvandid…
+Spot channel: composited over the image as its ink	Spotvärvi kanal: liidetakse pildi peale selle tindina
+Square	Ruut
+Squeeze	Kokku pressitud
+Stack Mode	Virnarežiim
+Stamp Visible	Tembelda nähtavad
+Standard	Standardne
+Standard Deviation	Standardhälve
+Standard ligatures	Standardligatuurid
+Step Backward	Samm tagasi
+Step Forward	Samm edasi
+Stop	Peata
+Straighten Layer	Sirgenda kiht
+Strength	Tugevus
+Stroke	Servajoon
+Stroke path with the foreground colour at the brush size, on a new shape layer	Tõmba tee esiplaani värviga pintsli suuruses uuel kujundikihil
+Stroke…	Servajoon…
+Style	Stiil
+Styles	Stiilid
+Styles enabled	Stiilid lubatud
+Stylize	Stiliseeri
+Sub	Ala
+Subject	Objekt
+Subtract	Lahuta
+Subtract Front Shape	Lahuta eesmine kujund
+Subtract from Selection	Lahuta valikust
+Summation	Summa
+Sunset	Päikeseloojang
+Super	Üla
+Superscript raises and shrinks the text; subscript lowers and shrinks it.	Ülaindeks tõstab ja vähendab teksti; alaindeks langetab ja vähendab seda.
+Surface Blur…	Pinna udu…
+Swap colours  (X)	Vaheta värvid  (X)
+Swap foreground and background (X)	Vaheta esiplaan ja taust (X)
+Swatches	Värvikaardid
+TGA…	TGA…
+TIF…	TIF…
+Templates	Mallid
+Text	Tekst
+Text Properties	Teksti atribuudid
+Text overflows the box	Tekst ei mahu kasti
+Text replacement	Teksti asendamine
+Texture Dilation…	Tekstuuri laiendamine…
+That channel is no longer in the document	Seda kanalit pole enam dokumendis
+That file could not be used:	Seda faili ei saanud kasutada:
+The CSV ends inside a quoted field	CSV lõpeb jutumärkides välja sees
+The CSV has a header but no data sets	CSV-l on päis, kuid andmekogumeid pole
+The CSV is empty	CSV on tühi
+The CSV names a variable that is not defined:	CSV nimetab muutujat, mida pole määratletud:
+The active layer is not in the document	Aktiivset kihti pole dokumendis
+The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	Aktiivne nutikas objekt näitab kordamööda lähtekausta iga pilti; iga tulemus eksporditakse PNG-na sihtkausta.
+The amount must be within	Kogus peab olema vahemikus
+The angle must be a finite number of degrees	Nurk peab olema lõplik arv kraade
+The balanced default for photographs.	Tasakaalus vaikesäte fotode jaoks.
+The canvas grows to fit the rotated image.	Lõuend kasvab, et pööratud pilt ära mahuks.
+The canvas must be at least 1 x 1 pixel	Lõuend peab olema vähemalt 1 x 1 piksel
+The cell size must be 2 to 200 pixels	Lahtri suurus peab olema 2 kuni 200 pikslit
+The cut is empty: paint more of the part to keep.	Lõige on tühi: maali rohkem osa üle, mida hoida.
+The destination is the profile the document already has	Sihtkoht on profiil, mis dokumendil juba on
+The destination must be another folder than the source.	Sihtkoht peab olema lähtekaustast erinev kaust.
+The document has no layers	Dokumendil pole kihte
+The document is already in {name}	Dokument on juba {name}
+The document is already tagged with this profile	Dokument on juba selle profiiliga sildistatud
+The document is already tagged {name}	Dokument on juba sildistatud: {name}
+The document's own profile: {error}	Dokumendi enda profiil: {error}
+The first {shown} of {n} pages are listed; a longer file opens only those.	Loetletud on esimesed {shown} lehekülge {n}-st; pikem fail avab ainult need.
+The image has no opaque pixels to count	Pildil pole loendamiseks läbipaistmatuid piksleid
+The ink is laid over the image; the selection, if there is one, is where it prints.	Tint kantakse pildi peale; valik, kui see on olemas, määrab, kuhu see trükitakse.
+The last stop has no segment after it.	Viimasele peatuspunktile ei järgne lõiku.
+The layer has no pixels to cut.	Kihil pole lõigatavaid piksleid.
+The layer's pixels are locked	Kihi pikslid on lukus
+The list is empty	Loend on tühi
+The margins and gutters leave no room for a column or a row	Veerised ja vahed ei jäta ruumi veerule ega reale
+The margins and gutters leave no room for a column or a row.	Veerised ja vahed ei jäta ruumi veerule ega reale.
+The name cannot be empty	Nimi ei tohi olla tühi
+The name has not changed	Nimi pole muutunud
+The name is the file File > Export > Slices writes this slice as. The URL and Alt Tag go into the HTML page it writes beside the images.	Nimi on fail, millena Fail > Ekspordi > Lõigud selle lõigu kirjutab. URL ja Alt-silt lähevad HTML-lehele, mis kirjutatakse piltide kõrvale.
+The new canvas is smaller — content outside it will be clipped.	Uus lõuend on väiksem — sellest väljapoole jääv sisu kärbitakse.
+The next text layer the Type tool creates starts with this style.	Järgmine tekstikiht, mille tekstitööriist loob, algab selle stiiliga.
+The panel is already on this side	Paneel on juba sellel küljel
+The path encloses no pixel of the canvas	Tee ei ümbritse ühtegi lõuendi pikslit
+The position must be a finite number	Asukoht peab olema lõplik arv
+The preview runs the real brush engine.	Eelvaade kasutab päris pintslimootorit.
+The resolution must be 1 to 2400 ppi	Eraldusvõime peab olema 1 kuni 2400 ppi
+The resolution must be {min} to {max} dpi	Eraldusvõime peab olema {min} kuni {max} dpi
+The rulers and the size readouts use this unit	Joonlauad ja suuruse näidud kasutavad seda ühikut
+The scale must be between 1% and 1000%	Skaala peab olema vahemikus 1% kuni 1000%
+The selection is kept with the document under this name	Valik hoitakse dokumendiga selle nime all
+The source and destination must be different folders	Lähte- ja sihtkoht peavad olema erinevad kaustad
+The steps this snapshot named have been discarded	Sammud, mida see hetktõmmis nimetas, on ära visatud
+The table needs a name	Tabel vajab nime
+The warp has not changed	Kõverdus pole muutunud
+There are no guides to slice along	Pole juhtjooni, mida mööda lõigata
+There are no slices to clear	Pole lõike, mida tühjendada
+There is no history to clear	Pole ajalugu, mida tühjendada
+There is no live selection to combine with	Pole aktiivset valikut, millega kombineerida
+These are matrix-shaper profiles, which carry no perceptual or saturation tables: those two intents convert as Relative Colorimetric.	Need on maatriksprofiilid, millel pole pertseptuaalseid ega küllastuse tabeleid: need kaks eesmärki teisendatakse suhtelise kolorimeetrilisena.
+Thin	Peen
+Third-party notices	Kolmandate osapoolte teatised
+This Layer	See kiht
+This adjustment has no panel controls	Sellel korrigeerimisel pole paneelil juhtelemente
+This adjustment has no settings.	Sellel korrigeerimisel pole sätteid.
+This build keeps channels on layers; it has no free-standing alpha channels yet	See versioon hoiab kanaleid kihtidel; eraldiseisvaid alfakanaleid veel pole
+This effect is off. Tick it in the list to edit it.	See efekt on väljas. Märgi see loendis, et seda muuta.
+This format cannot store CMYK, so the document is written as RGB. Choose JPEG or TIFF for CMYK.	See vorming ei saa CMYK-d salvestada, seega kirjutatakse dokument RGB-na. CMYK jaoks vali JPEG või TIFF.
+This format could not be previewed.	Seda vormingut ei saanud eelvaadata.
+This format has no metadata slot: nothing is embedded	Sellel vormingul pole metaandmete kohta: midagi ei manustata
+This format has no palette, so the indexed colours are written as RGB. Choose PNG or GIF for the palette.	Sellel vormingul pole paletti, seega kirjutatakse indekseeritud värvid RGB-na. Paleti jaoks vali PNG või GIF.
+This format stores 8 bits per channel	See vorming salvestab 8 bitti kanali kohta
+This is a Lab document. No format here stores Lab, so it is converted to RGB on export.	See on Lab-dokument. Ükski siinne vorming ei salvesta Lab-i, seega teisendatakse see eksportimisel RGB-ks.
+This layer has no mask	Sellel kihil pole maski
+This panel is already at the bottom of its dock	See paneel on juba oma doki allosas
+This panel is already at the top of its dock	See paneel on juba oma doki ülaosas
+This tool has no options	Sellel tööriistal pole suvandeid
+This tool is already at its defaults	See tööriist on juba vaikesätetega
+This window cannot read screen pixels, so the eyedropper is unavailable	See aken ei saa ekraani piksleid lugeda, seega pole pipett saadaval
+This works on a pixel layer; the active layer is a {kind}	See töötab pikslikihil; aktiivne kiht on {kind}
+This works on an 8-bit document	See töötab 8-bitisel dokumendil
+This works on an RGB document	See töötab RGB-dokumendil
+Threshold	Barjäär
+Threshold…	Barjäär…
+Thumbnail Size	Pisipiltide suurus
+Thumbnail size	Pisipiltide suurus
+Thumbnails by Document	Pisipildid dokumendi järgi
+Thumbnails by Layer	Pisipildid kihi järgi
+Tiles/List	Paanid/loend
+Tiles…	Paanid…
+Tilt-Shift…	Kalde-nihke hägu…
+Timeline	Ajaskaala
+Tint	Toonimine
+Tint hue	Tooni värvitoon
+Tint saturation	Tooni küllastus
+To canvas	Lõuendile
+Toggle Link	Lülita link
+Tonal width	Tonaalne laius
+Tone	Toon
+Tone and Detail	Toon ja detail
+Tool Presets	Tööriista eelseadistused
+Top	Üleval
+Top Edges	Ülemised servad
+Top Left	Üleval vasakul
+Top Left Pixel Color	Ülemise vasaku piksli värv
+Top Right	Üleval paremal
+Top left	Üleval vasakul
+Top right	Üleval paremal
+Trace Contour…	Jälgi kontuuri…
+Traces the active layer's colours into shape layers, one per colour.	Jälgib aktiivse kihi värvid kujundikihtideks, üks värvi kohta.
+Transform	Transformeeri
+Transform Layer	Teisenda kiht
+Transform Selection	Transformeeri Märgistust
+Transparency	Läbipaistvus
+Transparent Pixels	Läbipaistvad pikslid
+Trim	Trimmi
+Trim Away	Kärbi ära
+Trim…	Trimmi…
+Tritone	Tritoon
+Turn on Resample to change the pixel count.	Lülita sisse Ümberdiskreetimine, et muuta pikslite arvu.
+Twirl…	Keeruta…
+Twist	Väänatud
+Two variables share a name	Kahel muutujal on sama nimi
+Type	Tüüp
+Type a zoom level	Sisesta suumitase
+Type is edited in Character and Paragraph	Kirja muudetakse paneelidel Märk ja Lõik
+Type tool defaults	Tekstitööriista vaikesätted
+UI scale	Kasutajaliidese skaala
+URL	URL
+US Letter	US Letter
+Ultra Condensed	Ülikitsendatud
+Ultra Expanded	Ülilaiendatud
+Underlying Layer	Allolev kiht
+Undo	Võta tagasi
+Ungroup Layers	Tühista kihtide rühmitamine
+Uniform	Ühtlane
+Unite Shapes	Ühenda kujundid
+Units	Ühikud
+Unmake Frames	Tühista kaadrid
+Unsaved changes	Salvestamata muudatused
+Unsharp Mask…	Teravusmask…
+Update the applied comp from the layers	Uuenda rakendatud kompositsiooni kihtidest
+Use Black Point Compensation	Kasuta musta punkti kompenseerimist
+Use global light	Kasuta globaalset valgust
+Using:	Kasutusel:
+Vanishing Point…	Koondumispunkt…
+Variables	Muutujad
+Variance	Dispersioon
+Vector Mask	Vektormask
+Vector density	Vektori tihedus
+Vector enabled	Vektor lubatud
+Vector feather	Vektori sulestus
+Vector invert	Vektori pööramine
+Vector mask	Vektormask
+Vectorize	Vektoriseeri
+Vectorize Bitmap	Vektoriseeri raster
+Vectorize Bitmap…	Vektoriseeri raster…
+Vertical Centers	Vertikaalsed keskpunktid
+Vertical Distortion	Vertikaalne painutus
+Vertical center guide	Vertikaalne keskjuhtjoon
+Vertical scale, in percent: stretches the glyphs about the baseline; leading is unchanged	Vertikaalne skaala protsentides: venitab glüüfe põhijoone suhtes; reavahe ei muutu
+Vertically	Vertikaalne
+Vibrance	Paindlik värviküllastus
+Vibrance…	Paindlik värviküllastus…
+View	Vaade
+Violet	Violetne
+Visibility	Nähtavus
+Visible adjustment layers	Nähtavad korrigeerimiskihid
+Vivid Light	Ere valgus
+W	L
+WEBP…	WEBP…
+Waiting for the composite…	Liitpildi ootamine…
+Warm	Soe
+Warp	Venita
+Warp Style	Kõverduse stiil
+Warp Text	Kõverda tekst
+Warp Text…	Kõverda tekst…
+Wave	Laine
+Wavelet Decompose	Lainikute lahutus
+Wavelet Decompose splits into 2 to 7 scales	Lainikute lahutus jagab 2 kuni 7 astmeks
+Wavelet Decompose works on an sRGB document	Lainikute lahutus töötab sRGB-dokumendil
+Wavelet Decompose: the layer has no pixels	Lainikute lahutus: kihil pole piksleid
+Wavelet Decompose: {n} detail layers over a residual; the source layer is hidden	Lainikute lahutus: {n} detailikihti jäägi kohal; lähtekiht on peidetud
+Wavelet Decompose…	Lainikute lahutus…
+Wave…	Laine…
+Web (216)	Veeb (216)
+WebP (lossless)	WebP (kadudeta)
+WebP (lossy)	WebP (kadudega)
+Weight	Jämedus
+White	Valge
+White to Black	Valgest mustani
+Whites	Valged
+Width	Laius
+Width and height must be at least 1 pixel	Laius ja kõrgus peavad olema vähemalt 1 piksel
+Width must be between 1 and 250 pixels	Laius peab olema vahemikus 1 kuni 250 pikslit
+Width to 110%	Laius 110%
+Width to 125%	Laius 125%
+Width to 80%	Laius 80%
+Width to 90%	Laius 90%
+Window	Aken
+Wind…	Tuul…
+With Handles	Pidemetega
+Work Path	Töötee
+Workspace	Tööruum
+Wrap to box	Murra kasti
+Writes the visible adjustment layers, applied to an identity lattice, as a 3D LUT (.cube).	Kirjutab nähtavad korrigeerimiskihid, rakendatuna identsusvõrele, 3D LUT-ina (.cube).
+Written as CMYK: a naive ink model, not an ICC press profile.	Kirjutatud CMYK-na: lihtne tindimudel, mitte ICC trükiprofiil.
+Written as XMP into PNG, JPEG and TIFF files by Export As.	Ekspordi kui kirjutab XMP-na PNG-, JPEG- ja TIFF-failidesse.
+Written with the document's palette.	Kirjutatud dokumendi paletiga.
+Yellow	Kollane
+Yellow / Blue	Kollane / sinine
+Yellows	Kollased
+ZigZag…	Siksak…
+Zoom In	Suurenda Sisse
+Zoom Out	Suurenda Välja
+Zoom in	Suurenda
+Zoom out	Vähenda
+Zoom to Selection	Suumi valikule
+a layer could not be rewritten	kihti ei saanud ümber kirjutada
+before / after	enne / pärast
+changed	muudetud
+content thumbnail — click to edit the layer's pixels	sisu pisipilt — klõpsa kihi pikslite muutmiseks
+dpi	dpi
+edits are aimed at this mask — right-click for view and mask options	muudatused on suunatud sellele maskile — paremklõps vaate- ja maskisuvandite jaoks
+lines past the box	rida kastist väljas
+mask off	mask väljas
+mask thumbnail — click to edit the layer's mask	maski pisipilt — klõpsa kihi maski muutmiseks
+minutes (0 is off)	minutit (0 on väljas)
+no drop	ei lase lahti
+px	px
+records here	salvestab siia
+skipped on play:	esitamisel vahele jäetud:
+the layers could not be added	kihte ei saanud lisada
+the profile cannot be transformed ({error})	profiili ei saa teisendada ({error})
+to	kuni
+vector mask thumbnail — click to edit the vector mask	vektormaski pisipilt — klõpsa vektormaski muutmiseks
+{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time	{format}: ajaskaala, {frames} kaadrit kiirusel {fps} fps kestusega {length} ms; iga kaader näitab kihte oma ajahetkel
+{label} is not answered by this route	{label} sellele teele ei vasta
+{label} was refused: {reason}	{label} lükati tagasi: {reason}
+{name} Residual	{name} jääk
+{name} Scale {k}	{name} aste {k}
+{name}: {n} pages	{name}: {n} lehekülge
+{n} slices from the guides ({cols} x {rows}); they replace the slices there were	{n} lõiku juhtjoontest ({cols} x {rows}); need asendavad senised lõigud
+{path} is a {space} profile; an RGB document takes an RGB profile	{path} on {space}-profiil; RGB-dokument võtab RGB-profiili
+{path} is {len} bytes, larger than any colour profile	{path} on {len} baiti, suurem kui ükski värviprofiil
+{reason}; this one is {space}	{reason}; see on {space}
+16 Bits	16 bitti
+8 Bits	8 bitti
+AVIF…	AVIF…
+Blank preview image	Tühi eelvaatepilt
+Byte Order	Baitide järjestus
+Depth	Sügavus
+Duplicate Into…	Dubleeri sihtkohta…
+Guides from Layer	Juhtjooned kihist
+Minify the file	Minimeeri fail
+Nothing under the pointer for this row	Selle rea jaoks pole kursori all midagi
+Make Work Path	Loo töötee
+RAW…	RAW…
+Remove Anchor Point	Eemalda ankurpunkt
+Remove Path	Eemalda tee
+Make Selection	Loo valik
+Divide…	Jaga…
+Right-click on an anchor point of the path	Paremklõpsa tee ankurpunkti
+Right-click inside a path	Paremklõpsa tee sees
+Save PSD/PSB	Salvesta PSD/PSB
+Save PSD/PSB…	Salvesta PSD/PSB…
+Select or draw a path first	Vali või joonista esmalt tee
+Right-click on a text layer	Paremklõpsa tekstikihti
+Right-click inside a slice	Paremklõpsa lõigu sees
+Divide Slices	Jaga lõigud
+N equal parts	N võrdset osa
+N pixels per part	N pikslit osa kohta
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Lõikab lõigu, mida paremklõpsasid, või lõuendi, kui lõiku polnud, lõikude ruudustikuks.
+Tick Horizontally or Vertically	Märgi Horisontaalselt või Vertikaalselt
+These settings make no cut: raise N or pick a smaller pixel count	Need sätted ei lõika midagi: suurenda N-i või vali väiksem pikslite arv
+Cancel (Esc)	Loobu (Esc)
+All Documents	Kõik dokumendid
+Select Source	Vali allikas
+Alt	Alt
+Turn into JPG	Muuda JPG-ks
+ZIP for pixel data	ZIP pikslite andmetele
+a	a
+b	b
+Open a document to see its memory	Ava dokument, et näha selle mälu
+Image data	Pildi andmed
+{undo} undo / {redo} redo steps	tagasivõtmise samme: {undo} / uuesti tegemise samme: {redo}
+Holds copied pixels	Sisaldab kopeeritud piksleid
+{size} ({tiles} tiles)	{size} ({tiles} paani)
+Empty	Tühi
+Purge Clipboard	Tühjenda lõikelaud
+Purge Histories	Tühjenda ajalood
+Purge All	Tühjenda kõik
+Make	Loo
+There is no path; draw one or select it in the Paths panel	Teed pole; joonista üks või vali see teede paneelil
+Artboards	Joonistusalad
+No Slices	Lõike pole
+All Slices	Kõik lõigud
+User Slices	Kasutaja lõigud
+Put the file into ZIP	Pane fail ZIP-i
+Reverse pages	Pööra lehed ümber

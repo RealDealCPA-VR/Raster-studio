@@ -2,6 +2,41 @@
 # the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
 # Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
 @name	한국어
+Artboards	대지
+No Slices	분할 영역 없음
+All Slices	모든 분할 영역
+User Slices	사용자 분할 영역
+Put the file into ZIP	파일을 ZIP에 넣기
+16 Bits	16비트
+8 Bits	8비트
+AVIF…	AVIF…
+Blank preview image	빈 미리보기 이미지
+Byte Order	바이트 순서
+Depth	심도
+Duplicate Into…	다음으로 복제…
+Guides from Layer	레이어에서 안내선
+Minify the file	파일 축소
+Nothing under the pointer for this row	포인터 아래에 이 항목의 대상이 없습니다
+Make Work Path	작업 패스 만들기
+RAW…	RAW…
+Remove Anchor Point	기준점 제거
+Remove Path	패스 제거
+Make Selection	선택 영역 만들기
+Divide…	나누기…
+Right-click on an anchor point of the path	패스의 기준점을 마우스 오른쪽 버튼으로 클릭하세요
+Right-click inside a path	패스 안쪽을 마우스 오른쪽 버튼으로 클릭하세요
+Save PSD/PSB	PSD/PSB 저장
+Save PSD/PSB…	PSD/PSB 저장…
+Select or draw a path first	먼저 패스를 선택하거나 그리세요
+Right-click on a text layer	텍스트 레이어를 마우스 오른쪽 버튼으로 클릭하세요
+Right-click inside a slice	분할 영역 안쪽을 마우스 오른쪽 버튼으로 클릭하세요
+Divide Slices	분할 영역 나누기
+N equal parts	N개의 균등 분할
+N pixels per part	부분당 N 픽셀
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	마우스 오른쪽 버튼으로 클릭한 분할 영역(없으면 캔버스)을 분할 영역 격자로 자릅니다.
+Tick Horizontally or Vertically	가로로 또는 세로로를 선택하세요
+These settings make no cut: raise N or pick a smaller pixel count	이 설정으로는 잘리지 않습니다. N을 늘리거나 더 작은 픽셀 수를 선택하세요
  fps	 fps
  frames	 프레임
  ms	 ms
@@ -291,6 +326,10 @@ Columns	열
 Columns and rows with gutters between them, inside optional margins, in pixels.	간격을 둔 열과 행(픽셀 단위, 선택적 여백 안).
 Combine Shapes	모양 결합
 Commit (Enter)	확정(Enter)
+Cancel (Esc)	취소 (Esc)
+All Documents	모든 문서
+Select Source	소스 선택
+Alt	Alt
 Commit Contents	내용 확정
 Composite	합성
 Condensed	좁게
@@ -857,7 +896,6 @@ New Folder	새 폴더
 New Guide	새 안내선
 New Guide Layout	새 안내선 레이아웃
 New Guide Layout…	새 안내선 레이아웃…
-New Guides from Shape	모양에서 새 안내선
 New Guide…	새 안내선…
 New Layer	새 레이어
 New Layer Based Slice	새 레이어 기반 분할 영역
@@ -1494,6 +1532,7 @@ Trim	재단
 Trim Away	잘라낼 부분
 Trim…	재단…
 Tritone	3도
+Turn into JPG	JPG로 변환
 Turn on Resample to change the pixel count.	픽셀 수를 바꾸려면 리샘플링을 켜세요.
 Twirl…	돌리기…
 Twist	비틀기
@@ -1587,6 +1626,7 @@ Written with the document's palette.	문서의 팔레트로 기록했습니다.
 Yellow	노랑
 Yellow / Blue	노랑 / 파랑
 Yellows	노랑 계열
+ZIP for pixel data	픽셀 데이터에 ZIP
 ZigZag…	지그재그…
 Zoom In	확대
 Zoom Out	축소
@@ -1621,3 +1661,17 @@ vector mask thumbnail — click to edit the vector mask	벡터 마스크 축소�
 {path} is a {space} profile; an RGB document takes an RGB profile	{path}은(는) {space} 프로필입니다. RGB 문서에는 RGB 프로필이 필요합니다
 {path} is {len} bytes, larger than any colour profile	{path}은(는) {len}바이트로 어떤 색상 프로필보다 큽니다
 {reason}; this one is {space}	{reason}. 이 문서는 {space}입니다
+a	a
+b	b
+Open a document to see its memory	메모리를 보려면 문서를 여세요
+Image data	이미지 데이터
+{undo} undo / {redo} redo steps	실행 취소 {undo} / 다시 실행 {redo}
+Holds copied pixels	복사한 픽셀을 보관 중
+{size} ({tiles} tiles)	{size} ({tiles}개 타일)
+Empty	비어 있음
+Purge Clipboard	클립보드 비우기
+Purge Histories	작업 내역 비우기
+Purge All	모두 비우기
+Make	만들기
+There is no path; draw one or select it in the Paths panel	패스가 없습니다. 패스를 그리거나 패스 패널에서 선택하세요
+Reverse pages	페이지 역순

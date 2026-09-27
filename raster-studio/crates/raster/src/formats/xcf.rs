@@ -7,6 +7,15 @@
 //! * RGB and greyscale images at 8 bits per channel: GIMP's "8-bit
 //!   perceptual" precision (versions 0-3, version 4's code 0, codes 150 and
 //!   175) and "8-bit linear" (code 100, converted to sRGB as it is read).
+//! * W18-H: every other precision GIMP writes - 16- and 32-bit integer,
+//!   16-bit half, 32-bit and 64-bit float, linear or not (version 4's codes
+//!   1-4, versions 5-6's 200-550, version 7 and later's 200-775) - read at 8
+//!   bits per channel (the editor's tiles are 8-bit): integers scaled, floats
+//!   clamped to `0..=1` (values past white are clipped, and the notes say
+//!   so), linear light converted to sRGB from the full-precision value.
+//! * W18-H: indexed images (base type 2, layer types 4 and 5) through the
+//!   image's colour map (`PROP_COLORMAP`, up to 256 colours); an index past
+//!   the map is black, as GIMP shows it.
 //! * Uncompressed, RLE and zlib tiles.
 //! * The layer tree: groups (by `PROP_ITEM_PATH`), offsets, opacity (integer
 //!   and float), visibility, layer masks (applied when `PROP_APPLY_MASK`
@@ -18,8 +27,8 @@
 //!
 //! # What is not, and how it is reported
 //!
-//! * Indexed images and every precision above 8 bits are **refused by name**
-//!   (the error says which), never approximated.
+//! * An unknown precision code or image type is **refused by name** (the
+//!   error says which), never approximated.
 //! * Anything the flattening has to approximate is listed in
 //!   [`XcfDocument::notes`]: a blend mode outside the list above (drawn as
 //!   Normal), Dissolve (drawn as Normal), a pass-through group (its children
@@ -70,6 +79,98 @@ const PROP_COMPRESSION: u32 = 17;
 const PROP_GROUP_ITEM: u32 = 29;
 const PROP_ITEM_PATH: u32 = 30;
 const PROP_FLOAT_OPACITY: u32 = 33;
+
+/// W18-H: how one sample is stored (big-endian in the file).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XcfSample {
+    U8,
+    U16,
+    U32,
+    Half,
+    Float,
+    Double,
+}
+
+impl XcfSample {
+    /// Bytes per sample.
+    pub fn bytes(self) -> usize {
+        match self {
+            XcfSample::U8 => 1,
+            XcfSample::U16 | XcfSample::Half => 2,
+            XcfSample::U32 | XcfSample::Float => 4,
+            XcfSample::Double => 8,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            XcfSample::U8 => "8-bit integer",
+            XcfSample::U16 => "16-bit integer",
+            XcfSample::U32 => "32-bit integer",
+            XcfSample::Half => "16-bit floating point",
+            XcfSample::Float => "32-bit floating point",
+            XcfSample::Double => "64-bit floating point",
+        }
+    }
+
+    /// One sample (`self.bytes()` big-endian bytes) as `0..=1`, or above 1
+    /// for a float past white; `NaN` reads as 0.
+    fn value(self, b: &[u8]) -> f64 {
+        let v = match self {
+            XcfSample::U8 => f64::from(b[0]) / 255.0,
+            XcfSample::U16 => f64::from(u16::from_be_bytes([b[0], b[1]])) / 65535.0,
+            XcfSample::U32 => {
+                f64::from(u32::from_be_bytes([b[0], b[1], b[2], b[3]])) / 4294967295.0
+            }
+            XcfSample::Half => half_to_f64(u16::from_be_bytes([b[0], b[1]])),
+            XcfSample::Float => f64::from(f32::from_be_bytes([b[0], b[1], b[2], b[3]])),
+            XcfSample::Double => {
+                f64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
+            }
+        };
+        if v.is_nan() {
+            0.0
+        } else {
+            v.max(0.0)
+        }
+    }
+}
+
+/// An IEEE 754 half-precision value.
+fn half_to_f64(h: u16) -> f64 {
+    let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let exp = i32::from((h >> 10) & 0x1f);
+    let frac = f64::from(h & 0x3ff);
+    match exp {
+        0 => sign * frac * 2f64.powi(-24),
+        31 if frac == 0.0 => sign * f64::INFINITY,
+        31 => f64::NAN,
+        _ => sign * (1.0 + frac / 1024.0) * 2f64.powi(exp - 15),
+    }
+}
+
+/// Linear light `0..=1` to 8-bit sRGB.
+fn linear_to_srgb8(l: f64) -> u8 {
+    let l = l.clamp(0.0, 1.0);
+    let s = if l <= 0.003_130_8 {
+        12.92 * l
+    } else {
+        1.055 * l.powf(1.0 / 2.4) - 0.055
+    };
+    (s * 255.0).round().clamp(0.0, 255.0) as u8
+}
+
+/// The fixed header, as [`header`] reads it.
+#[derive(Debug, Clone, Copy)]
+struct Header {
+    version: u32,
+    width: u32,
+    height: u32,
+    /// 0 RGB, 1 grey, 2 indexed.
+    base: u32,
+    linear: bool,
+    sample: XcfSample,
+}
 
 /// `true` when `head` opens with the XCF magic.
 pub fn looks_like_xcf(head: &[u8]) -> bool {
@@ -207,7 +308,8 @@ pub struct XcfLayer {
     pub children: Vec<XcfLayer>,
     /// `true` when the layer carries a mask that is applied.
     pub has_applied_mask: bool,
-    /// The layer's type code: 0 RGB, 1 RGBA, 2 grey, 3 grey + alpha.
+    /// The layer's type code: 0 RGB, 1 RGBA, 2 grey, 3 grey + alpha,
+    /// 4 indexed, 5 indexed + alpha.
     kind: u32,
     hierarchy: u64,
     mask: u64,
@@ -222,8 +324,14 @@ pub struct XcfDocument<'a> {
     pub height: u32,
     /// `true` for a greyscale image.
     pub grey: bool,
-    /// `true` for GIMP's 8-bit linear precision.
+    /// `true` for a linear-light precision (converted to sRGB as read).
     pub linear: bool,
+    /// W18-H: `true` for an indexed image.
+    pub indexed: bool,
+    /// W18-H: how the file stores a sample.
+    pub sample: XcfSample,
+    /// W18-H: an indexed image's colour map.
+    pub colormap: Vec<[u8; 3]>,
     /// Top-level items, **top first**.
     pub layers: Vec<XcfLayer>,
     /// What the flattening approximates or leaves out; see the module docs.
@@ -321,14 +429,58 @@ fn be_u32(payload: &[u8], at: usize) -> Option<u32> {
 
 /// Header facts without reading any layer.
 pub fn probe(bytes: &[u8], limits: ImportLimits) -> Result<ImageInfo, CodecError> {
-    let (_, width, height, _, _) = header(bytes)?;
-    limits.check_dimensions(width, height)?;
-    Ok(super::info(width, height, ImportFormat::Xcf, false))
+    let h = header(bytes)?;
+    limits.check_dimensions(h.width, h.height)?;
+    Ok(super::info(h.width, h.height, ImportFormat::Xcf, false))
 }
 
-/// `(version, width, height, grey, linear)` from the fixed header, refusing
-/// indexed images and every precision above 8 bits by name.
-fn header(bytes: &[u8]) -> Result<(u32, u32, u32, bool, bool), CodecError> {
+/// W18-H: `(sample, linear)` for a precision code, by the version that
+/// wrote it; `None` for a code GIMP does not write.
+fn precision(version: u32, code: u32) -> Option<(XcfSample, bool)> {
+    use XcfSample::*;
+    Some(match version {
+        4 => match code {
+            0 => (U8, false),
+            1 => (U16, false),
+            2 => (U32, true),
+            3 => (Half, true),
+            4 => (Float, true),
+            _ => return None,
+        },
+        5 | 6 => match code {
+            100 => (U8, true),
+            150 => (U8, false),
+            200 => (U16, true),
+            250 => (U16, false),
+            300 => (U32, true),
+            350 => (U32, false),
+            400 => (Half, true),
+            450 => (Half, false),
+            500 => (Float, true),
+            550 => (Float, false),
+            _ => return None,
+        },
+        _ => {
+            let sample = match code / 100 {
+                1 => U8,
+                2 => U16,
+                3 => U32,
+                5 => Half,
+                6 => Float,
+                7 => Double,
+                _ => return None,
+            };
+            match code % 100 {
+                0 => (sample, true),
+                50 | 75 => (sample, false),
+                _ => return None,
+            }
+        }
+    })
+}
+
+/// The fixed header, refusing an unknown image type or precision by name.
+fn header(bytes: &[u8]) -> Result<Header, CodecError> {
     if !looks_like_xcf(bytes) || bytes.len() < 14 {
         return Err(malformed(NAME, "no `gimp xcf` magic"));
     }
@@ -345,56 +497,74 @@ fn header(bytes: &[u8]) -> Result<(u32, u32, u32, bool, bool), CodecError> {
     let mut r = Reader::at(bytes, 14, false)?;
     let width = r.u32()?;
     let height = r.u32()?;
-    let grey = match r.u32()? {
-        0 => false,
-        1 => true,
-        2 => {
-            return Err(CodecError::Unsupported(
-                "indexed-colour XCF images are not supported; convert the image to RGB in \
-                 GIMP first"
-                    .into(),
-            ))
-        }
-        other => return Err(malformed(NAME, format!("image type {other}"))),
-    };
-    let mut linear = false;
-    if version >= 4 {
-        let precision = r.u32()?;
-        let ok = match version {
-            4 => precision == 0,
-            5 | 6 => {
-                linear = precision == 100;
-                matches!(precision, 100 | 150)
-            }
-            _ => {
-                linear = precision == 100;
-                matches!(precision, 100 | 150 | 175)
-            }
-        };
-        if !ok {
-            return Err(CodecError::Unsupported(format!(
-                "XCF precision code {precision} (version {version}) is not supported: only \
-                 8-bit images are read; convert the image to 8 bits per channel in GIMP first"
-            )));
-        }
+    let base = r.u32()?;
+    if base > 2 {
+        return Err(malformed(NAME, format!("image type {base}")));
     }
-    Ok((version, width, height, grey, linear))
+    let (mut sample, mut linear) = (XcfSample::U8, false);
+    if version >= 4 {
+        let code = r.u32()?;
+        (sample, linear) = precision(version, code).ok_or_else(|| {
+            CodecError::Unsupported(format!(
+                "XCF precision code {code} (version {version}) is not one GIMP writes"
+            ))
+        })?;
+    }
+    if base == 2 && sample != XcfSample::U8 {
+        return Err(malformed(
+            NAME,
+            format!("an indexed image at {} precision", sample.name()),
+        ));
+    }
+    Ok(Header {
+        version,
+        width,
+        height,
+        base,
+        linear,
+        sample,
+    })
 }
 
 /// Parse the document structure. No pixels are read yet.
 pub fn read(bytes: &[u8], limits: ImportLimits) -> Result<XcfDocument<'_>, CodecError> {
-    let (version, width, height, grey, linear) = header(bytes)?;
+    let Header {
+        version,
+        width,
+        height,
+        base,
+        linear,
+        sample,
+    } = header(bytes)?;
+    let grey = base == 1;
     limits.check_dimensions(width, height)?;
     let wide = version >= 11;
     let mut r = Reader::at(bytes, if version >= 4 { 30 } else { 26 }, wide)?;
 
     let mut compression = 0u8;
+    let mut colormap: Vec<[u8; 3]> = Vec::new();
     r.properties(version, |kind, payload| {
         if kind == PROP_COMPRESSION {
             compression = payload.first().copied().unwrap_or(0);
         }
+        if kind == PROP_COLORMAP {
+            // W18-H: a count, then that many RGB triples.
+            let n = be_u32(payload, 0).unwrap_or(0) as usize;
+            colormap = payload
+                .get(4..)
+                .unwrap_or(&[])
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .take(n.min(256))
+                .copied()
+                .collect();
+        }
         Ok(())
     })?;
+    if base == 2 && colormap.is_empty() {
+        return Err(malformed(NAME, "an indexed image has no colour map"));
+    }
     if compression > 2 {
         return Err(CodecError::Unsupported(format!(
             "XCF tile compression {compression} is not supported"
@@ -445,8 +615,30 @@ pub fn read(bytes: &[u8], limits: ImportLimits) -> Result<XcfDocument<'_>, Codec
         }
         insert(&mut roots, &path, layer, &mut notes)?;
     }
+    if sample != XcfSample::U8 {
+        notes.push(format!(
+            "the image is {}{}; it was read at 8 bits per channel{}",
+            sample.name(),
+            if linear { " linear" } else { "" },
+            if matches!(
+                sample,
+                XcfSample::Half | XcfSample::Float | XcfSample::Double
+            ) {
+                " (values past white are clipped)"
+            } else {
+                ""
+            }
+        ));
+    }
     if linear {
-        notes.push("the image is 8-bit linear; it was converted to sRGB as it was read".into());
+        notes.push(format!(
+            "the image is {} linear; it was converted to sRGB as it was read",
+            if sample == XcfSample::U8 {
+                "8-bit".to_string()
+            } else {
+                sample.name().to_string()
+            }
+        ));
     }
     Ok(XcfDocument {
         bytes,
@@ -455,6 +647,9 @@ pub fn read(bytes: &[u8], limits: ImportLimits) -> Result<XcfDocument<'_>, Codec
         height,
         grey,
         linear,
+        indexed: base == 2,
+        sample,
+        colormap,
         layers: roots,
         notes,
         compression,
@@ -515,10 +710,8 @@ fn read_layer(
     let width = r.u32()?;
     let height = r.u32()?;
     let kind = r.u32()?;
-    if kind > 3 {
-        return Err(CodecError::Unsupported(format!(
-            "XCF layer type {kind} (indexed) is not supported"
-        )));
+    if kind > 5 {
+        return Err(malformed(NAME, format!("layer type {kind}")));
     }
     let name = r.string()?;
     let mut layer = XcfLayer {
@@ -604,26 +797,36 @@ impl XcfDocument<'_> {
             return Ok(Vec::new());
         }
         limits.check_dimensions(layer.width, layer.height)?;
-        let channels = match layer.kind {
-            0 => 3,
-            1 => 4,
-            2 => 1,
-            _ => 2,
+        let (channels, colour) = match layer.kind {
+            0 => (3, 3),
+            1 => (4, 3),
+            2 => (1, 1),
+            3 => (2, 1),
+            // W18-H: an index is not a colour; its map's colours are sRGB.
+            4 => (1, 0),
+            _ => (2, 0),
         };
-        let raw = self.read_hierarchy(layer.hierarchy, layer.width, layer.height, channels)?;
+        let raw =
+            self.read_hierarchy(layer.hierarchy, layer.width, layer.height, channels, colour)?;
         let pixels = layer.width as usize * layer.height as usize;
         let mut rgba = Vec::with_capacity(pixels * 4);
+        let indexed = layer.kind >= 4;
+        let map = |i: u8| self.colormap.get(usize::from(i)).copied().unwrap_or([0; 3]);
         for px in raw.chunks_exact(channels) {
-            let (rgb, a) = match channels {
-                1 => ([px[0]; 3], 255),
-                2 => ([px[0]; 3], px[1]),
-                3 => ([px[0], px[1], px[2]], 255),
+            let (rgb, a) = match (indexed, channels) {
+                (true, 1) => (map(px[0]), 255),
+                (true, _) => (map(px[0]), px[1]),
+                (_, 1) => ([px[0]; 3], 255),
+                (_, 2) => ([px[0]; 3], px[1]),
+                (_, 3) => ([px[0], px[1], px[2]], 255),
                 _ => ([px[0], px[1], px[2]], px[3]),
             };
             rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], a]);
         }
         drop(raw);
-        if self.linear {
+        // 8-bit linear samples are converted here; deeper ones were
+        // converted from their full precision as they were read.
+        if self.linear && self.sample == XcfSample::U8 && !indexed {
             let lut = linear_to_srgb_lut();
             for px in rgba.as_chunks_mut::<4>().0 {
                 for c in &mut px[..3] {
@@ -651,7 +854,7 @@ impl XcfDocument<'_> {
         let _name = r.string()?;
         r.properties(self.version, |_, _| Ok(()))?;
         let hierarchy = r.offset()?;
-        let mut plane = self.read_hierarchy(hierarchy, width, height, 1)?;
+        let mut plane = self.read_hierarchy(hierarchy, width, height, 1, 0)?;
         if self.linear {
             let lut = linear_to_srgb_lut();
             for v in &mut plane {
@@ -661,23 +864,29 @@ impl XcfDocument<'_> {
         Ok(plane)
     }
 
-    /// Read a hierarchy's top level into interleaved 8-bit samples.
+    /// Read a hierarchy's top level into interleaved 8-bit samples. W18-H:
+    /// a deeper sample is narrowed to 8 bits; in a linear image the first
+    /// `colour` channels of a deeper sample are converted to sRGB from their
+    /// full precision (the rest - alpha, masks - stay as they are).
     fn read_hierarchy(
         &self,
         offset: u64,
         width: u32,
         height: u32,
         channels: usize,
+        colour: usize,
     ) -> Result<Vec<u8>, CodecError> {
         let wide = self.version >= 11;
+        let sb = self.sample.bytes();
         let mut r = Reader::at(self.bytes, offset, wide)?;
         let (hw, hh, bpp) = (r.u32()?, r.u32()?, r.u32()? as usize);
-        if (hw, hh) != (width, height) || bpp != channels {
+        if (hw, hh) != (width, height) || bpp != channels * sb {
             return Err(malformed(
                 NAME,
                 format!(
-                    "a hierarchy of {hw}x{hh}x{bpp} does not match its {width}x{height}x{channels} \
-                     drawable"
+                    "a hierarchy of {hw}x{hh}x{bpp} does not match its {width}x{height}x{} \
+                     drawable",
+                    channels * sb
                 ),
             ));
         }
@@ -689,13 +898,13 @@ impl XcfDocument<'_> {
         let (w, h) = (width as usize, height as usize);
         let mut out = vec![0u8; w * h * channels];
         let (cols, rows) = (w.div_ceil(TILE), h.div_ceil(TILE));
-        let max_tile_data = TILE * TILE * channels * 3 / 2;
+        let max_tile_data = TILE * TILE * bpp * 3 / 2;
         let mut offset = r.offset()?;
         if offset == 0 {
             // An empty level: GIMP leaves the drawable transparent.
             return Ok(out);
         }
-        let mut tile = Vec::with_capacity(TILE * TILE * channels);
+        let mut tile = Vec::with_capacity(TILE * TILE * bpp);
         for i in 0..cols * rows {
             if offset == 0 {
                 return Err(malformed(NAME, "a level lists too few tiles"));
@@ -716,7 +925,7 @@ impl XcfDocument<'_> {
             let data = &self.bytes[start..end.min(self.bytes.len())];
             let (tx, ty) = ((i % cols) * TILE, (i / cols) * TILE);
             let (tw, th) = (TILE.min(w - tx), TILE.min(h - ty));
-            let size = tw * th * channels;
+            let size = tw * th * bpp;
             tile.clear();
             tile.resize(size, 0);
             match self.compression {
@@ -726,8 +935,25 @@ impl XcfDocument<'_> {
                         .ok_or_else(|| malformed(NAME, "an uncompressed tile is short"))?;
                     tile.copy_from_slice(src);
                 }
-                1 => rle_tile(data, &mut tile, tw * th, channels)?,
+                1 => rle_tile(data, &mut tile, tw * th, bpp)?,
                 _ => zlib_tile(data, &mut tile)?,
+            }
+            if sb > 1 {
+                // W18-H: narrow each sample (see the doc above).
+                let narrowed: Vec<u8> = tile
+                    .chunks_exact(sb)
+                    .enumerate()
+                    .map(|(i, s)| {
+                        let v = self.sample.value(s);
+                        if self.linear && i % channels < colour {
+                            linear_to_srgb8(v)
+                        } else {
+                            (v.min(1.0) * 255.0).round() as u8
+                        }
+                    })
+                    .collect();
+                tile.clear();
+                tile.extend_from_slice(&narrowed);
             }
             for row in 0..th {
                 let dst = ((ty + row) * w + tx) * channels;
@@ -1001,6 +1227,35 @@ pub(crate) mod tests {
         compression: u8,
         layers: &[TestLayer],
     ) -> Vec<u8> {
+        write_xcf_with(
+            version,
+            width,
+            height,
+            u32::from(grey),
+            150,
+            1,
+            compression,
+            layers,
+            &[],
+        )
+    }
+
+    /// W18-H: [`write_xcf`] with the image type (`base`: 0 RGB, 1 grey,
+    /// 2 indexed), the precision code (written from version 4), the bytes a
+    /// sample takes (`bps`; each layer's `pixels` are big-endian samples of
+    /// that size) and an indexed image's colour map.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn write_xcf_with(
+        version: u32,
+        width: u32,
+        height: u32,
+        base: u32,
+        precision: u32,
+        bps: usize,
+        compression: u8,
+        layers: &[TestLayer],
+        colormap: &[[u8; 3]],
+    ) -> Vec<u8> {
         let wide = version >= 11;
         let mut f: Vec<u8> = Vec::new();
         if version == 0 {
@@ -1011,13 +1266,21 @@ pub(crate) mod tests {
         let u32w = |f: &mut Vec<u8>, v: u32| f.extend_from_slice(&v.to_be_bytes());
         u32w(&mut f, width);
         u32w(&mut f, height);
-        u32w(&mut f, u32::from(grey));
+        u32w(&mut f, base);
         if version >= 4 {
-            u32w(&mut f, 150);
+            u32w(&mut f, precision);
         }
         u32w(&mut f, PROP_COMPRESSION);
         u32w(&mut f, 1);
         f.push(compression);
+        if !colormap.is_empty() {
+            u32w(&mut f, PROP_COLORMAP);
+            u32w(&mut f, 4 + 3 * colormap.len() as u32);
+            u32w(&mut f, colormap.len() as u32);
+            for c in colormap {
+                f.extend_from_slice(c);
+            }
+        }
         u32w(&mut f, 0);
         u32w(&mut f, 0);
         let osize = if wide { 8 } else { 4 };
@@ -1117,7 +1380,7 @@ pub(crate) mod tests {
             u32w(&mut f, 0);
             let slots = f.len();
             f.resize(slots + 2 * osize, 0);
-            let ch = [3, 4, 1, 2][l.kind as usize];
+            let ch = [3, 4, 1, 2, 1, 2][l.kind as usize] * bps;
             let h = write_hierarchy(&mut f, l.width, l.height, ch, &l.pixels);
             put_offset(&mut f, slots, h);
             if let Some(mask) = &l.mask {
@@ -1130,7 +1393,7 @@ pub(crate) mod tests {
                 u32w(&mut f, 0);
                 let slot = f.len();
                 f.resize(slot + osize, 0);
-                let mh = write_hierarchy(&mut f, l.width, l.height, 1, mask);
+                let mh = write_hierarchy(&mut f, l.width, l.height, bps, mask);
                 put_offset(&mut f, slot, mh);
                 put_offset(&mut f, slots + osize, m);
             }
@@ -1305,15 +1568,15 @@ pub(crate) mod tests {
             1,
             &[TestLayer::rgba("a", 0, 0, 4, 4, [1; 4])],
         );
-        // Indexed images are refused by name.
+        // W18-H: an indexed image with no colour map is malformed.
         let mut indexed = file.clone();
         indexed[14 + 11] = 2;
         let err = decode(&indexed, ImportLimits::default()).unwrap_err();
-        assert!(err.to_string().contains("indexed"), "{err}");
-        // A 16-bit precision is refused by name.
-        file[26..30].copy_from_slice(&250u32.to_be_bytes());
+        assert!(err.to_string().contains("colour map"), "{err}");
+        // A precision GIMP does not write is refused by name.
+        file[26..30].copy_from_slice(&260u32.to_be_bytes());
         let err = decode(&file, ImportLimits::default()).unwrap_err();
-        assert!(err.to_string().contains("precision code 250"), "{err}");
+        assert!(err.to_string().contains("precision code 260"), "{err}");
         // An unknown blend mode is drawn as Normal and noted.
         let mut odd = TestLayer::rgba("odd", 0, 0, 1, 1, [9; 4]);
         odd.mode = 52;
@@ -1395,3 +1658,7 @@ pub(crate) mod tests {
         assert_eq!((doc.layers[5].x, doc.layers[5].y), (-1, -1));
     }
 }
+
+#[cfg(test)]
+#[path = "xcf_w18_tests.rs"]
+mod w18_tests;

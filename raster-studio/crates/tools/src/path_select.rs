@@ -393,9 +393,24 @@ pub struct PathSelectTool {
     drag: Option<(Vec2, Vec2)>,
     /// W16-F: an arrow nudge waiting for [`Tool::commit`].
     pending_nudge: Vec2,
+    /// W18-E: the [`selected_path_parts`] change last adopted or published.
+    seen: u64,
 }
 
 impl PathSelectTool {
+    /// W18-E: take up a selection change another door published (a Delete).
+    fn adopt(&mut self) {
+        if let Some(parts) = adopt_parts(&mut self.seen) {
+            self.selected = parts.components;
+        }
+    }
+
+    /// W18-E: publish the selected components for the canvas and Delete.
+    fn publish(&mut self) {
+        let selected = self.selected.clone();
+        self.seen = publish_parts(|parts| parts.components = selected);
+    }
+
     /// W16-F: the topmost path component under `p`: its layer and its index.
     pub fn component_under(&self, ctx: &ToolContext<'_>, p: Vec2) -> Option<(LayerId, usize)> {
         let point = Point::new(p.x as f64, p.y as f64);
@@ -450,6 +465,7 @@ impl PathSelectTool {
         let mut shape = shape.clone();
         shape.path_svg = svg::to_svg(&next);
         self.selected = (!now.is_empty()).then_some((layer, now));
+        self.publish();
         ctx.emit(Command::SetLayerKind {
             layer_id: layer,
             kind: Box::new(LayerKind::Shape(shape)),
@@ -483,6 +499,7 @@ impl Tool for PathSelectTool {
     ) -> Result<(), ToolError> {
         // A button pressed with nothing selected must not fire later.
         take_component_op();
+        self.adopt();
         let Some((id, part)) = self.component_under(ctx, event.pos) else {
             if !event.modifiers.shift {
                 self.selected = None;
@@ -535,6 +552,7 @@ impl Tool for PathSelectTool {
         ctx: &mut ToolContext<'_>,
         event: PointerEvent,
     ) -> Result<(), ToolError> {
+        self.publish();
         let Some((start, now)) = self.drag.take() else {
             return Ok(());
         };
@@ -550,6 +568,7 @@ impl Tool for PathSelectTool {
     fn cancel(&mut self, _ctx: &mut ToolContext<'_>) {
         self.drag = None;
         self.pending_nudge = Vec2::ZERO;
+        self.publish();
     }
 
     fn is_active(&self) -> bool {
@@ -559,13 +578,14 @@ impl Tool for PathSelectTool {
     /// W16-F: an arrow nudge ([`Self::pending_nudge`]) or a parked Arrange /
     /// Delete ([`request_component_op`]) waits on selected components.
     fn has_pending_commit(&self) -> bool {
-        self.selected.is_some()
+        (self.selected.is_some() || selected_path_parts().components.is_some())
             && (self.pending_nudge != Vec2::ZERO || pending_component_op().is_some())
     }
 
     /// W16-F: perform the waiting nudge, then the parked Arrange / Delete,
     /// on the selected components — each ONE `SetLayerKind` step.
     fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
+        self.adopt();
         let nudge = std::mem::take(&mut self.pending_nudge);
         self.move_selected(ctx, nudge);
         if let Some(op) = take_component_op() {
@@ -695,9 +715,24 @@ pub struct DirectSelectionTool {
     last_press: Option<(Grab, std::time::Instant)>,
     /// An arrow nudge waiting for [`Tool::commit`].
     pending_nudge: Vec2,
+    /// W18-E: the [`selected_path_parts`] change last adopted or published.
+    seen: u64,
 }
 
 impl DirectSelectionTool {
+    /// W18-E: take up a selection change another door published (a Delete).
+    fn adopt(&mut self) {
+        if let Some(parts) = adopt_parts(&mut self.seen) {
+            self.selected = parts.knots;
+        }
+    }
+
+    /// W18-E: publish the selected knots for the canvas and Delete.
+    fn publish(&mut self) {
+        let selected = self.selected.clone();
+        self.seen = publish_parts(|parts| parts.knots = selected);
+    }
+
     /// The active shape layer's parsed knots, if it has a path.
     fn active_knots(&self, ctx: &ToolContext<'_>) -> Option<(LayerId, Vec<anchors::AnchorPath>)> {
         let active = ctx.active_layer?;
@@ -834,6 +869,7 @@ impl Tool for DirectSelectionTool {
         ctx: &mut ToolContext<'_>,
         event: PointerEvent,
     ) -> Result<(), ToolError> {
+        self.adopt();
         let p = Point::new(event.pos.x as f64, event.pos.y as f64);
         if !p.is_finite() {
             return Ok(());
@@ -962,6 +998,7 @@ impl Tool for DirectSelectionTool {
         ctx: &mut ToolContext<'_>,
         event: PointerEvent,
     ) -> Result<(), ToolError> {
+        self.publish();
         let Some(mut drag) = self.drag.take() else {
             return Ok(());
         };
@@ -1007,6 +1044,7 @@ impl Tool for DirectSelectionTool {
         self.drag = None;
         self.last_press = None;
         self.pending_nudge = Vec2::ZERO;
+        self.publish();
     }
 
     fn is_active(&self) -> bool {
@@ -1015,11 +1053,13 @@ impl Tool for DirectSelectionTool {
 
     /// W16-F: an arrow nudge waits on the selected knots.
     fn has_pending_commit(&self) -> bool {
-        self.selected.is_some() && self.pending_nudge != Vec2::ZERO
+        (self.selected.is_some() || selected_path_parts().knots.is_some())
+            && self.pending_nudge != Vec2::ZERO
     }
 
     /// W16-F: move the selected knots by the waiting nudge, ONE step.
     fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
+        self.adopt();
         let d = std::mem::take(&mut self.pending_nudge);
         if d == Vec2::ZERO || !d.is_finite() {
             return Ok(());
@@ -1032,6 +1072,7 @@ impl Tool for DirectSelectionTool {
         };
         if active != layer {
             self.selected = None;
+            self.publish();
             return Ok(());
         }
         let next = moved_knots(&subpaths, &knots, Point::new(d.x as f64, d.y as f64));
@@ -1150,6 +1191,220 @@ impl Tool for AnchorTool {
 
     fn is_active(&self) -> bool {
         false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// W18-E: the selected path parts, published for the canvas and for Delete
+// ---------------------------------------------------------------------------
+
+/// W18-E: the path components Path Select holds selected and the knots
+/// Direct Selection holds selected, as the live tool last published them.
+/// The canvas draws them (selected knots filled) and Edit > Clear (the
+/// Delete key) deletes them while either tool is active — the shell's menu
+/// route holds only the editor, never the live tool, so the selection is
+/// published here, beside the tools that own it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SelectedPathParts {
+    /// Path Select: the layer and indices into [`components`] of its path.
+    pub components: Option<(LayerId, Vec<usize>)>,
+    /// Direct Selection: the layer and the selected knots of its path.
+    pub knots: Option<(LayerId, Vec<anchors::AnchorRef>)>,
+}
+
+thread_local! {
+    /// W18-E: the published parts and a counter bumped on every change, so a
+    /// tool notices a change made by another door (a Delete) and adopts it.
+    static SELECTED_PARTS: std::cell::RefCell<(u64, SelectedPathParts)> =
+        std::cell::RefCell::new((0, SelectedPathParts::default()));
+}
+
+/// W18-E: the path parts the live Path Select / Direct Selection tool holds
+/// selected.
+pub fn selected_path_parts() -> SelectedPathParts {
+    SELECTED_PARTS.with(|slot| slot.borrow().1.clone())
+}
+
+fn publish_parts(edit: impl FnOnce(&mut SelectedPathParts)) -> u64 {
+    SELECTED_PARTS.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        edit(&mut slot.1);
+        slot.0 += 1;
+        slot.0
+    })
+}
+
+/// W18-E: forget the selected components (they were deleted by another
+/// door); the Path Select tool adopts the change at its next event.
+pub fn clear_selected_components() {
+    publish_parts(|parts| parts.components = None);
+}
+
+/// W18-E: forget the selected knots, as [`clear_selected_components`].
+pub fn clear_selected_knots() {
+    publish_parts(|parts| parts.knots = None);
+}
+
+/// W18-E: the published parts when they changed since `seen` (and mark them
+/// seen), for a tool to adopt.
+fn adopt_parts(seen: &mut u64) -> Option<SelectedPathParts> {
+    SELECTED_PARTS.with(|slot| {
+        let slot = slot.borrow();
+        (slot.0 != *seen).then(|| {
+            *seen = slot.0;
+            slot.1.clone()
+        })
+    })
+}
+
+/// W18-E: what a Pen options-bar Make button turns the current path into
+/// (the Paths panel's selected path, else the Work Path). Mask is Layer >
+/// Vector Mask > Current Path and rides that menu action, so it is not here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PenMake {
+    /// Load the path as the selection.
+    Selection,
+    /// A new shape layer filled with the foreground colour.
+    Shape,
+}
+
+thread_local! {
+    /// W18-E: a Make button press, parked by the options bar for the shell,
+    /// which holds the document and answers it on the same frame.
+    static PENDING_PEN_MAKE: std::cell::Cell<Option<PenMake>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// W18-E: park a Pen bar Make press.
+pub fn request_pen_make(make: PenMake) {
+    PENDING_PEN_MAKE.with(|slot| slot.set(Some(make)));
+}
+
+/// W18-E: take the parked Make press, if any.
+pub fn take_pen_make() -> Option<PenMake> {
+    PENDING_PEN_MAKE.with(|slot| slot.take())
+}
+
+/// W18-E: `path` with the knots `knots` removed — Direct Selection's Delete
+/// (Photopea learn/vg-manipulation: "delete them by pressing Delete"). A
+/// subpath left with fewer than two knots goes; a closed one left with two
+/// becomes an open line. `None` when a knot is out of range, nothing is
+/// named, or nothing would be left (the layer keeps at least one component;
+/// Layer > Delete removes a layer).
+pub fn delete_knots(path: &vector::Path, knots: &[anchors::AnchorRef]) -> Option<vector::Path> {
+    let mut subpaths = anchors::from_path(path);
+    let in_range = |k: &anchors::AnchorRef| {
+        subpaths
+            .get(k.subpath)
+            .is_some_and(|sp| k.index < sp.anchors.len())
+    };
+    if knots.is_empty() || !knots.iter().all(in_range) {
+        return None;
+    }
+    for (s, sp) in subpaths.iter_mut().enumerate() {
+        let mut doomed: Vec<usize> = knots
+            .iter()
+            .filter(|k| k.subpath == s)
+            .map(|k| k.index)
+            .collect();
+        doomed.sort_unstable();
+        doomed.dedup();
+        for i in doomed.into_iter().rev() {
+            sp.anchors.remove(i);
+        }
+        if sp.anchors.len() < anchors::MIN_OPEN_ANCHORS {
+            sp.anchors.clear();
+        } else if sp.closed && sp.anchors.len() < anchors::MIN_CLOSED_ANCHORS {
+            sp.closed = false;
+        }
+    }
+    subpaths.retain(|sp| !sp.anchors.is_empty());
+    (!subpaths.is_empty()).then(|| anchors::to_path(&subpaths))
+}
+
+#[cfg(test)]
+mod w18e_tests {
+    use super::*;
+    use crate::tiles::MemoryTiles;
+    use layer_model::ShapeLayer;
+    use raster::PixelRect;
+
+    const TWO: &str = "M10 10 L20 10 L20 20 L10 20 Z M40 40 L50 40 L50 50 L40 50 Z";
+
+    #[test]
+    fn deleting_knots_drops_them_and_a_subpath_left_too_small() {
+        let path = svg::parse(TWO).unwrap();
+        let k = |subpath, index| anchors::AnchorRef { subpath, index };
+        // One knot of the first square: a triangle is left, the other square
+        // is untouched.
+        let one = delete_knots(&path, &[k(0, 1)]).unwrap();
+        let sps = anchors::from_path(&one);
+        assert_eq!(sps.len(), 2);
+        assert_eq!(sps[0].anchors.len(), 3);
+        assert!(sps[0]
+            .anchors
+            .iter()
+            .all(|a| a.pos != Point::new(20.0, 10.0)));
+        assert_eq!(sps[1].anchors.len(), 4);
+        // Two of it: an open line is left.
+        let two = anchors::from_path(&delete_knots(&path, &[k(0, 0), k(0, 1)]).unwrap());
+        assert_eq!(two[0].anchors.len(), 2);
+        assert!(!two[0].closed);
+        // Three of it: the subpath goes.
+        let three = delete_knots(&path, &[k(0, 0), k(0, 1), k(0, 2)]).unwrap();
+        assert_eq!(components(&three).len(), 1);
+        // Out of range, nothing named, or everything: refused.
+        assert!(delete_knots(&path, &[k(0, 9)]).is_none());
+        assert!(delete_knots(&path, &[]).is_none());
+        let all: Vec<_> = (0..2).flat_map(|s| (0..4).map(move |i| k(s, i))).collect();
+        assert!(delete_knots(&path, &all).is_none());
+    }
+
+    /// The tools publish what they select, and adopt a change another door
+    /// made (Edit > Clear deleting the selection).
+    #[test]
+    fn the_tools_publish_their_selection_and_adopt_a_clear() {
+        let id = LayerId::new();
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 64, 64));
+        ctx.active_layer = Some(id);
+        ctx.shape_paths = vec![(id, ShapeLayer::from_svg(TWO))];
+        let mut select = PathSelectTool::default();
+        select
+            .on_pointer_down(&mut ctx, PointerEvent::at(45.0, 45.0))
+            .unwrap();
+        select
+            .on_pointer_up(&mut ctx, PointerEvent::at(45.0, 45.0))
+            .unwrap();
+        assert_eq!(selected_path_parts().components, Some((id, vec![1])));
+        clear_selected_components();
+        assert_eq!(selected_path_parts().components, None);
+        // A nudge now has nothing to move: the tool adopted the clear.
+        select
+            .set_setting(NUDGE_X, crate::tool::ToolSetting::Float(5.0))
+            .unwrap();
+        select.commit(&mut ctx).unwrap();
+        assert!(ctx.commands().is_empty(), "{:?}", ctx.commands());
+        assert_eq!(select.selected_components(), None);
+
+        let mut direct = DirectSelectionTool::default();
+        direct
+            .on_pointer_down(&mut ctx, PointerEvent::at(10.0, 10.0))
+            .unwrap();
+        direct
+            .on_pointer_up(&mut ctx, PointerEvent::at(10.0, 10.0))
+            .unwrap();
+        let knot = anchors::AnchorRef {
+            subpath: 0,
+            index: 0,
+        };
+        assert_eq!(selected_path_parts().knots, Some((id, vec![knot])));
+        clear_selected_knots();
+        direct
+            .set_setting(NUDGE_X, crate::tool::ToolSetting::Float(5.0))
+            .unwrap();
+        direct.commit(&mut ctx).unwrap();
+        assert!(ctx.commands().is_empty(), "{:?}", ctx.commands());
     }
 }
 

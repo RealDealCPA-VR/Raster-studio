@@ -112,9 +112,10 @@ impl Harness {
 
 #[test]
 fn the_three_panels_are_appended_to_the_window_list() {
-    let n = PanelId::ALL.len();
+    // W18-I: later panels (Memory) are appended after these three; what a
+    // saved dock needs is that these keep their positions.
     assert_eq!(
-        &PanelId::ALL[n - 3..],
+        &PanelId::ALL[23..26],
         &[PanelId::Styles, PanelId::DocumentInfo, PanelId::GuideGuy],
         "appended last: a saved dock stores placements by position"
     );

@@ -14,6 +14,12 @@ use crate::menu::{MenuAction, MenuContext, Resolution};
 use crate::Workspace;
 use design::{self, ColorRole, TextRole, TypeRole};
 
+// W18-A: the canvas menu each tool builds, and Divide Slices.
+#[path = "dialogs/divide_slice.rs"]
+pub mod divide_slice;
+#[path = "context_menu_w18.rs"]
+pub mod w18;
+
 /// Which surface a context menu was opened on. `LayerRow` carries no payload:
 /// the items resolve against the menu context — the same gates the bar applies
 /// to the Layer menu — so the row menu acts on what they resolve to.
@@ -36,6 +42,42 @@ pub struct MenuItem {
     /// Duplicate Layer): a click asks the application through the Layers
     /// panel instead of emitting `action`, whose gate it shares.
     pub request: Option<crate::panels::layers::w16::LayersRequest>,
+    /// W18-A: a canvas-menu row with no menu action of its own (a layer
+    /// under the pointer, Make Work Path, a path or slice row): a click
+    /// performs this ([`w18::perform`]) instead of emitting `action`.
+    pub w18: Option<w18::CanvasRow>,
+}
+
+/// W18-G: the rows a submenu row opens beside it (Photopea's row-menu
+/// submenus): a smart object's Stack Mode row opens the eleven stack modes.
+/// Empty for an ordinary row. A submenu row wears its first child's action
+/// and gate, so it greys out, with the same reason, exactly when they do.
+pub fn children_of(item: &MenuItem, ctx: &MenuContext) -> Vec<MenuItem> {
+    use crate::menu::{LayerExtraOp, StackMode};
+    match item.action {
+        MenuAction::LayerExtra(LayerExtraOp::StackMode(_))
+            if item.label == LAYER_ROW_STACK_MODE && item.request.is_none() =>
+        {
+            let modes: Vec<MenuAction> = StackMode::ALL
+                .iter()
+                .map(|m| MenuAction::LayerExtra(LayerExtraOp::StackMode(*m)))
+                .collect();
+            items(ctx, &modes)
+        }
+        // W18-A: the selection tools' Modify row opens Photopea's five.
+        MenuAction::Modify(_)
+            if item.label == w18::modify_label()
+                && item.request.is_none()
+                && item.w18.is_none() =>
+        {
+            let modify: Vec<MenuAction> = crate::menu::ModifySelection::ALL
+                .iter()
+                .map(|m| MenuAction::Modify(*m))
+                .collect();
+            items(ctx, &modify)
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn items(ctx: &MenuContext, actions: &[MenuAction]) -> Vec<MenuItem> {
@@ -49,6 +91,7 @@ fn items(ctx: &MenuContext, actions: &[MenuAction]) -> Vec<MenuItem> {
             resolution: action.resolve(ctx),
             separator_after: false,
             request: None,
+            w18: None,
         })
         .collect()
 }
@@ -133,6 +176,15 @@ pub fn layer_items(ctx: &MenuContext) -> Vec<MenuItem> {
         MenuAction::Rasterize(RasterizeTarget::LayerStyle),
         MenuAction::ConvertTextToShape,
     ]);
+    // W18-G: the rest of Photopea's Smart Object rows — its Stack Mode
+    // submenu ([`children_of`]) and Turn into JPG — close the group on a
+    // smart object.
+    if class == Some(LayerClass::SmartObject) {
+        middle.extend([
+            MenuAction::LayerExtra(LayerExtraOp::StackMode(crate::menu::StackMode::ALL[0])),
+            MenuAction::TurnIntoJpg,
+        ]);
+    }
     group(&mut rows, &middle);
     if class == Some(LayerClass::Text) {
         group(
@@ -200,6 +252,10 @@ pub fn layer_items(ctx: &MenuContext) -> Vec<MenuItem> {
             MenuAction::SmartObject(SmartObjectOp::NewViaCopy) => {
                 row.label = LAYER_ROW_SO_VIA_COPY.to_string();
             }
+            // W18-G: the submenu row.
+            MenuAction::LayerExtra(LayerExtraOp::StackMode(_)) => {
+                row.label = LAYER_ROW_STACK_MODE.to_string();
+            }
             _ => {}
         }
     }
@@ -215,6 +271,7 @@ const LAYER_ROW_RASTERIZE: &str = "Rasterize";
 const LAYER_ROW_RASTERIZE_STYLE: &str = "Rasterize Layer Style";
 const LAYER_ROW_EDIT_CONTENTS: &str = "Open (Edit Contents)";
 const LAYER_ROW_SO_VIA_COPY: &str = "New Smart Obj. via Copy";
+const LAYER_ROW_STACK_MODE: &str = "Stack Mode";
 
 /// The document-tab menu: the close family from the File menu.
 pub fn tab_items(ctx: &MenuContext) -> Vec<MenuItem> {
@@ -239,6 +296,11 @@ pub fn open(w: &mut Workspace, target: ContextTarget, pos: egui::Pos2) {
 /// Draw the open menu, if any, and handle its clicks. Called once per frame
 /// from [`Workspace::ui`], after everything else, so the menu floats above.
 pub fn draw_open(w: &mut Workspace, ctx: &egui::Context, menu_ctx: &MenuContext) {
+    // W18-A: Divide Slices floats over the canvas while it is open.
+    w18::draw_divide_slice(w, ctx);
+    // W18-G: File > Save PSD/PSB's options while open, and the row that
+    // writes an Export As job cut per artboard / per slice.
+    crate::dialogs::export_as::draw_w18g(w, ctx);
     let Some((target, pos)) = w.context_menu else {
         return;
     };
@@ -248,19 +310,48 @@ pub fn draw_open(w: &mut Workspace, ctx: &egui::Context, menu_ctx: &MenuContext)
         return;
     }
     let all = match target {
-        ContextTarget::Canvas => canvas_items(menu_ctx),
+        // W18-A: the list the acting tool builds.
+        ContextTarget::Canvas => w18::canvas_rows(ctx, menu_ctx, pos),
         ContextTarget::LayerRow => layer_items(menu_ctx),
         ContextTarget::DocumentTab => tab_items(menu_ctx),
     };
     let tokens = design::current_theme(ctx).tokens();
     let hover_fill = design::color32(tokens.palette.color(ColorRole::ControlFillHovered));
     let row_h = tokens.metrics.control_height;
+    // W18-G: the submenu row whose rows are open beside it, if any.
+    // W18-A: read back as the `Option<usize>` it is stored as (a bare
+    // `usize` read never matched, so the submenu closed as the pointer left
+    // its row for it).
+    let mut open_sub: Option<usize> = ctx
+        .data(|d| d.get_temp::<Option<usize>>(ids::open_submenu()))
+        .flatten();
+    let mut sub_anchor: Option<(Vec<MenuItem>, egui::Rect)> = None;
+    // W18-A: kept on screen here, not by egui's constraint, so the menu
+    // does not move between its first frames (a click aimed at a row laid
+    // out on one frame would land beside it on the next).
+    // The area is also told its size up front: egui lays a new area out
+    // once at a default size (600 wide) and constrains that to the screen,
+    // which put the first frame's rows somewhere else near the right edge.
+    let menu_size = menu_outer_size(ctx, &all, row_h);
+    let menu_at = {
+        let screen = ctx.screen_rect();
+        egui::pos2(
+            pos.x.min(screen.right() - menu_size.x).max(screen.left()),
+            pos.y,
+        )
+    };
     egui::Area::new(egui::Id::new("raster-context-menu"))
         .order(egui::Order::Foreground)
-        .fixed_pos(pos)
+        .default_size(menu_size)
+        .fixed_pos(menu_at)
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_min_width(150.0);
+                // W18-A: as wide as its widest row, so a submenu opens
+                // beside it rather than over it (the rows used to run to
+                // the screen's edge).
+                let width = menu_width(ui.ctx(), &all, row_h);
+                ui.set_min_width(width);
+                ui.set_max_width(width);
                 ui.spacing_mut().item_spacing.y = 0.0;
                 for (i, item) in all.iter().enumerate() {
                     let enabled = item.resolution.is_enabled();
@@ -300,8 +391,43 @@ pub fn draw_open(w: &mut Workspace, ctx: &egui::Context, menu_ctx: &MenuContext)
                     if let Some(reason) = item.resolution.reason() {
                         let _ = response.clone().on_hover_text(reason);
                     }
-                    if enabled && response.clicked() {
+                    // W18-G: a submenu row opens its rows beside it on hover
+                    // or click, and emits nothing itself.
+                    let children = children_of(item, menu_ctx);
+                    if !children.is_empty() {
+                        let side = egui::Rect::from_min_max(
+                            egui::pos2(rect.right() - row_h, rect.top()),
+                            rect.right_bottom(),
+                        );
+                        crate::icons::paint_ui_icon(
+                            ui,
+                            side,
+                            "chevron-right",
+                            if enabled {
+                                TextRole::Primary
+                            } else {
+                                TextRole::Tertiary
+                            },
+                        );
+                        if enabled && (response.hovered() || response.clicked()) {
+                            open_sub = Some(i);
+                        }
+                        if open_sub == Some(i) && enabled {
+                            sub_anchor = Some((children, rect));
+                        }
+                    } else if response.hovered() {
+                        open_sub = None;
+                    }
+                    let is_submenu =
+                        sub_anchor.as_ref().is_some_and(|(_, r)| *r == rect) || open_sub == Some(i);
+                    if enabled && response.clicked() && !is_submenu {
                         match item.request {
+                            // W18-A: a canvas row the drawer performs.
+                            _ if item.w18.is_some() => {
+                                if let Some(row) = item.w18.clone() {
+                                    w18::perform(w, ui.ctx(), row);
+                                }
+                            }
                             // W16-D: a row the application answers through
                             // the Layers panel's request queue.
                             Some(request) => {
@@ -332,6 +458,87 @@ pub fn draw_open(w: &mut Workspace, ctx: &egui::Context, menu_ctx: &MenuContext)
                 }
             });
         });
+    // W18-G: the open submenu's rows, beside its row: to its right, or, as
+    // Photopea flips it, to its left when the right would run off the
+    // screen.
+    let mut sub_rows = 0usize;
+    if let Some((children, anchor)) = sub_anchor {
+        sub_rows = children.len();
+        let style = ctx.style();
+        let font = design::egui_theme::text_style(TypeRole::Body).resolve(&style);
+        let widest = children
+            .iter()
+            .map(|r| {
+                ctx.fonts(|f| {
+                    f.layout_no_wrap(r.label.clone(), font.clone(), egui::Color32::PLACEHOLDER)
+                        .size()
+                        .x
+                })
+            })
+            .fold(0.0_f32, f32::max);
+        let frame = egui::Frame::popup(&style);
+        let outer = (widest + 2.0 * design::tokens::spacing::Space::Small.pt() + row_h).max(150.0)
+            + frame.inner_margin.sum().x
+            + frame.outer_margin.sum().x
+            + 2.0 * frame.stroke.width;
+        let at = if anchor.right() + outer <= ctx.screen_rect().right() {
+            anchor.right_top()
+        } else {
+            egui::pos2(anchor.left() - outer, anchor.top())
+        };
+        egui::Area::new(egui::Id::new("raster-context-submenu"))
+            .order(egui::Order::Foreground)
+            // W18-A: laid out at its own size from its first frame.
+            .default_size(menu_outer_size(ctx, &children, row_h))
+            .fixed_pos(at)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    let width = menu_width(ui.ctx(), &children, row_h);
+                    ui.set_min_width(width);
+                    ui.set_max_width(width);
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for (k, child) in children.iter().enumerate() {
+                        let enabled = child.resolution.is_enabled();
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), row_h),
+                            egui::Sense::hover(),
+                        );
+                        let response =
+                            ui.interact(rect, ids::context_subitem(k), egui::Sense::click());
+                        if enabled && response.hovered() {
+                            ui.painter()
+                                .rect_filled(rect, egui::Rounding::ZERO, hover_fill);
+                        }
+                        let font =
+                            design::egui_theme::text_style(TypeRole::Body).resolve(ui.style());
+                        let color = design::color32(tokens.palette.text(if enabled {
+                            TextRole::Primary
+                        } else {
+                            TextRole::Tertiary
+                        }));
+                        ui.painter().text(
+                            egui::pos2(
+                                rect.left() + design::tokens::spacing::Space::Small.pt(),
+                                rect.center().y - font.size * 0.5,
+                            ),
+                            egui::Align2::LEFT_TOP,
+                            child.label.clone(),
+                            font,
+                            color,
+                        );
+                        if let Some(reason) = child.resolution.reason() {
+                            let _ = response.clone().on_hover_text(reason);
+                        }
+                        if enabled && response.clicked() {
+                            w.emit(crate::Intent::Action(child.action));
+                            w.context_menu = None;
+                            open_sub = None;
+                        }
+                    }
+                });
+            });
+    }
+    ctx.data_mut(|d| d.insert_temp(ids::open_submenu(), open_sub));
     if fresh {
         return;
     }
@@ -340,16 +547,64 @@ pub fn draw_open(w: &mut Workspace, ctx: &egui::Context, menu_ctx: &MenuContext)
         let on_menu = all.iter().enumerate().any(|(i, _)| {
             ctx.read_response(ids::context_item(i))
                 .is_some_and(|r| r.hovered())
+        }) || (0..sub_rows).any(|k| {
+            ctx.read_response(ids::context_subitem(k))
+                .is_some_and(|r| r.hovered())
         });
         if !on_menu {
             w.context_menu = None;
         }
     }
+    if w.context_menu.is_none() {
+        ctx.data_mut(|d| d.remove::<Option<usize>>(ids::open_submenu()));
+    }
+}
+
+/// W18-A: a menu's width: its widest label, with the leading inset and room
+/// for a submenu chevron, and never under the old minimum.
+fn menu_width(ctx: &egui::Context, rows: &[MenuItem], row_h: f32) -> f32 {
+    let font = design::egui_theme::text_style(TypeRole::Body).resolve(&ctx.style());
+    let widest = rows
+        .iter()
+        .map(|r| {
+            ctx.fonts(|f| {
+                f.layout_no_wrap(r.label.clone(), font.clone(), egui::Color32::PLACEHOLDER)
+                    .size()
+                    .x
+            })
+        })
+        .fold(0.0_f32, f32::max);
+    (widest + 2.0 * design::tokens::spacing::Space::Small.pt() + row_h).max(150.0)
+}
+
+/// W18-A: the whole menu's size on screen: [`menu_width`] by its rows and
+/// rules, and the popup frame around them.
+fn menu_outer_size(ctx: &egui::Context, rows: &[MenuItem], row_h: f32) -> egui::Vec2 {
+    let frame = egui::Frame::popup(&ctx.style());
+    let rules = rows.iter().filter(|r| r.separator_after).count() as f32;
+    let inner = egui::vec2(
+        menu_width(ctx, rows, row_h),
+        rows.len() as f32 * row_h + rules * design::tokens::spacing::Space::XSmall.pt(),
+    );
+    inner
+        + frame.inner_margin.sum()
+        + frame.outer_margin.sum()
+        + egui::Vec2::splat(2.0 * frame.stroke.width)
 }
 
 /// Stable ids for the menu's item buttons, so tests can click one by name.
 pub mod ids {
     pub fn context_item(index: usize) -> egui::Id {
         egui::Id::new(("raster-context-item", index))
+    }
+
+    /// W18-G: row `index` of the open submenu (Photopea's Stack Mode).
+    pub fn context_subitem(index: usize) -> egui::Id {
+        egui::Id::new(("raster-context-subitem", index))
+    }
+
+    /// W18-G: where the open submenu row's index is kept between frames.
+    pub fn open_submenu() -> egui::Id {
+        egui::Id::new("raster-context-open-submenu")
     }
 }

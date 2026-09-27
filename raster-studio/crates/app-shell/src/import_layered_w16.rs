@@ -9,11 +9,16 @@
 //! | File | Opens as |
 //! |---|---|
 //! | `.kra` (by content: a ZIP whose `mimetype` names Krita) | one raster layer per paint layer and one group per group layer, from `maindoc.xml` and the layers' tiled LZF pixels (`raster::codec::formats::kra::layers`), with each layer's name, opacity, visibility and blend mode. A layer kind the reader leaves out (filter, fill, vector, clone, file layers; masks; CMYK or Lab paint layers) is listed in the "Krita import report". When the layers cannot be read at all, the merged image opens as one picture and the status line says why |
+//! | `.tif` / `.tiff` with Photoshop layers (W18-H: by content, a TIFF whose tag 37724 holds a `Layr` block) | the layers, through the `.psd` reader (`raster::codec::formats::tiff_layers` rebuilds a `.psd` from the TIFF's composite and its layer data): every layer's name, bounds, opacity, blend mode, visibility and pixels. What a little-endian file's conversion leaves out (masks, blending ranges, effects and other records stored in its byte order) is listed in the "TIFF import report". A TIFF without layer data, or whose samples are not 8-bit RGB, opens flat through the import job as before |
 //! | `.dxf` (by content) | one group per DXF layer holding a shape (or text) layer per entity, on the drawing's fitted canvas, over a white `Background` shape (`formats::more_formats_w16::dxf::layers`, through the SVG layer reader and the W16-I vector mapping). When the layers cannot be read, the drawing opens as one picture and the status line says why |
+//! | `.pxz` (W18-H: by content, a ZIP whose `manifest.json` holds a layer `stack`) | Pixlr's layers (`raster::codec::formats::pxz`: images as raster layers, rectangles / ellipses / lines / paths as shape layers with fill, gradient and stroke, text as text layers), through the vector-layer mapping DXF uses; what does not map is listed in the "Pixlr PXZ import report". There is no flat image to fall back to: a file whose layers cannot be read is refused, saying why |
+//! | `.pvr` (W18-H: by content, the version-3 magic: `PVR` and the byte 3) | the texture as one picture (`raster::codec::formats::pvr`: uncompressed, PVRTC 4 bpp, ETC1, BC1-BC3), with the mips, faces and slices it does not open listed in the "PVR import report"; a format it does not decode is refused by name |
 //!
-//! File > Revert of either file reopens it as the flat image the import job
-//! decodes: the Revert route (`Editor::open_pages_document`) is outside this
-//! module.
+//! W18-H: File > Revert of either file reads its layers back the same way
+//! ([`reopen_layered_for_revert`], which the Revert route asks through
+//! `editor_open_w13x7::reopen_for_revert`). When the layers can no longer be
+//! read, a document that opened as layers is not flattened: Revert refuses
+//! and says why; one that opened flat reverts to the flat image, as before.
 
 use std::io::Read as _;
 use std::path::Path;
@@ -24,14 +29,29 @@ use editor_core::{Document, History};
 use layer_model::{BlendMode, GroupBlending, GroupLayer, Layer, LayerId, LayerKind};
 use raster::codec::formats::kra::{self, layers::KraDocument, layers::KraLayer};
 use raster::codec::formats::more_formats_w16::dxf;
+use raster::codec::formats::tiff_layers;
+use raster::codec::formats::{pvr, pxz};
 use raster::{ImportFormat, ImportLimits, TileGrid};
 
 use super::super::super::{Action, ActionError, DocumentId, Editor, Effect, OpenDocument};
 use crate::import::{DecodedImage, ImportedDocument, PsdImport, PsdNotes};
 
+/// W18-H: what this route opens a file as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Routed {
+    /// A `.kra`, a TIFF with Photoshop layers or a `.dxf`: its layers.
+    Layers(ImportFormat),
+    /// A Pixlr `.pxz` (by content: a ZIP whose `manifest.json` holds a
+    /// layer `stack`): its layers, through the vector-layer mapping.
+    Pxz,
+    /// A PowerVR `.pvr` (by content: the version-3 magic): the texture as
+    /// one picture.
+    Pvr,
+}
+
 /// Which of this route's formats `path` holds, by content (and extension:
 /// a DXF is plain text, so a `.dxf` name is asked for too).
-pub fn layered_format(path: &Path) -> Option<ImportFormat> {
+pub fn layered_format(path: &Path) -> Option<Routed> {
     let mut head = Vec::with_capacity(256);
     std::fs::File::open(path)
         .ok()?
@@ -39,13 +59,26 @@ pub fn layered_format(path: &Path) -> Option<ImportFormat> {
         .read_to_end(&mut head)
         .ok()?;
     if kra::looks_like_kra(&head) {
-        return Some(ImportFormat::Kra);
+        return Some(Routed::Layers(ImportFormat::Kra));
+    }
+    // W18-H: a PowerVR texture, and a Pixlr document.
+    if pvr::looks_like_pvr(&head) {
+        return Some(Routed::Pvr);
+    }
+    if head.starts_with(b"PK\x03\x04") {
+        let bytes = read_limited(path, ImportLimits::default()).ok()?;
+        return pxz::looks_like_pxz(&bytes).then_some(Routed::Pxz);
+    }
+    // W18-H: a TIFF with Photoshop layers (tag 37724).
+    if head.starts_with(b"II*\0") || head.starts_with(b"MM\0*") {
+        let bytes = read_limited(path, ImportLimits::default()).ok()?;
+        return tiff_layers::has_layers(&bytes).then_some(Routed::Layers(ImportFormat::Tiff));
     }
     let named_dxf = path
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("dxf"));
-    (named_dxf && dxf::looks_like_dxf(&head)).then_some(ImportFormat::Dxf)
+    (named_dxf && dxf::looks_like_dxf(&head)).then_some(Routed::Layers(ImportFormat::Dxf))
 }
 
 fn read_limited(path: &Path, limits: ImportLimits) -> Result<Vec<u8>, String> {
@@ -273,6 +306,17 @@ fn layered(
 ) -> Result<(OpenDocument, String, Vec<String>), String> {
     let limits = ImportLimits::default();
     let bytes = read_limited(path, limits)?;
+    if format == ImportFormat::Tiff {
+        // W18-H: the TIFF's layers, through the `.psd` reader.
+        let layered = tiff_layers::psd_bytes(&bytes, limits).map_err(|e| e.to_string())?;
+        let doc = OpenDocument::open_psd_bytes(id, path, &layered.psd, depth)
+            .map_err(|e| e.to_string())?;
+        let summary = format!(
+            "its {} Photoshop layers",
+            doc.document.layers.iter_depth_first().len()
+        );
+        return Ok((doc, summary, layered.notes));
+    }
     let title = DecodedImage::title_for(path);
     let (imported, summary, notes) = if format == ImportFormat::Kra {
         let kra = kra::layers::read(&bytes, limits).map_err(|e| e.to_string())?;
@@ -307,15 +351,95 @@ fn layered(
     Ok((doc, summary, notes))
 }
 
+thread_local! {
+    /// W18-H: the documents that opened as a `.kra` / `.dxf`'s layers, for
+    /// File > Revert.
+    static OPENED_LAYERED: std::cell::RefCell<std::collections::HashSet<DocumentId>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// W18-H: File > Revert of a `.kra` / `.dxf`: its layers, read back as the
+/// open route reads them. `None` for any other file, and for one that opened
+/// flat and whose layers still cannot be read (it reverts to the flat image);
+/// an error for one that opened as layers and whose layers can no longer be
+/// read (Revert refuses rather than flatten it).
+pub(crate) fn reopen_layered_for_revert(
+    id: DocumentId,
+    path: &Path,
+    depth: usize,
+) -> Option<Result<OpenDocument, String>> {
+    let format = match layered_format(path)? {
+        Routed::Layers(format) => format,
+        // W18-H: no flat image to fall back to: a failure refuses.
+        other => return Some(open_w18(other, id, path, depth).map(|(doc, _, _)| doc)),
+    };
+    match layered(format, id, path, depth) {
+        Ok((doc, _, _)) => Some(Ok(doc)),
+        Err(why) if OPENED_LAYERED.with(|s| s.borrow().contains(&id)) => Some(Err(format!(
+            "it opened as layers and its layers can no longer be read ({why}); nothing was \
+             reverted"
+        ))),
+        Err(_) => None,
+    }
+}
+
+/// W18-H: a Pixlr `.pxz`'s layers, or a `.pvr` texture as one picture, as
+/// the document `id`, the status summary and the notes.
+fn open_w18(
+    routed: Routed,
+    id: DocumentId,
+    path: &Path,
+    depth: usize,
+) -> Result<(OpenDocument, String, Vec<String>), String> {
+    let limits = ImportLimits::default();
+    let bytes = read_limited(path, limits)?;
+    if routed == Routed::Pvr {
+        let texture = pvr::decode(&bytes, limits).map_err(|e| e.to_string())?;
+        let image = DecodedImage {
+            width: texture.width,
+            height: texture.height,
+            color_space: color::ColorSpace::Srgb,
+            icc_profile: None,
+            rgba8: texture.rgba,
+        };
+        let doc =
+            OpenDocument::open_image_decoded(id, path, image, depth).map_err(|e| e.to_string())?;
+        return Ok((doc, "the texture".into(), texture.notes));
+    }
+    let pxz = pxz::read(&bytes, limits).map_err(|e| e.to_string())?;
+    let title = DecodedImage::title_for(path);
+    let import = crate::editor::open_any::open_pages::vector_w16::document_from_vector(
+        &pxz.layers,
+        &title,
+        depth,
+    )?;
+    let doc = OpenDocument::open_psd_import(
+        id,
+        path,
+        PsdImport {
+            imported: import.imported,
+            notes: PsdNotes::default(),
+            merged_preview: None,
+        },
+    );
+    Ok((doc, import.summary, import.notes))
+}
+
+/// W18-H: the name an import report gives the file's format.
+fn routed_name(routed: Routed) -> &'static str {
+    match routed {
+        Routed::Layers(format) => format.name(),
+        Routed::Pxz => "Pixlr PXZ",
+        Routed::Pvr => "PVR",
+    }
+}
+
 /// The import report's text, or `None` when everything mapped.
-fn report(format: ImportFormat, notes: &[String], path: &Path) -> Option<String> {
+fn report(name: &str, notes: &[String], path: &Path) -> Option<String> {
     if notes.is_empty() {
         return None;
     }
-    let mut out = format!(
-        "Some parts of this {} file did not map exactly:\n",
-        format.name()
-    );
+    let mut out = format!("Some parts of this {name} file did not map exactly:\n");
     for note in notes {
         out.push_str("\n- ");
         out.push_str(note);
@@ -328,26 +452,42 @@ impl Editor {
     /// Open `path` as its layers when it is a `.kra` or a `.dxf`; `None`
     /// for any other file.
     pub(crate) fn open_layered_w16(&mut self, path: &Path) -> Option<Result<Effect, ActionError>> {
-        let format = layered_format(path)?;
+        let routed = layered_format(path)?;
         let depth = self.prefs.history_depth;
         let id = self.mint_id();
-        let why = match layered(format, id, path, depth) {
+        let format = match routed {
+            Routed::Layers(format) => Some(format),
+            Routed::Pxz | Routed::Pvr => None,
+        };
+        let opened = match format {
+            Some(format) => layered(format, id, path, depth),
+            None => open_w18(routed, id, path, depth),
+        };
+        let why = match opened {
             Ok((doc, summary, notes)) => {
+                OPENED_LAYERED.with(|s| s.borrow_mut().insert(id));
                 self.install_opened(doc, path);
                 let mut status = format!("Opened {}: {summary}", path.display());
-                if let Some(text) = report(format, &notes, path) {
+                if let Some(text) = report(routed_name(routed), &notes, path) {
                     status.push_str(&format!(
                         " ({} not mapped exactly; see the import report)",
                         plural(notes.len(), "thing", "things")
                     ));
                     self.dialogs
-                        .report_notice(&format!("{} import report", format.name()), &text);
+                        .report_notice(&format!("{} import report", routed_name(routed)), &text);
                 }
                 self.status = Some(status);
                 self.touch();
                 return Some(Ok(Effect::DocumentSet));
             }
             Err(why) => why,
+        };
+        // W18-H: a `.pxz` / `.pvr` has no flat image to fall back to.
+        let Some(format) = format else {
+            return Some(Err(ActionError::failed(
+                Action::Open,
+                format!("{}: {why}", path.display()),
+            )));
         };
         // The layers could not be read: the flat image (a `.kra`'s merged
         // image, a DXF drawn as one picture), saying why.
@@ -383,6 +523,10 @@ impl Editor {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "import_layered_w18_tests.rs"]
+mod w18_tests;
 
 #[cfg(test)]
 mod tests {

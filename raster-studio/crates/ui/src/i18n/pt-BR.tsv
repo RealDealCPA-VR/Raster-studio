@@ -2,6 +2,41 @@
 # the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
 # Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
 @name	Português (Brasil)
+Artboards	Pranchetas
+No Slices	Sem fatias
+All Slices	Todas as fatias
+User Slices	Fatias do usuário
+Put the file into ZIP	Colocar o arquivo em um ZIP
+16 Bits	16 bits
+8 Bits	8 bits
+AVIF…	AVIF…
+Blank preview image	Imagem de visualização em branco
+Byte Order	Ordem dos bytes
+Depth	Profundidade
+Duplicate Into…	Duplicar em…
+Guides from Layer	Guias a partir da camada
+Minify the file	Reduzir o arquivo
+Nothing under the pointer for this row	Nada sob o ponteiro para este item
+Make Work Path	Criar demarcador de trabalho
+RAW…	RAW…
+Remove Anchor Point	Remover ponto de ancoragem
+Remove Path	Remover demarcador
+Make Selection	Criar seleção
+Divide…	Dividir…
+Right-click on an anchor point of the path	Clique com o botão direito em um ponto de ancoragem do demarcador
+Right-click inside a path	Clique com o botão direito dentro de um demarcador
+Save PSD/PSB	Salvar PSD/PSB
+Save PSD/PSB…	Salvar PSD/PSB…
+Select or draw a path first	Selecione ou desenhe um demarcador primeiro
+Right-click on a text layer	Clique com o botão direito em uma camada de texto
+Right-click inside a slice	Clique com o botão direito dentro de uma fatia
+Divide Slices	Dividir fatias
+N equal parts	N partes iguais
+N pixels per part	N pixels por parte
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Corta a fatia em que você clicou com o botão direito, ou a tela quando não havia nenhuma, em uma grade de fatias.
+Tick Horizontally or Vertically	Marque Horizontalmente ou Verticalmente
+These settings make no cut: raise N or pick a smaller pixel count	Estas configurações não fazem nenhum corte: aumente N ou escolha menos pixels
  fps	 qps
  frames	 quadros
  ms	 ms
@@ -291,6 +326,10 @@ Columns	Colunas
 Columns and rows with gutters between them, inside optional margins, in pixels.	Colunas e linhas com medianizes entre elas, dentro de margens opcionais, em pixels.
 Combine Shapes	Combinar formas
 Commit (Enter)	Confirmar (Enter)
+Cancel (Esc)	Cancelar (Esc)
+All Documents	Todos os documentos
+Select Source	Selecionar origem
+Alt	Alt
 Commit Contents	Confirmar conteúdo
 Composite	Composto
 Condensed	Condensado
@@ -857,7 +896,6 @@ New Folder	Nova pasta
 New Guide	Nova guia
 New Guide Layout	Novo layout de guias
 New Guide Layout…	Novo layout de guias…
-New Guides from Shape	Novas guias a partir da forma
 New Guide…	Nova guia…
 New Layer	Nova camada
 New Layer Based Slice	Nova fatia baseada em camada
@@ -1494,6 +1532,7 @@ Trim	Aparar
 Trim Away	Aparar
 Trim…	Aparar…
 Tritone	Tritônico
+Turn into JPG	Converter em JPG
 Turn on Resample to change the pixel count.	Ative Reamostrar para mudar a quantidade de pixels.
 Twirl…	Redemoinho…
 Twist	Torcer
@@ -1587,6 +1626,7 @@ Written with the document's palette.	Gravado com a paleta do documento.
 Yellow	Amarelo
 Yellow / Blue	Amarelo / Azul
 Yellows	Amarelos
+ZIP for pixel data	ZIP para dados de pixels
 ZigZag…	Ziguezague…
 Zoom In	Aumentar zoom
 Zoom Out	Diminuir zoom
@@ -1621,3 +1661,17 @@ vector mask thumbnail — click to edit the vector mask	miniatura da máscara ve
 {path} is a {space} profile; an RGB document takes an RGB profile	{path} é um perfil {space}; um documento RGB usa um perfil RGB
 {path} is {len} bytes, larger than any colour profile	{path} tem {len} bytes, mais que qualquer perfil de cor
 {reason}; this one is {space}	{reason}; este é {space}
+a	a
+b	b
+Open a document to see its memory	Abra um documento para ver sua memória
+Image data	Dados da imagem
+{undo} undo / {redo} redo steps	{undo} desfazer / {redo} refazer
+Holds copied pixels	Contém pixels copiados
+{size} ({tiles} tiles)	{size} ({tiles} blocos)
+Empty	Vazio
+Purge Clipboard	Limpar área de transferência
+Purge Histories	Limpar históricos
+Purge All	Limpar tudo
+Make	Criar
+There is no path; draw one or select it in the Paths panel	Não há demarcador; desenhe um ou selecione-o no painel Demarcadores
+Reverse pages	Inverter páginas

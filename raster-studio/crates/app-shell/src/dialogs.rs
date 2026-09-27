@@ -45,11 +45,15 @@ pub const IMAGE_EXTENSIONS: &[&str] = &[
     // W13-D: gzip-compressed SVG; PDF / AI (one artboard per page); EMF /
     // WMF; EPS, PDN, Sketch, XD and FIG through their embedded previews.
     "svgz", "pdf", "ai", "eps", "wmf", "emf", "pdn", "sketch", "xd", "fig",
-    // W13-C: Adobe DNG, developed into a 16 Bits/Channel document. The
-    // vendor RAWs (CR2, CR3, NEF, ARW, RAF, ORF, RW2) are not offered: they
-    // are recognised and refused by name (`raster::codec::formats::raw`).
+    // W13-C: Adobe DNG, developed into a 16 Bits/Channel document.
     // W15-A: AVIF, decoded in the decode worker process.
     "dng", "avif",
+    // W18-D: the vendor RAWs with at least one storage this build decodes
+    // (`raster::codec::formats::raw`'s `vendor` module: CR2 lossless JPEG,
+    // ARW 2, and the uncompressed NEF / ARW / RAF / ORF / RW2 / PEF / SRW),
+    // developed into 16 Bits/Channel documents; their other encodings are
+    // refused by name. CR3 is not offered: no CR3 decodes.
+    "cr2", "nef", "nrw", "arw", "srf", "sr2", "raf", "orf", "rw2", "pef", "srw",
     // W16-L: JPEG 2000, VTF, FITS, DICOM, DXF (as vector layers); Clip Studio, zipped
     // Pixelmator Pro, CorelDRAW and InDesign through their embedded
     // previews. Affinity Photo and PaintTool SAI are recognised and
@@ -61,10 +65,17 @@ pub const IMAGE_EXTENSIONS: &[&str] = &[
 /// `raster::ImportFormat` has no `.heic` spelling: the codec finds a HEIC by
 /// its `ftyp` brand, whatever its name.
 pub const HEIF_EXTENSIONS: &[&str] = &["heic", "heif"];
+/// W18-H: PowerVR textures and Pixlr documents, which File > Open reads by
+/// content through the layered route (`resource_import::w16::layered`).
+/// Kept apart from [`IMAGE_EXTENSIONS`] because `raster::ImportFormat` has
+/// no spelling for either.
+pub const W18_EXTENSIONS: &[&str] = &["pvr", "pxz"];
 /// W16-M: video files File > Open opens as a document holding a video layer,
 /// and File > Place (the timeline's Add Media) adds as a video layer: the
 /// ISO-BMFF containers the decode worker reads (H.264 or 8-bit AV1 video).
-pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "m4v", "mov"];
+/// W18-H: and Matroska / WebM, whose AV1 or H.264 track the same worker
+/// demuxes (`mp4::video::mkv`).
+pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "m4v", "mov", "mkv", "webm"];
 /// W10-F: extension of Photoshop's large-document format, opened through the
 /// same layered road as a `.psd` (both start `8BPS`; the `psd` crate reads
 /// version 2).
@@ -92,6 +103,8 @@ pub fn open_file_filters() -> Vec<(&'static str, Vec<&'static str>)> {
     everything.extend_from_slice(IMAGE_EXTENSIONS);
     // W15-A: HEIC / HEIF, through the decode worker.
     everything.extend_from_slice(HEIF_EXTENSIONS);
+    // W18-H: PVR and PXZ, through the layered route.
+    everything.extend_from_slice(W18_EXTENSIONS);
     everything.push(PSD_EXTENSION);
     everything.push(PSB_EXTENSION);
     // W9-E: a Photoshop brush file opens into the Brushes panel.
@@ -112,6 +125,7 @@ pub fn open_file_filters() -> Vec<(&'static str, Vec<&'static str>)> {
     everything.extend_from_slice(VIDEO_EXTENSIONS);
     let mut images = IMAGE_EXTENSIONS.to_vec();
     images.extend_from_slice(HEIF_EXTENSIONS);
+    images.extend_from_slice(W18_EXTENSIONS);
     images.push(PSD_EXTENSION);
     images.push(PSB_EXTENSION);
     vec![
@@ -918,6 +932,105 @@ mod tests {
         assert!(text.contains("Nikon NEF") && text.contains("DNG"), "{text}");
     }
 
+    /// W18-D: a vendor RAW the picker now offers opens as a 16 Bits/Channel
+    /// document of the developed size and colours on both open roads (the
+    /// ones `a_dng_opens_as_a_sixteen_bit_document_and_a_vendor_raw_is_refused_by_name`
+    /// names): a Canon CR2 (lossless JPEG in slices) and a Sony ARW 2
+    /// (curve-compressed). A CR3 is refused naming its format.
+    #[test]
+    fn a_synthetic_cr2_and_arw_open_as_sixteen_bit_documents() {
+        use raster::codec::formats::raw::fixture::srgb16;
+        use raster::codec::formats::raw::vendor_fixture::{self as fx, Cr2, Shot};
+        let dir = tempfile::tempdir().unwrap();
+        // Two halves whose channel means are equal (so the ARW's grey-world
+        // balance keeps them) under a blown band (where a reader with no
+        // white tag finds the saturation level).
+        let halves = [[0.4f64, 0.2, 0.3], [0.2, 0.4, 0.3]];
+        let scene = |x: u32, y: u32| {
+            if !(3..37).contains(&y) {
+                [4.0; 3]
+            } else {
+                halves[usize::from(x >= 32)]
+            }
+        };
+        let cr2 = dir.path().join("shot.cr2");
+        let spec = Cr2::default();
+        std::fs::write(&cr2, fx::cr2(&spec, scene)).unwrap();
+        let curve = fx::sony_curve(fx::SONY_CURVE);
+        let arw = dir.path().join("shot.arw");
+        let shot = Shot::new(64, 40, 512, curve[4094] as u16);
+        std::fs::write(&arw, fx::arw(&shot, true, scene).0).unwrap();
+        let mut cr3_bytes = vec![0, 0, 0, 24];
+        cr3_bytes.extend_from_slice(b"ftypcrx \0\0\0\x01crx isom");
+        cr3_bytes.extend([0u8; 64]);
+        let cr3 = dir.path().join("shot.cr3");
+        std::fs::write(&cr3, &cr3_bytes).unwrap();
+        // CR2: the active area inside the masked border is 64x40.
+        let developed = |open: &mut crate::doc::OpenDocument, size: (u32, u32), road: &str| {
+            assert_eq!(open.document.meta.bit_depth, 16, "{road}");
+            assert_eq!(
+                (open.document.width(), open.document.height()),
+                size,
+                "{road}"
+            );
+            let rect = open.canvas_rect();
+            let px = open.composite(rect).unwrap();
+            for (half, colour) in halves.into_iter().enumerate() {
+                let x = size.0 / 4 + half as u32 * size.0 / 2;
+                let at = (((size.1 / 2) * size.0 + x) * 4) as usize;
+                for (c, want) in colour.into_iter().enumerate() {
+                    let want = i32::from((srgb16(want) >> 8) as u8);
+                    let got = i32::from(px[at + c]);
+                    assert!(
+                        (got - want).abs() <= 3,
+                        "{road}: half {half} channel {c}: {got} vs {want}"
+                    );
+                }
+            }
+        };
+
+        // File > Open: the picker answers, the job runs inline, the poll
+        // applies it.
+        let mut ed = crate::editor::Editor::with_state(
+            crate::prefs::AppPaths::rooted(dir.path().join("config")),
+            crate::prefs::Preferences::default(),
+            crate::recent::RecentFiles::new(),
+            Box::new(
+                ScriptedDialogs::new()
+                    .opening(&cr2)
+                    .opening(&arw)
+                    .opening(&cr3),
+            ),
+        );
+        ed.set_image_clipboard(Box::new(crate::clipboard::FakeClipboard::new()));
+        for (size, road) in [((64, 40), "File > Open CR2"), ((64, 40), "File > Open ARW")] {
+            ed.dispatch(crate::action::Action::Open).unwrap();
+            ed.poll_imports();
+            assert!(!ed.imports_pending(), "{road}: the job finished");
+            let open = ed.active_mut().expect("File > Open made a document");
+            developed(open, size, road);
+        }
+        let before = ed.documents().len();
+        ed.dispatch(crate::action::Action::Open).unwrap();
+        ed.poll_imports();
+        assert_eq!(ed.documents().len(), before, "a CR3 makes no document");
+        let Err(err) = crate::import::DecodedImage::decode_bytes(&cr3_bytes) else {
+            panic!("a CR3 does not decode");
+        };
+        let text = err.to_string();
+        assert!(text.contains("Canon CR3") && text.contains("DNG"), "{text}");
+
+        // The synchronous road (Open Recent, startup files, drops).
+        for (id, path, road) in [
+            (1400, &cr2, "open_image CR2"),
+            (1401, &arw, "open_image ARW"),
+        ] {
+            let mut open =
+                crate::doc::OpenDocument::open_image(crate::doc::DocumentId(id), path, 10).unwrap();
+            developed(&mut open, (64, 40), road);
+        }
+    }
+
     #[test]
     fn the_import_filter_covers_what_the_codec_reads() {
         // A filter that offers a format the decoder cannot read (or hides one
@@ -949,14 +1062,20 @@ mod tests {
                 ".{ext} not in Images"
             );
         }
-        // W13-C: nor are the vendor RAWs, which are refused by name; DNG is
-        // offered.
-        for ext in ["cr2", "cr3", "nef", "arw", "raf", "orf", "rw2"] {
+        // W13-C: DNG is offered. W18-D: so are the vendor RAWs that decode
+        // (`a_synthetic_cr2_and_arw_open_as_sixteen_bit_documents`); CR3,
+        // which never decodes, is not.
+        for ext in ["cr2", "nef", "arw", "raf", "orf", "rw2"] {
+            assert!(default_filter.contains(&ext), ".{ext} is not offered");
             assert!(
-                !default_filter.contains(&ext),
-                ".{ext} is offered but cannot open"
+                open_file_filters()[2].1.contains(&ext),
+                ".{ext} not in Images"
             );
         }
+        assert!(
+            !default_filter.contains(&"cr3"),
+            ".cr3 is offered but cannot open"
+        );
         assert!(default_filter.contains(&"dng") && open_file_filters()[2].1.contains(&"dng"));
         // W13-D: the new document formats are offered as images, and a
         // `.cube` (which File > Open routes to a Color Lookup layer) is

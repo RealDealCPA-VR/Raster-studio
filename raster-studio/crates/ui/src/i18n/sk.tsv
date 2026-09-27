@@ -1,0 +1,1677 @@
+# Raster Studio interface strings, sk. One row per line: the English source, a TAB,
+# the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
+# Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
+@name	Slovenčina
+Artboards	Kresliace plochy
+No Slices	Bez rezov
+All Slices	Všetky rezy
+User Slices	Používateľské rezy
+Put the file into ZIP	Vložiť súbor do ZIP
+Nothing under the pointer for this row	Pod ukazovateľom nie je nič pre túto položku
+Make Work Path	Vytvoriť pracovnú cestu
+Remove Anchor Point	Odstrániť kotviaci bod
+Remove Path	Odstrániť cestu
+Make Selection	Vytvoriť výber
+Divide…	Rozdeliť…
+Right-click on an anchor point of the path	Kliknite pravým tlačidlom na kotviaci bod cesty
+Right-click inside a path	Kliknite pravým tlačidlom dovnútra cesty
+Select or draw a path first	Najprv vyberte alebo nakreslite cestu
+Right-click on a text layer	Kliknite pravým tlačidlom na textovú vrstvu
+Right-click inside a slice	Kliknite pravým tlačidlom dovnútra rezu
+Divide Slices	Rozdeliť rezy
+N equal parts	N rovnakých častí
+N pixels per part	N pixelov na časť
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Rozdelí rez, na ktorý ste klikli pravým tlačidlom, alebo plátno, ak žiadny nebol, na mriežku rezov.
+Tick Horizontally or Vertically	Začiarknite Vodorovne alebo Zvisle
+These settings make no cut: raise N or pick a smaller pixel count	Tieto nastavenia nič nerozdelia: zvýšte N alebo zvoľte menší počet pixelov
+ fps	 sn./s
+ frames	 snímok
+ ms	 ms
+ px	 px
+0 bytes	0 bajtov
+16 Bits/Channel	16 bitov/kanál
+16 bit	16 bitov
+32 Bits/Channel	32 bitov/kanál
+3D	3D
+50% Grey	50 % sivá
+50% Threshold	50 % prah
+8 Bits/Channel	8 bitov/kanál
+8 bit	8 bitov
+90° Clockwise	90° v smere hodín
+90° Counter Clockwise	90° proti smeru hodín
+A CSV row has the wrong number of fields, at line	Riadok CSV má nesprávny počet polí, na riadku
+A blank canvas at any size	Prázdne plátno ľubovoľnej veľkosti
+A colour channel cannot be deleted	Farebný kanál nemožno odstrániť
+A layered raster editor	Rastrový editor s vrstvami
+A palette holds 2 to 256 colours	Paleta obsahuje 2 až 256 farieb
+A saved selection already has that name	Uložený výber s týmto názvom už existuje
+A saved selection: click to open Select > Load Selection, then choose it by name there	Uložený výber: kliknutím otvoríte Výber > Načítať výber a tam ho vyberte podľa názvu
+A slice needs a name	Rez musí mať názov
+AV1 (smaller, newer players)	AV1 (menší, novšie prehrávače)
+About Raster Studio	O aplikácii Raster Studio
+Absolute Colorimetric	Absolútny kolorimetrický
+Action sets	Sady akcií
+Actions	Akcia
+Adaptive (median cut)	Adaptívny (medián)
+Add "copy" to copied layers	Pridať „kópia“ ku kopírovaným vrstvám
+Add Artboard Above	Pridať kresliacu plochu hore
+Add Artboard Below	Pridať kresliacu plochu dole
+Add Artboard Left	Pridať kresliacu plochu vľavo
+Add Artboard Right	Pridať kresliacu plochu vpravo
+Add Filter Mask	Pridať masku filtrov
+Add Media	Pridať médiá
+Add Noise…	Pridať šum…
+Add a layer mask	Pridať masku vrstvy
+Add a smart filter mask	Pridať masku inteligentného filtra
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Umiestniť súbor obrázka alebo videa (Súbor > Umiestniť vložené); video sa stane vrstvou videa na pozícii prehrávacej hlavy
+Add an adjustment layer	Pridať vrstvu úprav
+Add another instance of this effect	Pridať ďalšiu inštanciu tohto efektu
+Add current colour	Pridať aktuálnu farbu
+Add export	Pridať export
+Add frame	Pridať snímku
+Add or remove room around the image. Pixels are not resampled.	Pridať alebo odobrať priestor okolo obrázka. Obrazové body sa neprevzorkujú.
+Add shortcut	Pridať klávesovú skratku
+Add to Selection	Pridať k výberu
+Adds one guide at a document coordinate, in pixels.	Pridá jednu vodiacu čiaru na súradnicu dokumentu, v obrazových bodoch.
+Adjustment	Úprava
+Adjustments	Úpravy
+Advanced	Rozšírené
+Again	Znovu
+Again with Copy	Znova s kópiou
+Aliased (pencil)	Bez vyhladenia (ceruzka)
+Align	Zarovnať
+Align the bottom edge to the canvas	Zarovnať dolný okraj k plátnu
+Align the left edge to the canvas	Zarovnať ľavý okraj k plátnu
+Align the right edge to the canvas	Zarovnať pravý okraj k plátnu
+Align the top edge to the canvas	Zarovnať horný okraj k plátnu
+Align with layer	Zarovnať s vrstvou
+All	Všetko
+All Caps	Veľké písmená
+All Caps shapes every lowercase letter as its capital; Small Caps shapes it as a capital at 70 % size. The stored text keeps the case you typed.	Veľké písmená tvaruje každé malé písmeno ako veľké; Kapitálky ho tvarujú ako veľké v 70 % veľkosti. Uložený text si zachová veľkosť písmen, ako ste ju napísali.
+All Layers	Všetok obsah
+Alpha	Alfa
+Already used by	Už používa
+Alt Tag	Značka Alt
+Amount	Miera
+An export needs at least one output	Export potrebuje aspoň jeden výstup
+An image or project from this computer	Obrázok alebo projekt z tohto počítača
+Angle	Uhol
+Angle (degrees)	Uhol (stupne)
+Angle jitter	Kolísanie uhla
+Animation	Animácia
+Another slice already has this name	Iný rez už má tento názov
+Appearance	Vzhľad
+Applied	Použité
+Apply	Použiť
+Apply Guides	Použiť vodiace čiary
+Apply Image	Aplikuj obrázok
+Apply Image…	Aplikuj obrázok…
+Apply Mask	Použiť masku
+Apply Style	Použiť štýl
+Apply Style 1	Použiť štýl 1
+Apply Style Preset…	Použiť predvoľbu štýlu…
+Apply the next comp	Použiť ďalšiu kompozíciu
+Apply the previous comp	Použiť predchádzajúcu kompozíciu
+Apply this mask	Použiť túto masku
+Approximate. The composited result is what the canvas shows.	Približné. Zložený výsledok je to, čo zobrazuje plátno.
+Arbitrary…	Ľubovoľne…
+Arc	Oblúk
+Arc Lower	Spodný oblúk
+Arc Upper	Vrchný oblúk
+Arch	Klenba
+Arrange	Usporiadať
+Artboard	Kresliaca plocha
+Artboard from Layers	Kresliaca plocha z vrstiev
+Artboards in one document	Kresliace plochy v jednom dokumente
+Artboards to Files…	Kresliace plochy do súborov…
+Assign Profile	Priradiť profil
+Assigned {name}: the pixel numbers are unchanged, so the colours look different	Priradený profil {name}: hodnoty obrazových bodov sa nezmenili, takže farby vyzerajú inak
+Author	Autor
+Auto Color	Auto Farby
+Auto Contrast	Auto Kontrast
+Auto Tone	Auto Tón
+Auto leading	Automatické riadkovanie
+Auto-Align Layers…	Automaticky zarovnať vrstvy…
+Auto-Blend Layers…	Automaticky prelínať vrstvy…
+Automate	Automatizácia
+Autosaves of never-saved documents go here; empty uses the default	Sem sa ukladajú automatické zálohy nikdy neuložených dokumentov; prázdne použije predvolené umiestnenie
+Average	Priemer
+BMP…	BMP…
+Back to the colour this opened on	Späť na farbu, s ktorou sa toto otvorilo
+Background — double-click for the picker	Pozadie — dvojitým kliknutím otvoríte výber farby
+Based On	Na základe
+Baseline shift	Posun účiaria
+Baseline to baseline. Auto leading follows the type size.	Od základnej čiary k základnej čiare. Automatické riadkovanie sleduje veľkosť písma.
+Batch	Dávka
+Batch…	Dávka…
+Bend	Ohyb
+Bevel	Úkos
+Bevel & Emboss	Úkos a reliéf
+Bevel & Emboss…	Úkos a reliéf…
+Bind a text replacement variable to a text layer, or a visibility variable to any layer.	Previazať premennú nahradenia textu s textovou vrstvou alebo premennú viditeľnosti s ľubovoľnou vrstvou.
+Bitmap	Bitová mapa
+Bitmap…	Bitová mapa…
+Black	Čierna
+Black & White	Čierna & Biela
+Black & White…	Čierna & Biela…
+Black to Transparent	Čierna do priehľadnej
+Black to White	Čierna do bielej
+Black to white through the inks	Čierna do bielej cez atramenty
+Blacks	Čierne
+Blend If	Prelínať keď
+Blend Mode: Color	Režim prelínania: Farba
+Blend Mode: Color Burn	Režim prelínania: Stmaviť farby
+Blend Mode: Color Dodge	Režim prelínania: Zosvetliť farby
+Blend Mode: Darken	Režim prelínania: Stmaviť
+Blend Mode: Difference	Režim prelínania: Rozdiel
+Blend Mode: Dissolve	Režim prelínania: Rozpustiť
+Blend Mode: Exclusion	Režim prelínania: Vylúčiť
+Blend Mode: Hard Light	Režim prelínania: Tvrdé svetlo
+Blend Mode: Hard Mix	Režim prelínania: Tvrdé miešanie
+Blend Mode: Hue	Režim prelínania: Odtieň
+Blend Mode: Lighten	Režim prelínania: Zosvetliť
+Blend Mode: Linear Burn	Režim prelínania: Lineárne stmavenie
+Blend Mode: Linear Dodge (Add)	Režim prelínania: Lineárne zosvetlenie (pridať)
+Blend Mode: Linear Light	Režim prelínania: Lineárne svetlo
+Blend Mode: Luminosity	Režim prelínania: Svietivosť
+Blend Mode: Multiply	Režim prelínania: Násobiť
+Blend Mode: Normal	Režim prelínania: Normálny
+Blend Mode: Overlay	Režim prelínania: Prekryť
+Blend Mode: Pin Light	Režim prelínania: Bodové svetlo
+Blend Mode: Saturation	Režim prelínania: Sýtosť
+Blend Mode: Screen	Režim prelínania: Závoj
+Blend Mode: Soft Light	Režim prelínania: Mäkké svetlo
+Blend Mode: Vivid Light	Režim prelínania: Jasné svetlo
+Blending	Prelínanie
+Blending Options	Možnosti prelínania
+Blending Options…	Možnosti prelínania…
+Blending options	Možnosti prelínania
+Blends a source document, layer or channel into the active layer as one step.	Prelína zdrojový dokument, vrstvu alebo kanál do aktívnej vrstvy ako jeden krok.
+Blends one channel of each of two sources into a new channel, a selection or a new document.	Prelína po jednom kanáli z dvoch zdrojov do nového kanála, výberu alebo nového dokumentu.
+Blue	Modrá
+Blues	Modré
+Blur	Rozostrenie
+Blur Gallery	Galéria rozostrenia
+Blur More	Rozostriť viac
+Bold	Tučné
+Border Selection	Okraj výberu
+Border…	Okraj…
+Both axes	Obe osi
+Bottom	Dole
+Bottom Edges	Dolné okraje
+Bottom Left	Vľavo dole
+Bottom Right	Vpravo dole
+Bottom Right Pixel Color	Farba obrazového bodu vpravo dole
+Bottom left	Vľavo dole
+Bottom right	Vpravo dole
+Box Blur…	Pravouhlé rozostrenie…
+Box height	Výška rámčeka
+Brightness	Jas
+Brightness jitter	Kolísanie jasu
+Brightness/Contrast	Jas/Kontrast
+Brightness/Contrast…	Jas/Kontrast…
+Bring Forward	Presunúť dopredu
+Bring to Front	Presunúť na začiatok
+Brush Editor	Editor štetca
+Brush: Background	Štetec: pozadie
+Brush: Foreground	Štetec: popredie
+Brushes	Štetce
+Bulge	Vydutie
+Butt	Rovné
+CMYK Color	Farba CMYK
+Calculations	Výpočty
+Calculations…	Výpočty…
+Camera Raw…	Camera Raw…
+Canvas Size	Veľkosť plátna
+Canvas Size…	Veľkosť plátna…
+Canvas extension	Rozšírenie plátna
+Caps	Zakončenie
+Carries the XMP; the source's EXIF goes into JPEG only	Obsahuje XMP; EXIF zdroja ide iba do JPEG
+Cell size (pixels)	Veľkosť bunky (obr. body)
+Center	Na stred
+Center horizontally on the canvas	Vodorovne vycentrovať na plátne
+Center vertically on the canvas	Zvislo vycentrovať na plátne
+Centimeters	Centimeter
+Centre	Stred
+Centre the view on this note	Vycentrovať zobrazenie na túto poznámku
+Change Bit Depth	Zmeniť bitovú hĺbku
+Change Colour Mode	Zmeniť farebný režim
+Change Layer Properties	Zmeniť vlastnosti vrstvy
+Change how many pixels the document has, or how large it prints.	Zmeňte, koľko obrazových bodov má dokument alebo aký veľký sa vytlačí.
+Channel	Kanál
+Channel Mixer	Miešanie kanálov
+Channel Mixer…	Miešanie kanálov…
+Channel thumbnail	Miniatúra kanála
+Channels	Kanály
+Character	Znak
+Character Style	Štýl znaku
+Character Styles	Štýly znakov
+Checkerboard	Šachovnica
+Choose 2 to 256 colours	Vyberte 2 až 256 farieb
+Choose a colour profile	Vyberte farebný profil
+Choose a destination folder	Vyberte cieľový priečinok
+Choose a source folder	Vyberte zdrojový priečinok
+Choose at least one page to open	Vyberte aspoň jednu stranu na otvorenie
+Choose at least one side to trim	Vyberte aspoň jednu stranu na orezanie
+Choose the Action to play	Vyberte akciu na prehranie
+Choose the open grayscale document each channel of the new RGB document comes from.	Vyberte otvorený dokument v odtieňoch sivej, z ktorého pochádza každý kanál nového dokumentu RGB.
+Choose the pages to open, their resolution and how they open.	Vyberte strany na otvorenie, ich rozlíšenie a spôsob otvorenia.
+Choose the source and the destination folders.	Vyberte zdrojový a cieľový priečinok.
+Choose…	Vybrať…
+Clear	Vyčistiť
+Clear All	Vymazať všetko
+Clear Guides	Odstrániť vodítka
+Clear History	Vymazať históriu
+Clear Layer Style	Vymazať štýl vrstvy
+Clear Slices	Vymazať rezy
+Clear Strokes	Vymazať ťahy
+Clear existing guides	Vymazať existujúce vodiace čiary
+Clear the {noun} from the active text layer	Odstrániť {noun} z aktívnej textovej vrstvy
+Cleared {n} slice(s)	Vymazané rezy: {n}
+Click an item in the panel first	Najprv kliknite na položku v paneli
+Click anywhere to sample a colour	Kliknutím kamkoľvek nasnímate farbu
+Click anywhere to sample a colour, or press Escape.	Kliknutím kamkoľvek nasnímate farbu, alebo stlačte Esc.
+Click the graph to add a point, drag a point to bend the curve, drag it off the graph to remove it	Kliknutím do grafu pridáte bod, ťahaním bodu ohnete krivku, ťahaním mimo graf bod odstránite
+Click the preview to sample a colour from it	Kliknutím do náhľadu z neho nasnímate farbu
+Click the preview to sample the colour to replace	Kliknutím do náhľadu nasnímate farbu na nahradenie
+Click the ramp to edit its stops.	Kliknutím na prechod upravíte jeho zarážky.
+Clip to layer below	Orezať podľa vrstvy pod
+Clipboard	Schránka
+Clipping	Orezová maska
+Close	Zatvoriť
+Close All	Zavrieť všetko
+Close Alpha Channel	Zavrieť kanál alfa
+Close Others	Zavrieť ostatné
+Close panel	Zavrieť panel
+Clouds	Mraky
+Codec	Kodek
+Color	Farba
+Color Balance	Vyváženie farieb
+Color Balance…	Vyváženie farieb…
+Color Burn	Stmaviť farby
+Color Dodge	Zosvetliť farby
+Color Dynamics	Dynamika farby
+Color Halftone…	Farebné poltónovanie…
+Color Intensity	Intenzita farby
+Color Label	Farebný štítok
+Color Lookup	Vyhľadávanie farieb
+Color Lookup Tables…	Tabuľky vyhľadania farby…
+Color Lookup…	Vyhľadávanie farieb…
+Color Overlay	Prekrytie farbou
+Color Overlay…	Prekrytie farbou…
+Color Picker	Výber farby
+Color Range	Rozsah farieb
+Color Range…	Rozsah farieb…
+Color fringe cleanup: pulls the boundary pixels' color toward the nearby interior ink — a separate edit from mask refinement.	Čistenie farebných lemov: pritiahne farbu okrajových obrazových bodov k blízkej vnútornej farbe — samostatná úprava, oddelená od spresnenia masky.
+Color to Alpha…	Farba do alfy…
+Colors	Farby
+Colour	Farba
+Colour varies once per stroke.	Farba sa mení raz za ťah.
+Colours	Farby
+Colours must be 1 to 64, the tolerance above 0 and the corner length at least 1	Farieb musí byť 1 až 64, tolerancia nad 0 a dĺžka rohu aspoň 1
+Columns	Stĺpce
+Columns and rows with gutters between them, inside optional margins, in pixels.	Stĺpce a riadky s medzerami medzi nimi, vnútri voliteľných okrajov, v obrazových bodoch.
+Combine Shapes	Kombinovať tvary
+Commit (Enter)	Potvrdiť (Enter)
+Commit Contents	Potvrdiť obsah
+Composite	Zložené
+Condensed	Úzke
+Cone	Kužeľ
+Constant	Konštantné
+Constrain proportions	Zachovať proporcie
+Content-Aware	Podľa obsahu
+Content-Aware Scale	Zmena veľkosti podľa obsahu
+Contour	Kontúra
+Contract Selection	Zúžiť výber
+Contract by	Zúžiť o
+Contract…	Zúžiť…
+Contrast	Kontrast
+Conversion Options	Možnosti prevodu
+Convert Formats	Previesť formáty
+Convert Formats…	Previesť formáty…
+Convert for Smart Filters	Previesť pre inteligentné filtre
+Convert to Layers	Previesť na vrstvy
+Convert to Linked…	Previesť na prepojený…
+Convert to Paragraph Text	Previesť na odstavcový text
+Convert to Point Text	Previesť na bodový text
+Convert to Profile	Previesť do profilu
+Convert to Profile works on 8- and 16-bit documents	Previesť do profilu funguje v 8-bitových a 16-bitových dokumentoch
+Convert to Profile…	Previesť do profilu…
+Convert to Shape	Previesť na tvar
+Convert to Smart Object	Previesť na Smart Object
+Converted to {name} ({intent}): the numbers changed so the colours look the same	Prevedené do {name} ({intent}): hodnoty sa zmenili, aby farby vyzerali rovnako
+Cool	Studená
+Copper	Meď
+Copy	Kopírovať
+Copy Layer Style	Kopírovať štýl vrstvy
+Copy Merged	Kopírovať z celku
+Copyright Notice	Upozornenie na autorské práva
+Corner length	Dĺžka rohu
+Corner radius	Polomer rohu
+Corner radius applies to rectangles; this path has no corners to round	Polomer rohu platí pre obdĺžniky; táto cesta nemá žiadne rohy na zaoblenie
+Corners	Rohy
+Count jitter	Kolísanie počtu
+Create Clipping Mask	Vytvoriť orezovú masku
+Create Layer	Vytvoriť vrstvu
+Create Layers	Vytvoriť vrstvy
+Crop	Orezať
+Crop and Straighten Photos	Orezať a narovnať fotografie
+Crops the canvas to the content, judged by the basis below.	Oreže plátno podľa obsahu, posudzovaného podľa nižšie uvedeného základu.
+Crystallize…	Kryštalizácia…
+Current Layer	Aktuálna vrstva
+Current Path	Aktuálna cesta
+Curve tolerance	Tolerancia krivky
+Curves	Krivky
+Curves…	Krivky…
+Custom	Vlastné
+Custom Brush	Vlastný štetec
+Custom: with the Move tool, drag the 16 mesh handles on the canvas	Vlastné: nástrojom Presunutie ťahajte 16 úchytov siete na plátne
+Custom…	Vlastné…
+Cut	Vystrihnúť
+Cyan	Azúrová
+Cyan / Red	Azúrová / červená
+Cyans	Azúrové
+DDS…	DDS…
+DXF…	DXF…
+Dark	Tmavý
+Dark Blue	Tmavomodrá
+Dark Grey	Tmavosivá
+Darken	Stmaviť
+Darker Color	Tmavšia farba
+Dash	Čiarkovaná
+Data Set	Množina údajov
+Data Sets	Množiny údajov
+Data Sets…	Množiny údajov…
+Default	Predvolené
+Default colours  (D)	Predvolené farby  (D)
+Default colours (D)	Predvolené farby (D)
+Define	Definovať
+Define Brush Preset…	Definovať predvoľbu štetca…
+Define Custom Shape…	Definovať vlastný tvar…
+Define New	Definovať nový
+Define Pattern…	Definovať vzorku…
+Define…	Definovať…
+Delete	Vymazať
+Delete Filter Mask	Zmazať masku filtrov
+Delete Layer	Zmazať vrstvu
+Delete Mask	Odstrániť masku
+Delete Vector Mask	Zmazať vektorovú masku
+Delete action	Odstrániť akciu
+Delete channel	Odstrániť kanál
+Delete frame	Odstrániť snímku
+Delete path	Odstrániť cestu
+Delete selected layers	Odstrániť vybraté vrstvy
+Delete set and its actions	Odstrániť sadu a jej akcie
+Delete stop	Odstrániť zarážku
+Delete the applied comp	Odstrániť použitú kompozíciu
+Delete the selected keyframe	Odstrániť vybratú kľúčovú snímku
+Delete the selected tool preset	Odstrániť vybratú predvoľbu nástroja
+Delete the selected {noun}	Odstrániť vybratý {noun}
+Delete the smart filter mask	Odstrániť masku inteligentného filtra
+Delete this note	Odstrániť túto poznámku
+Delete this smart filter	Odstrániť tento inteligentný filter
+Delete this spot channel	Odstrániť tento kanál priamej farby
+Density	Hustota
+Dents…	Jamky…
+Desaturate	Znížiť sýtosť
+Description	Popis
+Deselect	Odznačiť
+Deselect Layers	Zrušiť výber vrstiev
+Despeckle	Vyhladiť
+Destination	Cieľ
+Destination Space	Cieľový priestor
+Detail	Detail
+Detail scales	Mierky detailu
+Diamond	Diamant
+Difference	Rozdiel
+Difference Clouds	Mraky: Rozdiel
+Diffuse…	Difúzia…
+Diffusion	Rozptyl
+Diffusion Dither	Rozptýlený rozklad
+Disable / Enable Filter Mask	Vypnúť / zapnúť masku filtra
+Disable / Enable Mask	Vypnúť / zapnúť masku
+Disable / Enable Vector Mask	Vypnúť / zapnúť vektorovú masku
+Disable Mask	Vypnúť masku
+Disable Vector Mask	Vypnúť vektorovú masku
+Displace…	Pokriviť…
+Dissolve	Rozpustiť
+Distance	Vzdialenosť
+Distort	Skresliť
+Distribute	Rozmiestniť
+Dither	Rozklad
+Dither…	Rozklad…
+Divide	Rozdeliť
+Dock this panel here	Ukotviť tento panel sem
+Document	Dokument
+Document Bounds	Okraj dokumentu
+Document Info	Informácie o dokumente
+Document Title	Názov dokumentu
+Document size	Veľkosť dokumentu
+Double-click to edit in Layer Style; drag to the trash to delete	Dvojitým kliknutím upravíte v Štýle vrstvy; presunutím do koša odstránite
+Double-click to edit this filter's settings	Dvojitým kliknutím upravíte nastavenia tohto filtra
+Double-click to rename	Dvojitým kliknutím premenujete
+Drag a line with the Ruler first	Najprv natiahnite čiaru pravítkom
+Drag to zoom the view	Ťahaním zmeníte zväčšenie zobrazenia
+Drop Shadow	Vrhnutý tieň
+Drop Shadow…	Vrhnutý tieň…
+Duotone	Duplex
+Duotone Options	Možnosti duplexu
+Duotone…	Duplex…
+Duplicate	Duplikovať
+Duplicate Layer	Duplikovať vrstvu
+Duplicate Layer…	Duplikovať vrstvu…
+Duplicate frame	Duplikovať snímku
+Dust & Scratches…	Prach a škrabance…
+EMF…	EMF…
+EXIF and XMP writing is not implemented — only ICC is embedded	Zápis EXIF a XMP nie je implementovaný — vkladá sa iba ICC
+EXR…	EXR…
+Ease In	Pozvoľný nábeh
+Ease Out	Pozvoľný koniec
+Edge Glow	Žiariace hrany
+Edge refinement: feather, shift, smooth, and contrast over the mask's existing coverage — not subject recognition.	Spresnenie hrán: prelínanie, posun, vyhladenie a kontrast nad existujúcim pokrytím masky — žiadne rozpoznávanie objektu.
+Edges	Hrany
+Edit	Upraviť
+Edit Adjustment	Upraviť úpravu
+Edit Adjustment…	Upraviť úpravu…
+Edit Alpha Channel	Upraviť kanál alfa
+Edit Contents…	Upraviť obsah…
+Edit Document Records	Upraviť záznamy dokumentu
+Edit Fill	Upraviť výplň
+Edit Filter Mask	Upraviť masku filtra
+Edit Generator	Upraviť generátor
+Edit Group	Upraviť skupinu
+Edit Guides	Upraviť vodiace čiary
+Edit Raster	Upraviť raster
+Edit Saved Selection	Upraviť uložený výber
+Edit Shape	Upraviť tvar
+Edit Slices	Upraviť rezy
+Edit Smart object	Upraviť inteligentný objekt
+Edit Text	Upraviť text
+Edit Timeline	Upraviť časovú os
+Edit brush…	Upraviť štetec…
+Edit fill	Upraviť výplň
+Edit gradient stops — click to open the editor	Upraviť zarážky prechodu — kliknutím otvoríte editor
+Edit in Quick Mask Mode	Upraviť v režime rýchlej masky
+Edit this ramp	Upraviť tento prechod
+Effects	Efekty
+Effects apply to the whole layer and undo as one step.	Efekty platia pre celú vrstvu a vracajú sa ako jeden krok.
+Embed EXIF and XMP	Vložiť EXIF a XMP
+Embed Linked	Vložiť prepojené
+Embed colour profile	Vložiť farebný profil
+Embedded source	Vložený zdroj
+Emboss…	Reliéf…
+Enable / disable the smart filter mask	Zapnúť / vypnúť masku inteligentného filtra
+Enable Mask	Zapnúť masku
+Enable Vector Mask	Zapnúť vektorovú masku
+Enable at least one export	Zapnite aspoň jeden export
+Enabled	Zapnuté
+Enlarge smaller images	Zväčšiť menšie obrázky
+Enter a colour like #3366CC	Zadajte farbu ako #3366CC
+Entropy	Entropia
+Equalize	Vyrovnať
+Essentials	Základy
+Every enabled row is written when you export.	Každý zapnutý riadok sa zapíše pri exporte.
+Every image in the source folder is fitted into the box and written to the destination folder in its own format.	Každý obrázok v zdrojovom priečinku sa prispôsobí rámčeku a zapíše do cieľového priečinka vo svojom vlastnom formáte.
+Every parameter is at its neutral value — there is nothing to clean	Všetky parametre sú na neutrálnej hodnote — nie je čo čistiť
+Every parameter is at its neutral value — there is nothing to refine	Všetky parametre sú na neutrálnej hodnote — nie je čo spresňovať
+Every variable needs a name	Každá premenná potrebuje názov
+Exact	Presne
+Exclude Overlapping Shapes	Vylúčiť prekrývajúce sa tvary
+Exclusion	Vylúčiť
+Expand Selection	Rozšíriť výber
+Expand by	Rozšíriť o
+Expand the dock	Rozbaliť dok
+Expanded	Široké
+Expand…	Rozšíriť…
+Export	Exportovať
+Export As	Exportovať ako
+Export Color Lookup	Exportovať vyhľadanie farby
+Export Contents…	Exportovať obsah…
+Export Diagnostics…	Exportovať diagnostiku…
+Export Layers…	Exportuj vrstvy…
+Export PDF	Exportovať PDF
+Export as .ABR…	Exportovať ako .ABR…
+Export as .ACO…	Exportovať ako .ACO…
+Export as .ASL…	Exportovať ako .ASL…
+Export set as .atn	Exportovať sadu ako .atn
+Export…	Exportovať…
+Exposure	Expozícia
+Exposure…	Expozícia…
+Extra Bold	Extra tučné
+Extra Condensed	Extra úzke
+Extra Expanded	Extra široké
+Extra Light	Extra tenké
+Extras	Doplnky
+Extrude…	Extrudácia…
+Eyedropper	Kvapkadlo
+Face	Rez písma
+Facet	Fazeta
+Fade	Zoslabiť
+Fade…	Zoslabiť…
+Family	Rodina
+Feather	Zmäkčiť okraj
+Feather Selection	Prelínať výber
+Feather radius	Polomer prelínania
+Feather…	Zmäkčiť okraj…
+Fibers…	Vlákna…
+Field Blur…	Rozostrenie poľa…
+File	Súbor
+File Info	Info o súbore
+File Info…	Info o súbore…
+File name	Názov súboru
+Files that fail are listed in batch-errors.txt in the destination.	Súbory, ktoré zlyhajú, sú uvedené v batch-errors.txt v cieli.
+Fill	Vyplniť
+Fill Filter Mask	Vyplniť masku filtra
+Fill Layer	Vrstva výplne
+Fill Mask	Vyplniť masku
+Fill Screen	Vyplniť obrazovku
+Fill in File Info, or open a file that has EXIF, to embed metadata	Vyplňte informácie o súbore alebo otvorte súbor s EXIF, aby ste vložili metadáta
+Fill path with the foreground colour, on a new shape layer	Vyplniť cestu farbou popredia na novej vrstve tvaru
+Fill type	Typ výplne
+Fills the active selection with the chosen contents.	Vyplní aktívny výber zvoleným obsahom.
+Fill…	Vyplniť…
+Filter	Filter
+Filter Gallery	Galéria filtrov
+Filter Gallery…	Galéria filtrov…
+Find Edges	Nájsť hrany
+First line	Prvý riadok
+Fish	Ryba
+Fisheye	Rybie oko
+Fit The Area	Prispôsobiť obrazovke
+Fit on Screen	Prispôsobiť na obrazovku
+Fit the whole image in the window	Prispôsobiť celý obrázok do okna
+Fixed height	Pevná výška
+Flag	Vlajka
+Flame…	Plameň…
+Flat Angled 40	Plochý šikmý 40
+Flatten Image	Do jednej vrstvy
+Flip Canvas Horizontal	Prevrátiť plátno vodorovne
+Flip Canvas Vertical	Prevrátiť plátno zvislo
+Flip Horizontal	Prevrátiť vodorovne
+Flip Vertical	Prevrátiť zvislo
+Flip View Horizontal	Prevrátiť zobrazenie vodorovne
+Flip View Vertical	Prevrátiť zobrazenie zvislo
+Flow jitter	Kolísanie toku
+Folders	Priečinky
+Font: 	Písmo: 
+Foreground strokes mark what to keep, background strokes what to drop; Preview shows the cut.	Ťahy popredia označujú, čo zachovať, ťahy pozadia, čo zahodiť; Náhľad ukazuje rez.
+Foreground — double-click for the picker	Popredie — dvojitým kliknutím otvoríte výber farby
+Foreground/background jitter	Kolísanie popredia/pozadia
+Format	Formát
+Fourier	Fourier
+Fourier Transform	Fourierova transformácia
+Fragment	Fragment
+Frame	Rámček
+Frames	Snímky
+Free Transform	Voľná transformácia
+Free Transform a Copy	Voľná transformácia kópie
+From Transparency	Podľa priehľadnosti
+Fullscreen	Celá obrazovka
+Fuzziness	Rozmazanosť
+GIF…	GIF…
+Gamma	Gama
+Gamut Warning	Upozornenie na gamut
+Gaussian	Gaussovská
+Gaussian Blur…	Gaussovské rozostrenie…
+Generate Mockups	Generovať makety
+Generate Mockups…	Generovať makety…
+Give the brush a name	Pomenujte štetec
+Give the export a file name	Zadajte názov súboru exportu
+Glass Menus	Sklenené ponuky
+Global light	Globálne svetlo
+Glyphs	Glyfy
+Gradient	Prechod
+Gradient Editor	Editor prechodu
+Gradient Map	Gradientový prechod
+Gradient Map…	Gradientový prechod…
+Gradient Overlay	Prekrytie prechodom
+Gradient Overlay…	Prekrytie prechodom…
+Gradient…	Prechod…
+Gray	Šedá
+Grayscale	Odtiene sivej
+Green	Zelená
+Greens	Zelené
+Grid	Mriežka
+Grid points	Body mriežky
+Group	Skupina
+Group Layers	Pridať do zložky
+Grow	Zväčšiť výber
+Guide Guy	Guide Guy
+Guides	Vodítka
+Gutter	Medzera
+H	V
+H.264 (plays everywhere)	H.264 (prehrá sa všade)
+HDR Toning	Tónovanie HDR
+HDR Toning…	Tónovanie HDR…
+HSB/HSL…	HSB/HSL…
+Halftone Screen	Poltónový raster
+Hard Light	Tvrdé svetlo
+Hard Mix	Tvrdé miešanie
+Hard Round 24	Tvrdý okrúhly 24
+Hard Round 4	Tvrdý okrúhly 4
+Hard edges, no blending. Pixel art only — it aliases on downscale.	Tvrdé hrany, bez prelínania. Iba pre pixel art — pri zmenšení vznikajú zuby.
+Harder Brush	Tvrdší štetec
+Height	Výška
+Height to 110%	Výška na 110 %
+Height to 125%	Výška na 125 %
+Height to 80%	Výška na 80 %
+Height to 90%	Výška na 90 %
+Help	Pomoc
+Hide All	Skryť všetko
+Hide Layers	Skryť vrstvy
+Hide Selection	Skryť výber
+Hide the source layer	Skryť zdrojovú vrstvu
+High Contrast	Vysoký kontrast
+High Pass…	Výšky…
+Highlights	Odlesky
+Histogram	Histogram
+Histories	Histórie
+History	História
+Hold	Podržať
+Horizontal Centers	Vodorovné stredy
+Horizontal Distortion	Vodorovná deformácia
+Horizontal center guide	Vodiaca čiara vodorovného stredu
+Horizontal scale, in percent: widens or narrows the glyphs and their spacing	Vodorovná mierka v percentách: rozšíri alebo zúži glyfy a ich rozostupy
+Horizontally	vodorovne
+Hue	Odtieň
+Hue jitter	Kolísanie odtieňa
+Hue/Saturation	Odtieň/Sýtosť
+Hue/Saturation…	Odtieň/Sýtosť…
+ICC profile	Profil ICC
+ICO…	ICO…
+Image	Obraz
+Image Options	Možnosti obrázka
+Image Rotation	Otočenie obrázka
+Image Size	Veľkosť obrazu
+Image Size…	Veľkosť obrazu…
+Image size	Veľkosť obrázka
+Import CSV…	Importovať CSV…
+Import PDF	Importovať PDF
+Import a CSV of data sets first	Najprv importujte CSV s množinami údajov
+Import a CSV: the first row names the variables, every further row is one data set.	Importujte CSV: prvý riadok pomenúva premenné, každý ďalší riadok je jedna množina údajov.
+In use	Používa sa
+Inches	Palce
+Indexed Color	Indexované farby
+Indexed Color…	Indexované farby…
+Inflate	Nafúknutie
+Info	Info
+Ink	Atrament
+Ink Color	Farba atramentu
+Ink printed at 0, 25, 50, 75 and 100% tint	Atrament tlačený v 0, 25, 50, 75 a 100 % tóne
+Inner Glow	Vnútorná žiara
+Inner Glow…	Vnútorná žiara…
+Inner Radius	Vnútorný polomer
+Inner Shadow	Vnútorný tieň
+Inner Shadow…	Vnútorný tieň…
+Inside	Vnútri
+Intent	Spôsob prevodu
+Intersect Shape Areas	Prienik oblastí tvarov
+Intersect with Selection	Prienik s výberom
+Inverse	Invertovať
+Inverse Fourier Transform	Inverzná Fourierova transformácia
+Invert	Invertovať
+Invert coverage	Invertovať pokrytie
+Invert has no parameters	Negatív nemá žiadne parametre
+Iris Blur…	Rozostrenie clony…
+Italic	Kurzíva
+JPEG carries the XMP and the source's EXIF	JPEG obsahuje XMP a EXIF zdroja
+JPG…	JPG…
+Justify	Do bloku
+Kaleidoscope…	Kaleidoskop…
+Keep as it was	Ponechať, ako bolo
+Kept when a comp is first applied	Zachová sa pri prvom použití kompozície
+Kerning	Vyrovnanie párov
+Keyboard Shortcut Sheet…	Prehľad klávesových skratiek…
+Keyboard Shortcuts…	Klávesové skratky…
+Keywords	Kľúčové slová
+Kind	Druh
+Kurtosis	Špicatosť
+Lab Color	Farba Lab
+Landscape	Na šírku
+Language	Jazyk
+Large	Veľký
+Last Document State	Posledný stav dokumentu
+Last Filter	Posledný Filter
+Last line	Posledný riadok
+Layer	Vrstva
+Layer Comps	Kompozícia
+Layer Edges	Okraje vrstiev
+Layer Mask	Maska vrstvy
+Layer Properties	Vlastnosti vrstvy
+Layer Style	Štýl vrstvy
+Layer knocks out drop shadow	Vrstva vykrojí vrhnutý tieň
+Layer via Copy	Vrstva kopírovaním
+Layer via Cut	Vrstva vystrihnutím
+Layers	Vrstvy
+Layers panel options	Možnosti panela Vrstvy
+Left	Vľavo
+Left Edges	Ľavé okraje
+Left indent	Zarážka zľava
+Length	Dĺžka
+Lens Blur…	Rozostrenie šošovkou…
+Lens Correction…	Korekcia šošovky objektívu…
+Lens Flare…	Odlesk objektívu…
+Level	Úroveň
+Levels	Úrovne
+Levels…	Úrovne…
+Light	Tenké
+Light Grey	Svetlosivá
+Lighten	Zosvetliť
+Lighter Color	Svetlejšia farba
+Lighting Effects…	Svetelné efekty…
+Lightness	Svetlosť
+Line	Čiara
+Linear	Lineárny
+Linear Burn	Lineárne stmaviť
+Linear Dodge (Add)	Lineárne zosvetlenie (pridať)
+Linear Light	Lineárne svetlo
+Link / Unlink Mask	Prepojiť / odpojiť masku
+Link Layers	Prepojiť vrstvy
+Link selected layers	Prepojiť vybraté vrstvy
+Link with layer	Prepojiť s vrstvou
+Linked	Prepojené
+Linked file	Prepojený súbor
+Liquify…	Skvapalniť…
+Live Shape	Živé tvary
+Live preview	Živý náhľad
+Live preview is off.	Živý náhľad je vypnutý.
+Load	Načítať
+Load .atn	Načítať .atn
+Load .cube file…	Načítať súbor .cube…
+Load Selection	Načítať výber
+Load Selection…	Načítať výber…
+Load actions	Načítať akcie
+Load channel as selection	Načítať kanál ako výber
+Load path as a selection	Načítať cestu ako výber
+Loaded file	Načítaný súbor
+Lock	Zamknúť
+Lock All	Zamknúť všetko
+Lock Guides	Zamknúť vodiace čiary
+Lock Image Pixels	Zamknúť obrazové body
+Lock Position	Zamknúť polohu
+Lock Transparent Pixels	Zamknúť priehľadné obrazové body
+Lock all	Zamknúť všetko
+Lock pixels	Zamknúť obrazové body
+Lock position	Zamknúť polohu
+Lock transparent pixels	Zamknúť priehľadné obrazové body
+Long-tap as a right click	Dlhé ťuknutie ako pravé tlačidlo
+Lookup table	Vyhľadávacia tabuľka
+Luminance	Jas (luminancia)
+Luminance of the preview source; the markers are the black and white points.	Luminancia zdroja náhľadu; značky sú čierny a biely bod.
+Luminosity	Svetlosť
+MP4…	MP4…
+Magenta	Purpurová
+Magenta / Green	Purpurová / zelená
+Magentas	Purpurové
+Magic Cut	Magic Cut
+Magic Cut…	Magic Cut…
+Make Frames	Vytvoriť snímky
+Make a selection first	Najprv vytvorte výber
+Make work path from selection	Vytvoriť pracovnú cestu z výberu
+Manual	Ručne
+Maps every colour onto one palette. The document keeps RGBA pixels; GIF and PNG export write this palette.	Namapuje každú farbu na jednu paletu. Dokument si ponechá obrazové body RGBA; export GIF a PNG zapíše túto paletu.
+Maps the active layer onto a palette as one undo step; the document stays RGB.	Namapuje aktívnu vrstvu na paletu ako jeden krok späť; dokument zostane RGB.
+Margins	Okraje
+Mark this state so you can come back to it	Označiť tento stav, aby ste sa k nemu mohli vrátiť
+Mask	Maska
+Mask Properties	Vlastnosti masky
+Mask source	Zdroj masky
+Match Color	Prispôsobiť farby
+Match Color…	Prispôsobiť farby…
+Matting	Lemovanie
+Maximum	Maximum
+Maximum…	Maximum…
+Mean	Stredná hodnota
+Median	Medián
+Median…	Medián…
+Medium	Stredný
+Memory	Pamäť
+Menu Bar and Canvas	Panel ponúk a plátno
+Merge	Spojiť
+Merge Channels	Zlúčiť kanály
+Merge Channels…	Zlúčiť kanály…
+Merge Down	Zlúčiť nadol
+Merge Layers	Spojiť vrstvy
+Merge Visible	Zlúčiť viditeľné
+Merged	Zlúčené
+Method	Metóda
+Metrics	Metrické
+Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.	Metrické používa vlastné párové vyrovnanie písma; 0 vyrovnanie vypne; Ručne vloží jednu hodnotu (1/1000 em) medzi každý pár znakov textu v jeho súčasnej podobe a znaky napísané neskôr začínajú bez vyrovnania; vyžaduje aspoň dva znaky, takže kratší text a predvolené hodnoty nástroja Text ho neponúkajú. Sadzač nemá optické vyrovnanie, preto sa tento režim neponúka.
+Mezzotint…	Mezzotinta…
+Midtones	Stredné tóny
+Millimeters	Milimeter
+Min diameter	Min. priemer
+Min roundness	Min. zaoblenie
+Min size	Min. veľkosť
+Minimal	Minimálne
+Minimum	Minimum
+Minimum size only applies when pressure controls size.	Minimálna veľkosť platí len vtedy, keď veľkosť riadi prítlak.
+Minimum…	Minimum…
+Miter	Šikmý spoj
+Mode	Režim
+Modify	Upraviť
+Monochrome	Monochromatické
+Monotone	Monotón
+More readouts	Ďalšie údaje
+More tabs	Ďalšie karty
+Mosaic…	Mozaika…
+Motion Blur…	Rozostrenie pohybom…
+Move Layer	Presunúť vrstvu
+Move a control first: these settings would change nothing	Najprv posuňte ovládací prvok: tieto nastavenia by nič nezmenili
+Move this panel	Presunúť tento panel
+Move this panel within its dock	Presunúť tento panel v rámci jeho doku
+Move to	Presunúť do
+Move with the layer	Pohybovať s vrstvou
+Multiply	Násobenie
+Name	Názov
+Name Change	Zmena názvu
+Name the channel first.	Najprv pomenujte kanál.
+Navigator	Navigátor
+Nearest Neighbour	Najbližší sused
+Neutralize	Neutralizovať
+Neutrals	Neutrálne
+New	Nový
+New Adjustment Layer	Nová vrstva úprav
+New Channel	Nový kanál
+New Document	Nový dokument
+New Fill Layer	Nová vrstva krytia
+New Folder	Nový priečinok
+New Guide	Nová vodiaca čiara
+New Guide Layout	Nové rozloženie vodiacich čiar
+New Guide Layout…	Nové rozloženie vodiacich čiar…
+New Guide…	Nová vodiaca čiara…
+New Layer	Nová vrstva
+New Layer Based Slice	Nový rez podľa vrstvy
+New Selection	Nový výber
+New Smart Object via Copy	Nový inteligentný objekt kopírovaním
+New Snapshot	Nová snímka stavu
+New Spot Channel	Nový kanál priamej farby
+New Spot Channel…	Nový kanál priamej farby…
+New Style Preset	Nová predvoľba štýlu
+New Video Group	Nová skupina videa
+New channel	Nový kanál
+New folder	Nový priečinok
+New group	Nová skupina
+New layer	Nová vrstva
+New layer comp	Nová kompozícia vrstiev
+New note at the centre of the view	Nová poznámka uprostred zobrazenia
+New path (saves the Work Path when it is selected)	Nová cesta (uloží pracovnú cestu, keď je vybratá)
+New set	Nová sada
+New size	Nová veľkosť
+New style from the active layer	Nový štýl z aktívnej vrstvy
+New tool preset from the active tool	Nová predvoľba nástroja z aktívneho nástroja
+New {noun} from the active text layer	Nový {noun} z aktívnej textovej vrstvy
+New…	Nový…
+Next Blend Mode	Ďalší režim prelínania
+No Color	Žiadna farba
+No character styles yet. New records the active text layer's font, size and look.	Zatiaľ žiadne štýly znakov. Nový zaznamená písmo, veľkosť a vzhľad aktívnej textovej vrstvy.
+No command loads a channel as the selection in this build; the Select menu's Load Selection restores a saved selection instead	V tejto verzii žiadny príkaz nenačíta kanál ako výber; Načítať výber v ponuke Výber namiesto toho obnoví uložený výber
+No commands to bind	Žiadne príkazy na priradenie
+No document	Žiadny dokument
+No document is open	Nie je otvorený žiadny dokument
+No export selected	Nie je vybratý žiadny export
+No faces listed for this family name	Pre tento názov rodiny nie sú uvedené žiadne rezy
+No frames yet. Add frame makes an _a_ layer: each one is a frame, bottom first.	Zatiaľ žiadne snímky. Pridať snímku vytvorí vrstvu _a_: každá je jedna snímka, najspodnejšia prvá.
+No guide crosses the canvas	Plátno nekríži žiadna vodiaca čiara
+No installed family matches	Žiadna nainštalovaná rodina nezodpovedá
+No layer comps yet. New Layer Comp records every layer's visibility, position and appearance.	Zatiaľ žiadne kompozície vrstiev. Nová kompozícia vrstiev zaznamená viditeľnosť, polohu a vzhľad každej vrstvy.
+No layers yet. Add one with the + button below.	Zatiaľ žiadne vrstvy. Pridajte jednu tlačidlom + dole.
+No layers yet: each top-level layer gets a bar on the timeline.	Zatiaľ žiadne vrstvy: každá vrstva najvyššej úrovne dostane pruh na časovej osi.
+No notes yet. Click the canvas with the Note tool (I), or New Note pins one at the centre of the view; notes are saved with the document and never exported.	Zatiaľ žiadne poznámky. Kliknite na plátno nástrojom Poznámka (I), alebo Nová poznámka pripne jednu doprostred zobrazenia; poznámky sa ukladajú s dokumentom a nikdy sa neexportujú.
+No open document is the same size as this one	Žiadny otvorený dokument nemá rovnakú veľkosť ako tento
+No paragraph styles yet. New records the active text layer's alignment, indents and spacing.	Zatiaľ žiadne štýly odseku. Nový zaznamená zarovnanie, zarážky a medzery aktívnej textovej vrstvy.
+No pattern chosen — the overlay paints nothing.	Nie je vybratá vzorka — prekrytie nič nemaľuje.
+No patterns are defined yet	Zatiaľ nie sú definované žiadne vzorky
+No profile file was chosen	Nebol vybratý žiadny súbor profilu
+No recent files yet	Zatiaľ žiadne nedávne súbory
+No selection has been saved	Nebol uložený žiadny výber
+No source recorded for this object	Pre tento objekt nie je zaznamenaný zdroj
+No stop selected	Nie je vybratá žiadna zarážka
+No style presets yet. Define one with Layer > Layer Style > Define Style Preset, or add a Photoshop library with File > Open (.asl).	Zatiaľ žiadne predvoľby štýlov. Definujte jednu pomocou Vrstva > Štýl vrstvy > Definovať predvoľbu štýlu, alebo pridajte knižnicu Photoshopu pomocou Súbor > Otvoriť (.asl).
+No styles yet. The + button saves the active layer's style; File > Open loads an .asl style library.	Zatiaľ žiadne štýly. Tlačidlo + uloží štýl aktívnej vrstvy; Súbor > Otvoriť načíta knižnicu štýlov .asl.
+No such command	Taký príkaz neexistuje
+No tool presets yet. New Tool Preset saves the active tool with its current options.	Zatiaľ žiadne predvoľby nástrojov. Nová predvoľba nástroja uloží aktívny nástroj s jeho aktuálnymi voľbami.
+Noise	Šum
+None	Žiadna
+Normal	Normálne
+Normal Map…	Normálová mapa…
+Not a hex colour	Nie je hexadecimálna farba
+Not installed — shaping with	Nenainštalované — sadzba písmom
+Not saved yet	Zatiaľ neuložené
+Notes	Poznámky
+Nothing has changed	Nič sa nezmenilo
+Nothing in this submenu is available right now	V tejto podponuke nie je teraz nič dostupné
+Nothing is left to learn the background from: paint over it with the background brush.	Nezostalo nič, z čoho by sa dalo naučiť pozadie: premaľujte ho štetcom pozadia.
+Nothing to measure yet — paint or place something on this layer first	Zatiaľ nie je čo merať — najprv na túto vrstvu niečo namaľujte alebo umiestnite
+Nothing to preview.	Nie je čo zobraziť v náhľade.
+OK	OK
+Oblique	Šikmé
+Off: the wheel pans the view and Ctrl+wheel zooms	Vypnuté: koliesko posúva zobrazenie a Ctrl+koliesko mení zväčšenie
+Offset…	Posun…
+Oil Paint…	Olejová Maľba…
+One page holding the flattened image; no vector content.	Jedna strana so zlúčeným obrázkom; žiadny vektorový obsah.
+Onion skin	Cibuľová šupka
+Only English is available in this build	V tejto verzii je k dispozícii iba angličtina
+Only a mask channel can be loaded as a selection here	Tu možno ako výber načítať iba kanál masky
+Only web-safe colours	Iba farby bezpečné pre web
+Opacity	Krytie
+Opacity 10%	Krytie 10 %
+Opacity 100%	Krytie 100 %
+Opacity 20%	Krytie 20 %
+Opacity 30%	Krytie 30 %
+Opacity 40%	Krytie 40 %
+Opacity 50%	Krytie 50 %
+Opacity 60%	Krytie 60 %
+Opacity 70%	Krytie 70 %
+Opacity 80%	Krytie 80 %
+Opacity 90%	Krytie 90 %
+Opacity jitter	Kolísanie krytia
+Opacity key	Kľúč krytia
+Opacity must be between 0% and 100%	Krytie musí byť medzi 0 % a 100 %
+Opacity scales the layer and its effects; Fill scales the layer's own pixels only.	Krytie mení mierku vrstvy a jej efektov; Výplň mení iba vlastné obrazové body vrstvy.
+Opacity stops sit above the bar, colour stops below it.	Zarážky krytia sú nad pruhom, zarážky farby pod ním.
+Open	Otvoriť
+Open .ABR…	Otvoriť .ABR…
+Open .ACO…	Otvoriť .ACO…
+Open .ASL…	Otvoriť .ASL…
+Open Recent	Otvoriť nedávne
+Open a document first	Najprv otvorte dokument
+Open a document to animate it.	Otvorte dokument, aby ste ho animovali.
+Open a document to apply styles to its layers.	Otvorte dokument, aby ste na jeho vrstvy použili štýly.
+Open a document to insert glyphs into its text.	Otvorte dokument, aby ste do jeho textu vložili glyfy.
+Open a document to keep text styles in it.	Otvorte dokument, aby ste v ňom uchovali textové štýly.
+Open a document to lay guides out on it.	Otvorte dokument, aby ste naň rozvrhli vodiace čiary.
+Open a document to pin notes on it.	Otvorte dokument, aby ste naň pripli poznámky.
+Open a document to record layer comps.	Otvorte dokument, aby ste zaznamenali kompozície vrstiev.
+Open a document to see its CSS	Otvorte dokument, aby ste videli jeho CSS
+Open a document to see its facts.	Otvorte dokument, aby ste videli jeho údaje.
+Open a document to see its histogram	Otvorte dokument, aby ste videli jeho histogram
+Open a document to see its history	Otvorte dokument, aby ste videli jeho históriu
+Open a document to see its properties	Otvorte dokument, aby ste videli jeho vlastnosti
+Open another document, or add another pixel layer, to match its colours.	Otvorte ďalší dokument alebo pridajte ďalšiu obrazovú vrstvu, aby ste prispôsobili ich farby.
+Open as	Otvoriť ako
+Open editor…	Otvoriť editor…
+Open or close the folder	Otvoriť alebo zavrieť priečinok
+Open the Adjustments panel	Otvoriť panel Úpravy
+Open…	Otvoriť…
+Operation	Operácia
+Orange	Oranžová
+Other	Ostatné
+Out of gamut	Mimo gamut
+Outer Glow	Vonkajšia žiara
+Outer Glow…	Vonkajšia žiara…
+Outline the path	Obtiahnuť cestu
+Output	Výstup
+Output channel	Výstupný kanál
+Outside	Vonku
+Overlay	Prekryť
+PBM…	PBM…
+PDF Presentation…	Prezentácia PDF…
+PDF…	PDF…
+PGM…	PGM…
+PNG…	PNG…
+PPM…	PPM…
+Page	Strana
+Page {n}	Strana {n}
+Page {page} opens at {w} x {h} px	Strana {page} sa otvorí vo veľkosti {w} x {h} px
+Pages	Stránky
+Paint	Maľovať
+Paint Filter Mask	Maľovať masku filtra
+Paint Mask	Maľovať masku
+Paint over the part to keep with the foreground brush first.	Najprv premaľujte štetcom popredia časť, ktorú chcete zachovať.
+Paint over what to keep and over what to drop	Premaľujte, čo zachovať a čo zahodiť
+Paint the inside of the path	Vymaľovať vnútro cesty
+Painting	Maľovanie
+Paints a band along the active selection's border.	Namaľuje pás pozdĺž okraja aktívneho výberu.
+Pair kerning	Párové vyrovnanie
+Palette	Paleta
+Paragraph	Odstavec
+Paragraph Style	Štýl odseku
+Paragraph Styles	Štýly odsekov
+Particles…	Častice…
+Paste	Vložiť
+Paste Into	Prilepiť do
+Paste Layer Style	Prilepiť štýl vrstvy
+Paste Outside	Prilepiť mimo
+Paste Special	Prilepiť špeciálne
+Paste in Place	Prilepiť na miesto
+Path	Cesta
+Path Blur…	Rozostrenie cesty…
+Path editing lives in the Paths panel	Úpravy ciest sú v paneli Cesty
+Paths	Cesty
+Pattern	Vzorka
+Pattern Dither	Vzorkový rozklad
+Pattern Overlay	Prekrytie vzorkom
+Pattern Overlay…	Prekrytie vzorkom…
+Pattern Preview	Náhľad vzorky
+Pattern…	Vzorka…
+Pencil 1px	Ceruzka 1 px
+Percent	Percento
+Perceptual	Perceptuálny
+Perspective	Perspektíva
+Perspective Warp	Deformácia perspektívy
+Photo Filter	Fotografický filter
+Photo Filter…	Fotografický filter…
+Photography	Fotografia
+Picas	Piky
+Pick a filter; it applies at its default settings.	Vyberte filter; použije sa s predvoleným nastavením.
+Pin Light	Bodové svetlo
+Pinch…	Uštipnúť…
+Pixel Grid	Pixelová mriežka
+Pixel dimensions	Rozmery v obrazových bodoch
+Pixel mask	Obrazová maska
+Pixel to Pixel	Skutočné pixely
+Pixelate	Pixelizácia
+Pixels	Pixely
+Place Embedded…	Umiestniť vložené…
+Place Linked…	Umiestniť prepojené…
+Play	Prehrať
+Play from step	Prehrať od kroku
+Play selection	Prehrať výber
+Play this step (unchecked steps are passed over)	Prehrať tento krok (nezačiarknuté kroky sa preskočia)
+Plays a recorded Action on every image in the source folder and saves each result to the destination.	Prehrá zaznamenanú akciu na každý obrázok v zdrojovom priečinku a uloží každý výsledok do cieľa.
+Pointer	Ukazovateľ
+Pointillize…	Vybodkovať…
+Points	Body
+Polar Coordinates…	Polárne súradnice…
+Position	Poloha
+Position is locked — unlock it in the Layers panel to move or resize	Poloha je zamknutá — odomknite ju v paneli Vrstvy, aby ste mohli presúvať alebo meniť veľkosť
+Position key	Kľúč polohy
+Posterize	Posterizovať
+Posterize…	Posterizovať…
+Precise Cursor	Presný kurzor
+Preferences…	Predvoľby…
+Preserve Transparency	Zachovať priehľadnosť
+Preserve luminosity	Zachovať svietivosť
+Preset Manager…	Správca predvolieb…
+Press a key…	Stlačte kláves…
+Pressure controls flow	Prítlak riadi tok
+Pressure controls size	Prítlak riadi veľkosť
+Preview	Náhľad
+Preview against	Náhľad oproti
+Preview is off.	Náhľad je vypnutý.
+Previewed on the active layer; applied to its pixels as one undoable step.	Náhľad na aktívnej vrstve; použije sa na jej obrazové body ako jeden vratný krok.
+Previous Blend Mode	Predchádzajúci režim prelínania
+Print Size	Tlačová veľkosť
+Print as PDF…	Tlačiť ako PDF…
+Print size	Tlačová veľkosť
+Prints the grayscale image through one to four inks, each through its own curve. The inks are applied to the pixels when the mode changes.	Vytlačí obrázok v odtieňoch sivej jedným až štyrmi atramentmi, každým cez vlastnú krivku. Atramenty sa na obrazové body použijú pri zmene režimu.
+Print…	Tlačiť…
+Profile	Profil
+Profile from File…	Profil zo súboru…
+Profiles are assigned to RGB documents	Profily sa priraďujú dokumentom RGB
+Profiles are converted between in RGB documents	Medzi profilmi sa prevádza v dokumentoch RGB
+Profiles belong to RGB documents; convert to RGB first	Profily patria dokumentom RGB; najprv preveďte do RGB
+Proof Colors	Farby nátlačku
+Properties	Vlastnosti
+Puppet Warp	Deformácia bábky
+Purge	Vyčistiť
+Purple	Fialová
+Quadtone	Quadtón
+Quality	Kvalita
+Quick Export Layer as PNG…	Rýchly export vrstvy ako PNG…
+Quit	Ukončiť
+RGB Color	Farba RGB
+Radial Blur…	Kruhové rozostrenie…
+Radius	Polomer
+Radius (px)	Polomer (px)
+Range	Rozsah
+Raster Studio Help	Pomocník Raster Studio
+Rasterize	Rastrovať
+Reassign anyway	Napriek tomu znova priradiť
+Recent	Nedávne
+Record	Nahrať
+Record Source Size	Zaznamenať veľkosť zdroja
+Record an Action in the Actions panel first	Najprv zaznamenajte akciu v paneli Akcie
+Record an edit, then replay the whole sequence on any document with at least as many layers.	Zaznamenajte úpravu a potom prehrajte celú sekvenciu na ľubovoľnom dokumente s aspoň rovnakým počtom vrstiev.
+Record into set	Zaznamenať do sady
+Recording: every edit is captured until Stop	Záznam: každá úprava sa zachytáva až do Zastaviť
+Red	Červená
+Redefine the selected {noun} from the active text layer, restyling every layer that uses it	Znova definovať vybratý {noun} z aktívnej textovej vrstvy a preštýlovať každú vrstvu, ktorá ho používa
+Redo	Znova
+Reds	Červené
+Reduce Colors	Znížiť počet farieb
+Reduce Colors changed nothing: the layer already uses only colours of that palette	Znížiť počet farieb nič nezmenilo: vrstva už používa iba farby tejto palety
+Reduce Colors: the layer now uses at most {n} colours	Znížiť počet farieb: vrstva teraz používa najviac {n} farieb
+Reduce Colors…	Znížiť počet farieb…
+Reduce Noise…	Redukovať šum…
+Reduces the grayscale image to pure black and white. The layers are flattened into one, over white.	Zredukuje obrázok v odtieňoch sivej na čisto čiernu a bielu. Vrstvy sa zlúčia do jednej, na bielom podklade.
+Reference point: Bottom	Referenčný bod: dole
+Reference point: Bottom Left	Referenčný bod: vľavo dole
+Reference point: Bottom Right	Referenčný bod: vpravo dole
+Reference point: Centre	Referenčný bod: stred
+Reference point: Left	Referenčný bod: vľavo
+Reference point: Right	Referenčný bod: vpravo
+Reference point: Top	Referenčný bod: hore
+Reference point: Top Left	Referenčný bod: vľavo hore
+Reference point: Top Right	Referenčný bod: vpravo hore
+Refine	Spresniť
+Refine Edge…	Spresniť okraje…
+Refine Mask	Spresniť masku
+Refine Mask…	Spresniť masku…
+Regular	Normálne
+Relative	Relatívna
+Relative Colorimetric	Relatívny kolorimetrický
+Release Clipping Mask	Uvoľniť orezovú masku
+Release Notes	Poznámky k verzii
+Relink to File…	Znova prepojiť so súborom…
+Remove Black Matte	Odstrániť čierny podklad
+Remove Color Fringe	Odstrániť farebný lem
+Remove Color Fringe…	Odstrániť farebný lem…
+Remove Fringe	Odstrániť lem
+Remove White Matte	Odstrániť biely podklad
+Remove export	Odobrať export
+Remove this instance of the effect	Odobrať túto inštanciu efektu
+Remove this shortcut	Odobrať túto skratku
+Rename Layer	Premenovať vrstvu
+Rename Layer…	Premenovať vrstvu…
+Rename set	Premenovať sadu
+Render	Vykresliť
+Rendering the preview…	Vykresľuje sa náhľad…
+Repeat…	Opakovať…
+Replace Color	Nahradiť farbu
+Replace Color…	Nahradiť farbu…
+Replace Contents	Nahradiť obsah
+Replace Contents…	Nahradiť obsah…
+Replace existing guides	Nahradiť existujúce vodiace čiary
+Replay	Prehrať znova
+Report an Issue	Nahlásiť problém
+Reselect	Znova vybrať
+Reset	Obnoviť
+Reset Transform	Obnoviť transformáciu
+Reset View Rotation	Obnoviť otočenie zobrazenia
+Reset all shortcuts	Obnoviť všetky skratky
+Resize Canvas	Zmeniť veľkosť plátna
+Resize Images	Zmeniť veľkosť obrázkov
+Resize Images…	Zmeniť veľkosť obrázkov…
+Resolution	Rozlíšenie
+Resolution must be greater than zero	Rozlíšenie musí byť väčšie ako nula
+Restore Layer	Obnoviť vrstvu
+Result	Výsledok
+Return this tool to its defaults	Vrátiť tento nástroj na predvolené hodnoty
+Reveal All	Odhaliť všetko
+Reveal Selection	Odhaliť výber
+Reverse	Otočiť
+Revert	Vrátiť
+Rewrites every pixel layer's numbers so the picture looks the same under the destination profile, as one undo step.	Prepíše hodnoty každej obrazovej vrstvy tak, aby obrázok v cieľovom profile vyzeral rovnako, ako jeden krok späť.
+Right	Vpravo
+Right (narrow)	Vpravo (úzky)
+Right (wide)	Vpravo (široký)
+Right Edges	Pravé okraje
+Right indent	Zarážka sprava
+Right-click a swatch to remove it	Kliknutím pravým tlačidlom na vzorkovník ho odoberiete
+Ring	Prstenec
+Ripple…	Zvlniť…
+Rise	Vyvýšenie
+Rotate	Otočiť
+Rotate 180°	Otočiť o 180°
+Rotate 90° Clockwise	Otočiť o 90° v smere hodín
+Rotate 90° Counter Clockwise	Otočiť o 90° proti smeru hodín
+Rotate Canvas	Otočiť plátno
+Rotate the active layer so the measured line is level (Enter)	Otočiť aktívnu vrstvu tak, aby zmeraná čiara bola vodorovná (Enter)
+Rotates the canvas and every layer. Right angles are pixel-exact; other angles resample.	Otočí plátno a každú vrstvu. Pravé uhly sú presné na obrazový bod; ostatné uhly sa prevzorkujú.
+Rotation key	Kľúč otočenia
+Round	Okrúhle
+Round (computed)	Okrúhle (vypočítané)
+Rounded Steps	Zaoblené kroky
+Roundness jitter	Kolísanie zaoblenia
+Rows	Riadky
+Rulers	Pravítka
+Run	Spustiť
+SVG…	SVG…
+Same Radii	Rovnaké polomery
+Sample a colour from the canvas	Nasnímať farbu z plátna
+Sample radius	Polomer vzorky
+Sampled	Nasnímané
+Sampled colour	Nasnímaná farba
+Sampled tip not loaded; painting round	Nasnímaná špička nenačítaná; maľuje sa okrúhla
+Satin…	Satén…
+Saturation	Sýtosť
+Saturation jitter	Kolísanie sýtosti
+Save	Uložiť
+Save As	Uložiť ako
+Save As…	Uložiť ako…
+Save Brush	Uložiť štetec
+Save Selection	Uložiť výber
+Save Selection…	Uložiť výber…
+Save actions	Uložiť akcie
+Save as PSD…	Uložiť ako PSD…
+Save current brush	Uložiť aktuálny štetec
+Save selection as channel	Uložiť výber ako kanál
+Saves every image in the source folder to the destination in another format, quality or size.	Uloží každý obrázok v zdrojovom priečinku do cieľa v inom formáte, kvalite alebo veľkosti.
+Scale	Veľkosť
+Scale %	Mierka %
+Scale Effects	Zmeniť mierku efektov
+Scale Effects…	Zmeniť mierku efektov…
+Scale H	Mierka H
+Scale V	Mierka V
+Scale key	Kľúč mierky
+Scale:	Mierka:
+Scales every size and distance of the active layer's style as one undo step.	Zmení mierku každej veľkosti a vzdialenosti štýlu aktívnej vrstvy ako jeden krok späť.
+Scaling by 100% changes nothing	Mierka 100 % nič nezmení
+Scratch directory	Odkladací priečinok
+Screen	Obrazovka
+Screen, print and social presets	Predvoľby pre obrazovku, tlač a sociálne siete
+Script…	Skript…
+Scroll wheel zooms instead of scrolling	Koliesko myši mení zväčšenie namiesto posúvania
+Search Commands…	Hľadať príkazy…
+Search layers	Hľadať vrstvy
+Search layers by name	Hľadať vrstvy podľa názvu
+Select	Vybrať
+Select All	Vybrať všetko
+Select Bottom Layer	Vybrať spodnú vrstvu
+Select Layer Above	Vybrať vrstvu nad
+Select Layer Below	Vybrať vrstvu pod
+Select Linked Layers	Vybrať prepojené vrstvy
+Select None	Nevybrať nič
+Select Top Layer	Vybrať hornú vrstvu
+Select a layer first	Najprv vyberte vrstvu
+Select a layer to see its CSS	Vyberte vrstvu, aby ste videli jej CSS
+Select a layer to see its properties	Vyberte vrstvu, aby ste videli jej vlastnosti
+Select a layer: a click on a style applies it to the active layer.	Vyberte vrstvu: kliknutie na štýl ho použije na aktívnu vrstvu.
+Select a path first	Najprv vyberte cestu
+Select a text layer, or type into one: a click inserts the glyph at the caret.	Vyberte textovú vrstvu alebo do nej píšte: kliknutie vloží glyf na pozíciu kurzora.
+Select a text layer to edit its type	Vyberte textovú vrstvu, aby ste upravili jej text
+Select every pixel near one colour	Vybrať každý obrazový bod blízky jednej farbe
+Selection	Výber
+Selection Edges	Okraje výberu
+Selection: white is replaced, black is kept.	Výber: biela sa nahradí, čierna sa zachová.
+Selective Color	Selektívna farba
+Selective Color…	Selektívna farba…
+Selects a band of this width along the selection's edge	Vyberie pás tejto šírky pozdĺž okraja výberu
+Semi Condensed	Polozúžené
+Semi Expanded	Polorozšírené
+Semibold	Polotučné
+Send Backward	Presunúť dozadu
+Send to Back	Presunúť na koniec
+Separate documents	Samostatné dokumenty
+Separate keywords with commas or semicolons.	Kľúčové slová oddeľte čiarkami alebo bodkočiarkami.
+Sepia	Sépia
+Set	Sada
+Set the History Brush to paint from this state (the marked row)	Nastaviť štetec histórie, aby maľoval z tohto stavu (označený riadok)
+Shadows	Tiene
+Shadows/Highlights	Tiene/svetlá
+Shadows/Highlights…	Tiene/svetlá…
+Shape	Tvar
+Shape Dynamics	Dynamika tvaru
+Shape Mosaic…	Mozaika tvarov…
+Shape Properties	Vlastnosti tvaru
+Sharpen	Zaostriť
+Sharpen Edges	Zaostriť hrany
+Sharpen More	Zaostriť viac
+Sharpest, with a little ringing on hard edges.	Najostrejšie, s miernym zvonením na tvrdých hranách.
+Shear…	Strihať…
+Shift Edge	Posunúť hranu
+Show	Zobraziť
+Show / Hide Layer	Zobraziť / skryť vrstvu
+Show / hide layer	Zobraziť / skryť vrstvu
+Show / hide the effects list	Zobraziť / skryť zoznam efektov
+Show / hide the layer style	Zobraziť / skryť štýl vrstvy
+Show / hide this channel	Zobraziť / skryť tento kanál
+Show / hide this effect	Zobraziť / skryť tento efekt
+Show / hide this path	Zobraziť / skryť túto cestu
+Show / hide this smart filter	Zobraziť / skryť tento inteligentný filter
+Show Layers	Zobraziť vrstvy
+Show every layer	Zobraziť všetky vrstvy
+Show or hide the position, size and alignment fields	Zobraziť alebo skryť polia polohy, veľkosti a zarovnania
+Show or hide the recorded steps	Zobraziť alebo skryť zaznamenané kroky
+Show or hide the set's actions	Zobraziť alebo skryť akcie sady
+Show this alpha channel alone in grayscale and paint into it; click again to store it	Zobraziť tento kanál alfa samostatne v odtieňoch sivej a maľovať doň; ďalším kliknutím ho uložíte
+Sides	Strany
+Similar	Podobné
+Size	Veľkosť
+Size jitter	Kolísanie veľkosti
+Skew	Skosenie
+Skewness	Šikmosť
+Slice Options	Parametre rezu
+Slice Options…	Parametre rezu…
+Slices	Rezy
+Slices from Guides	Rezy z vodiacich čiar
+Slices…	Rezy…
+Small	Malý
+Small Caps	Kapitálky
+Smart Blur…	Chytré rozostrenie…
+Smart Filter	Inteligentný filter
+Smart Filters	Chytré filtre
+Smart Guides	Inteligentné vodiace čiary
+Smart Object	Inteligentný objekt
+Smart Sharpen…	Chytré zaostrenie…
+Smart filter mask: click to paint on it	Maska inteligentného filtra: kliknutím do nej maľujte
+Smooth	Vyhladiť
+Smooth Selection	Vyhladiť výber
+Smooth draws grey-scale edges; None draws hard, aliased edges. The glyph scaler has one smooth mode, so Sharp, Crisp and Strong are not offered.	Hladké kreslí hrany v odtieňoch sivej; Žiadne kreslí tvrdé zubaté hrany. Škálovač glyfov má jeden hladký režim, preto sa Ostré, Výrazné a Silné neponúkajú.
+Smooth…	Vyhladiť…
+Snap	Prichytávanie
+Snap To	Prichytiť k
+Soft Light	Mäkké svetlo
+Soft Round 100	Mäkký okrúhly 100
+Soft Round 24	Mäkký okrúhly 24
+Soft and cheap. Good for a small enlargement.	Mäkké a lacné. Vhodné na malé zväčšenie.
+Softer Brush	Mäkší štetec
+Solarize	Solarizácia
+Solid Color…	Plná farba…
+Solidity	Pevnosť
+Source	Zdroj
+Source 1	Zdroj 1
+Source 2	Zdroj 2
+Source Space	Zdrojový priestor
+Spectrum	Spektrum
+Spherize…	Zagulatiť…
+Spin Blur…	Rozostrenie rotáciou…
+Splits the active layer into Linear Light detail layers over a residual, finest on top; together they recomposite to the layer.	Rozdelí aktívnu vrstvu na detailné vrstvy v režime Lineárne svetlo nad zvyškovou vrstvou, najjemnejšiu navrchu; spolu znova zložia vrstvu.
+Spot Channel	Kanál priamej farby
+Spot Channel Options…	Možnosti kanála priamej farby…
+Spot channel: composited over the image as its ink	Kanál priamej farby: zložený cez obrázok ako jeho atrament
+Square	Štvorec
+Squeeze	Stlačenie
+Stack Mode	Režim balíčku
+Stamp Visible	Odtlačok viditeľných
+Standard	Štandardné
+Standard Deviation	Smerodajná odchýlka
+Standard ligatures	Štandardné ligatúry
+Step Backward	Krok dozadu
+Step Forward	Krok dopredu
+Stop	Zastaviť
+Straighten Layer	Vyrovnať vrstvu
+Strength	Sila
+Stroke	Vytiahnutie
+Stroke path with the foreground colour at the brush size, on a new shape layer	Obtiahnuť cestu farbou popredia vo veľkosti štetca na novej vrstve tvaru
+Stroke…	Vytiahnutie…
+Style	Štýl
+Styles	Štýly
+Styles enabled	Štýly zapnuté
+Stylize	Štylizácia
+Sub	Dolný
+Subject	Objekt
+Subtract	Odpočítať
+Subtract Front Shape	Odčítať predný tvar
+Subtract from Selection	Odčítať od výberu
+Summation	Súčet
+Sunset	Západ slnka
+Super	Horný
+Superscript raises and shrinks the text; subscript lowers and shrinks it.	Horný index zdvihne a zmenší text; dolný index ho zníži a zmenší.
+Surface Blur…	Rozostrenie povrchu…
+Swap colours  (X)	Zameniť farby  (X)
+Swap foreground and background (X)	Zameniť popredie a pozadie (X)
+Swatches	Vzorkovník
+TGA…	TGA…
+TIF…	TIF…
+Templates	Šablóny
+Text	Text
+Text Properties	Vlastnosti textu
+Text overflows the box	Text pretečie rámček
+Text replacement	Nahradenie textu
+Texture Dilation…	Rozšírenie textúry…
+That channel is no longer in the document	Tento kanál už v dokumente nie je
+That file could not be used:	Tento súbor nemožno použiť:
+The CSV ends inside a quoted field	CSV končí vnútri poľa v úvodzovkách
+The CSV has a header but no data sets	CSV má hlavičku, ale žiadne množiny údajov
+The CSV is empty	CSV je prázdne
+The CSV names a variable that is not defined:	CSV uvádza premennú, ktorá nie je definovaná:
+The active layer is not in the document	Aktívna vrstva nie je v dokumente
+The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	Aktívny inteligentný objekt postupne zobrazí každý obrázok zdrojového priečinka; každý výsledok sa exportuje ako PNG do cieľového priečinka.
+The amount must be within	Hodnota musí byť v rozsahu
+The angle must be a finite number of degrees	Uhol musí byť konečný počet stupňov
+The balanced default for photographs.	Vyvážené predvolené nastavenie pre fotografie.
+The canvas grows to fit the rotated image.	Plátno sa zväčší, aby sa otočený obrázok zmestil.
+The canvas must be at least 1 x 1 pixel	Plátno musí mať aspoň 1 x 1 obrazový bod
+The cell size must be 2 to 200 pixels	Veľkosť bunky musí byť 2 až 200 obrazových bodov
+The cut is empty: paint more of the part to keep.	Rez je prázdny: namaľujte viac z časti, ktorú chcete zachovať.
+The destination is the profile the document already has	Cieľ je profil, ktorý dokument už má
+The destination must be another folder than the source.	Cieľom musí byť iný priečinok ako zdroj.
+The document has no layers	Dokument nemá žiadne vrstvy
+The document is already in {name}	Dokument už je v {name}
+The document is already tagged with this profile	Dokument už je označený týmto profilom
+The document is already tagged {name}	Dokument už je označený {name}
+The document's own profile: {error}	Vlastný profil dokumentu: {error}
+The first {shown} of {n} pages are listed; a longer file opens only those.	Je uvedených prvých {shown} z {n} strán; dlhší súbor otvorí len ich.
+The image has no opaque pixels to count	Obrázok nemá žiadne nepriehľadné obrazové body na počítanie
+The ink is laid over the image; the selection, if there is one, is where it prints.	Atrament sa položí cez obrázok; výber, ak existuje, určuje, kde sa tlačí.
+The last stop has no segment after it.	Za poslednou zarážkou nenasleduje žiadny úsek.
+The layer has no pixels to cut.	Vrstva nemá žiadne obrazové body na vystrihnutie.
+The layer's pixels are locked	Obrazové body vrstvy sú zamknuté
+The list is empty	Zoznam je prázdny
+The margins and gutters leave no room for a column or a row	Okraje a medzery nenechávajú miesto pre stĺpec ani riadok
+The margins and gutters leave no room for a column or a row.	Okraje a medzery nenechávajú miesto pre stĺpec ani riadok.
+The name cannot be empty	Názov nesmie byť prázdny
+The name has not changed	Názov sa nezmenil
+The name is the file File > Export > Slices writes this slice as. The URL and Alt Tag go into the HTML page it writes beside the images.	Názov je súbor, do ktorého Súbor > Exportovať > Rezy zapíše tento rez. URL a značka Alt prídu na stránku HTML, ktorá sa zapíše vedľa obrázkov.
+The new canvas is smaller — content outside it will be clipped.	Nové plátno je menšie — obsah mimo neho bude orezaný.
+The next text layer the Type tool creates starts with this style.	Ďalšia textová vrstva, ktorú nástroj Text vytvorí, začne týmto štýlom.
+The panel is already on this side	Panel už je na tejto strane
+The path encloses no pixel of the canvas	Cesta neuzatvára žiadny obrazový bod plátna
+The position must be a finite number	Poloha musí byť konečné číslo
+The preview runs the real brush engine.	Náhľad používa skutočný modul štetca.
+The resolution must be 1 to 2400 ppi	Rozlíšenie musí byť 1 až 2400 ppi
+The resolution must be {min} to {max} dpi	Rozlíšenie musí byť {min} až {max} dpi
+The rulers and the size readouts use this unit	Pravítka a údaje o veľkosti používajú túto jednotku
+The scale must be between 1% and 1000%	Mierka musí byť medzi 1 % a 1000 %
+The selection is kept with the document under this name	Výber sa uchová s dokumentom pod týmto názvom
+The source and destination must be different folders	Zdroj a cieľ musia byť rôzne priečinky
+The steps this snapshot named have been discarded	Kroky, ktoré táto snímka stavu pomenovala, boli zahodené
+The table needs a name	Tabuľka potrebuje názov
+The warp has not changed	Deformácia sa nezmenila
+There are no guides to slice along	Nie sú žiadne vodiace čiary, podľa ktorých rezať
+There are no slices to clear	Nie sú žiadne rezy na vymazanie
+There is no history to clear	Nie je žiadna história na vymazanie
+There is no live selection to combine with	Nie je žiadny aktívny výber, s ktorým kombinovať
+These are matrix-shaper profiles, which carry no perceptual or saturation tables: those two intents convert as Relative Colorimetric.	Toto sú profily matrix-shaper, ktoré nemajú perceptuálne ani sýtostné tabuľky: tieto dva spôsoby prevodu sa prevádzajú ako Relatívny kolorimetrický.
+Thin	Vlasové
+Third-party notices	Oznámenia tretích strán
+This Layer	Táto vrstva
+This adjustment has no panel controls	Táto úprava nemá ovládacie prvky v paneli
+This adjustment has no settings.	Táto úprava nemá žiadne nastavenia.
+This build keeps channels on layers; it has no free-standing alpha channels yet	Táto verzia uchováva kanály vo vrstvách; zatiaľ nemá samostatné kanály alfa
+This effect is off. Tick it in the list to edit it.	Tento efekt je vypnutý. Začiarknite ho v zozname, aby ste ho mohli upraviť.
+This format cannot store CMYK, so the document is written as RGB. Choose JPEG or TIFF for CMYK.	Tento formát nedokáže uložiť CMYK, preto sa dokument zapíše ako RGB. Pre CMYK zvoľte JPEG alebo TIFF.
+This format could not be previewed.	Tento formát nemožno zobraziť v náhľade.
+This format has no metadata slot: nothing is embedded	Tento formát nemá miesto pre metadáta: nič sa nevloží
+This format has no palette, so the indexed colours are written as RGB. Choose PNG or GIF for the palette.	Tento formát nemá paletu, preto sa indexované farby zapíšu ako RGB. Pre paletu zvoľte PNG alebo GIF.
+This format stores 8 bits per channel	Tento formát ukladá 8 bitov na kanál
+This is a Lab document. No format here stores Lab, so it is converted to RGB on export.	Toto je dokument Lab. Žiadny tunajší formát neukladá Lab, preto sa pri exporte prevedie do RGB.
+This layer has no mask	Táto vrstva nemá masku
+This panel is already at the bottom of its dock	Tento panel už je v doku úplne dole
+This panel is already at the top of its dock	Tento panel už je v doku úplne hore
+This tool has no options	Tento nástroj nemá žiadne voľby
+This tool is already at its defaults	Tento nástroj už má predvolené hodnoty
+This window cannot read screen pixels, so the eyedropper is unavailable	Toto okno nemôže čítať obrazové body obrazovky, preto kvapkadlo nie je k dispozícii
+This works on a pixel layer; the active layer is a {kind}	Toto funguje na obrazovej vrstve; aktívna vrstva je {kind}
+This works on an 8-bit document	Toto funguje v 8-bitovom dokumente
+This works on an RGB document	Toto funguje v dokumente RGB
+Threshold	Prah
+Threshold…	Prah…
+Thumbnail Size	Veľkosť miniatúr
+Thumbnail size	Veľkosť miniatúr
+Thumbnails by Document	Miniatúry podľa dokumentu
+Thumbnails by Layer	Miniatúry podľa vrstvy
+Tiles/List	Dlaždice/zoznam
+Tiles…	Dlaždice…
+Tilt-Shift…	Tilt-shift…
+Timeline	Časová os
+Tint	Tónovanie
+Tint hue	Odtieň tónovania
+Tint saturation	Sýtosť tónovania
+To canvas	K plátnu
+Toggle Link	Prepnúť prepojenie
+Tonal width	Tónová šírka
+Tone	Tón
+Tone and Detail	Tón a detail
+Tool Presets	Konfigurácia nástrojov
+Top	Hore
+Top Edges	Horné okraje
+Top Left	Vľavo hore
+Top Left Pixel Color	Farba obrazového bodu vľavo hore
+Top Right	Vpravo hore
+Top left	Vľavo hore
+Top right	Vpravo hore
+Trace Contour…	Obkresliť obrys…
+Traces the active layer's colours into shape layers, one per colour.	Prevedie farby aktívnej vrstvy na vrstvy tvarov, jednu pre každú farbu.
+Transform	Transformácia
+Transform Layer	Transformovať vrstvu
+Transform Selection	Transformovať výber
+Transparency	Priehľadnosť
+Transparent Pixels	Priehľadné obrazové body
+Trim	Zastrihnúť
+Trim Away	Odrezať
+Trim…	Zastrihnúť…
+Tritone	Triplex
+Turn on Resample to change the pixel count.	Zapnite Prevzorkovať, aby ste zmenili počet obrazových bodov.
+Twirl…	Zatočiť…
+Twist	Skrútenie
+Two variables share a name	Dve premenné majú rovnaký názov
+Type	Typ
+Type a zoom level	Zadajte úroveň zväčšenia
+Type is edited in Character and Paragraph	Text sa upravuje v paneloch Znaky a Odsek
+Type tool defaults	Predvolené hodnoty nástroja Text
+UI scale	Mierka rozhrania
+URL	URL
+US Letter	US Letter
+Ultra Condensed	Ultra úzke
+Ultra Expanded	Ultra široké
+Underlying Layer	Podkladová vrstva
+Undo	Späť
+Ungroup Layers	Oddeliť vrstvy zo skupiny
+Uniform	Rovnomerná
+Unite Shapes	Zjednotiť tvary
+Units	Jednotky
+Unmake Frames	Zrušiť snímky
+Unsaved changes	Neuložené zmeny
+Unsharp Mask…	Maska zaostrenia…
+Update the applied comp from the layers	Aktualizovať použitú kompozíciu z vrstiev
+Use Black Point Compensation	Použiť kompenzáciu čierneho bodu
+Use global light	Použiť globálne svetlo
+Using:	Používa sa:
+Vanishing Point…	Úbežník…
+Variables	Premenné
+Variance	Rozptyl
+Vector Mask	Vektorová maska
+Vector density	Hustota vektora
+Vector enabled	Vektor zapnutý
+Vector feather	Prelínanie vektora
+Vector invert	Invertovať vektor
+Vector mask	Vektorová maska
+Vectorize	Vektorizovať
+Vectorize Bitmap	Vektorizovať bitmapu
+Vectorize Bitmap…	Vektorizovať bitmapu…
+Vertical Centers	Zvislé stredy
+Vertical Distortion	Zvislá deformácia
+Vertical center guide	Vodiaca čiara zvislého stredu
+Vertical scale, in percent: stretches the glyphs about the baseline; leading is unchanged	Zvislá mierka v percentách: roztiahne glyfy okolo základnej čiary; riadkovanie sa nemení
+Vertically	zvisle
+Vibrance	Živosť
+Vibrance…	Živosť…
+View	Zobrazenie
+Violet	Fialová
+Visibility	Viditeľnosť
+Visible adjustment layers	Viditeľné vrstvy úprav
+Vivid Light	Jasné svetlo
+W	Š
+WEBP…	WEBP…
+Waiting for the composite…	Čaká sa na zloženie…
+Warm	Teplá
+Warp	Pokrivenie
+Warp Style	Štýl deformácie
+Warp Text	Deformovať text
+Warp Text…	Deformovať text…
+Wave	Vlna
+Wavelet Decompose	Vlnkový rozklad
+Wavelet Decompose splits into 2 to 7 scales	Vlnkový rozklad delí na 2 až 7 mierok
+Wavelet Decompose works on an sRGB document	Vlnkový rozklad funguje v dokumente sRGB
+Wavelet Decompose: the layer has no pixels	Vlnkový rozklad: vrstva nemá žiadne obrazové body
+Wavelet Decompose: {n} detail layers over a residual; the source layer is hidden	Vlnkový rozklad: {n} detailných vrstiev nad zvyškovou vrstvou; zdrojová vrstva je skrytá
+Wavelet Decompose…	Vlnkový rozklad…
+Wave…	Vlna…
+Web (216)	Web (216)
+WebP (lossless)	WebP (bezstratový)
+WebP (lossy)	WebP (stratový)
+Weight	Hrúbka
+White	Biela
+White to Black	Biela do čiernej
+Whites	Biele
+Width	Šírka
+Width and height must be at least 1 pixel	Šírka a výška musia byť aspoň 1 obrazový bod
+Width must be between 1 and 250 pixels	Šírka musí byť medzi 1 a 250 obrazovými bodmi
+Width to 110%	Šírka na 110 %
+Width to 125%	Šírka na 125 %
+Width to 80%	Šírka na 80 %
+Width to 90%	Šírka na 90 %
+Window	Okno
+Wind…	Vietor…
+With Handles	S úchytmi
+Work Path	Pracovná cesta
+Workspace	Pracovná plocha
+Wrap to box	Zalomiť do rámčeka
+Writes the visible adjustment layers, applied to an identity lattice, as a 3D LUT (.cube).	Zapíše viditeľné vrstvy úprav, použité na mriežku identity, ako 3D LUT (.cube).
+Written as CMYK: a naive ink model, not an ICC press profile.	Zapísané ako CMYK: jednoduchý model atramentov, nie tlačový profil ICC.
+Written as XMP into PNG, JPEG and TIFF files by Export As.	Zapisuje sa ako XMP do súborov PNG, JPEG a TIFF príkazom Exportovať ako.
+Written with the document's palette.	Zapísané s paletou dokumentu.
+Yellow	Žltá
+Yellow / Blue	Žltá / modrá
+Yellows	Žlté
+ZigZag…	Cikcak…
+Zoom In	Priblížiť
+Zoom Out	Oddialiť
+Zoom in	Priblížiť
+Zoom out	Oddialiť
+Zoom to Selection	Priblížiť na výber
+a layer could not be rewritten	vrstvu nemožno prepísať
+before / after	pred / po
+changed	zmenené
+content thumbnail — click to edit the layer's pixels	miniatúra obsahu — kliknutím upravíte obrazové body vrstvy
+dpi	dpi
+edits are aimed at this mask — right-click for view and mask options	úpravy mieria na túto masku — pravým tlačidlom otvoríte možnosti zobrazenia a masky
+lines past the box	riadkov mimo rámčeka
+mask off	maska vypnutá
+mask thumbnail — click to edit the layer's mask	miniatúra masky — kliknutím upravíte masku vrstvy
+minutes (0 is off)	minút (0 = vypnuté)
+no drop	sem nemožno pustiť
+px	px
+records here	zaznamenáva sem
+skipped on play:	preskočené pri prehrávaní:
+the layers could not be added	vrstvy nemožno pridať
+the profile cannot be transformed ({error})	profil nemožno transformovať ({error})
+to	až
+vector mask thumbnail — click to edit the vector mask	miniatúra vektorovej masky — kliknutím upravíte vektorovú masku
+{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time	{format}: časová os, {frames} snímok pri {fps} sn./s za {length} ms; každá snímka zobrazuje vrstvy vo svojom čase
+{label} is not answered by this route	{label} táto cesta neobsluhuje
+{label} was refused: {reason}	{label} bolo odmietnuté: {reason}
+{name} Residual	{name} zvyšok
+{name} Scale {k}	{name} mierka {k}
+{name}: {n} pages	{name}: {n} strán
+{n} slices from the guides ({cols} x {rows}); they replace the slices there were	{n} rezov z vodiacich čiar ({cols} x {rows}); nahrádzajú doterajšie rezy
+{path} is a {space} profile; an RGB document takes an RGB profile	{path} je profil {space}; dokument RGB vyžaduje profil RGB
+{path} is {len} bytes, larger than any colour profile	{path} má {len} bajtov, viac než akýkoľvek farebný profil
+{reason}; this one is {space}	{reason}; tento je {space}
+There is no path; draw one or select it in the Paths panel	Neexistuje žiadna cesta; nakreslite ju alebo ju vyberte v paneli Cesty
+a	a
+b	b
+16 Bits	16 bitov
+8 Bits	8 bitov
+AVIF…	AVIF…
+Blank preview image	Prázdny náhľadový obrázok
+Byte Order	Poradie bajtov
+Depth	Hĺbka
+Duplicate Into…	Duplikovať do…
+Guides from Layer	Vodítka podľa vrstvy
+Minify the file	Zmenšiť súbor
+RAW…	RAW…
+Save PSD/PSB	Uložiť PSD/PSB
+Save PSD/PSB…	Uložiť PSD/PSB…
+Cancel (Esc)	Zrušiť (Esc)
+All Documents	Všetky dokumenty
+Select Source	Vybrať zdroj
+Alt	Alt
+Turn into JPG	Previesť na JPG
+ZIP for pixel data	ZIP pre obrazové údaje
+Open a document to see its memory	Otvorte dokument, aby ste videli jeho pamäť
+Image data	Obrazové údaje
+{undo} undo / {redo} redo steps	kroky späť: {undo} / znova: {redo}
+Holds copied pixels	Obsahuje skopírované obrazové body
+{size} ({tiles} tiles)	{size} ({tiles} dlaždíc)
+Empty	Prázdna
+Purge Clipboard	Vyčistiť schránku
+Purge Histories	Vyčistiť históriu
+Purge All	Vyčistiť všetko
+Make	Vytvoriť
+Reverse pages	Obrátiť poradie strán

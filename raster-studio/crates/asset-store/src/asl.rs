@@ -277,6 +277,11 @@ pub fn write_asl(styles: &[(&str, &str, &[u8])]) -> Vec<u8> {
     out
 }
 
+// W18-I: blending options in a style, patterns in the library.
+#[path = "asl_library_w18.rs"]
+mod library_w18;
+pub use library_w18::{with_blend_options, write_asl_library, AslBlendOptions};
+
 #[cfg(test)]
 mod tests {
     use super::*;

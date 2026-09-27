@@ -100,7 +100,17 @@ pub fn filter_mask_of(layer: &layer_model::Layer) -> Option<&layer_model::LayerM
 #[derive(Clone, Debug, Default)]
 pub struct EditTargets {
     kinds: std::collections::HashMap<DocumentId, EditTargetKind>,
+    /// W18-C: the colour components every pixel edit writes (the Channels
+    /// panel's selected components), or `None` for all of them. Mirrors the
+    /// panel's selection, which is one per window, so it is not per document;
+    /// [`channel_edit_w18::masked`] checks it against the document's model.
+    channels: Option<channel_edit_w18::ChannelWrite>,
 }
+
+/// W18-C: per-channel editing (the write mask the Channels panel's selected
+/// colour components put on every pixel edit).
+#[path = "channel_edit_w18.rs"]
+pub mod channel_edit_w18;
 
 impl EditTargets {
     /// The sticky kind stored for one document.
@@ -114,6 +124,16 @@ impl EditTargets {
     /// document regains a masked active layer (undo of the mask removal, say).
     pub fn set_kind(&mut self, id: DocumentId, kind: EditTargetKind) {
         self.kinds.insert(id, kind);
+    }
+
+    /// W18-C: the colour components pixel edits write, `None` for all.
+    pub fn channels(&self) -> Option<channel_edit_w18::ChannelWrite> {
+        self.channels
+    }
+
+    /// W18-C: set the components pixel edits write (`None`: all of them).
+    pub fn set_channels(&mut self, channels: Option<channel_edit_w18::ChannelWrite>) {
+        self.channels = channels;
     }
 }
 

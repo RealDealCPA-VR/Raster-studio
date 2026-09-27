@@ -2143,7 +2143,27 @@ impl Shell {
     /// documented per-file step: every failure is collected and reported in
     /// the status after the batch, so nothing blocks and no later success
     /// buries an earlier failure.
+    ///
+    /// With no drop position this places, as before; the window's drop goes
+    /// through [`Shell::on_dropped_files_at`] with where it landed.
     pub fn on_dropped_files(&mut self, paths: &[std::path::PathBuf]) {
+        self.on_dropped_files_at(paths, None);
+    }
+
+    /// W18-I: [`Shell::on_dropped_files`] at `at` (window physical pixels).
+    /// Photopea places a file dropped on the canvas and opens one dropped
+    /// anywhere else (the panels, the menu, the tab strip) as a new
+    /// document; so does this. A drop with no position, or before any frame
+    /// has laid out a canvas area, counts as on the canvas.
+    pub fn on_dropped_files_at(&mut self, paths: &[std::path::PathBuf], at: Option<Vec2>) {
+        let on_canvas = at.is_none_or(|p| {
+            self.chrome.canvas_area_px().is_none_or(|area| {
+                p.x >= area.origin.x
+                    && p.y >= area.origin.y
+                    && p.x < area.origin.x + area.size.x
+                    && p.y < area.origin.y + area.size.y
+            })
+        });
         let mut failures: Vec<String> = Vec::new();
         for path in paths {
             // The project half uses the Editor's own predicate: it also
@@ -2159,7 +2179,7 @@ impl Shell {
             // importer whether or not a document is open - it is never
             // placed as a picture.
             let library = crate::editor::Editor::is_library_file(path);
-            if opens || library || self.editor.active().is_none() {
+            if opens || library || !on_canvas || self.editor.active().is_none() {
                 // open_any answers the failure instead of raising the
                 // blocking modal open_paths routes through.
                 if let Err(e) = self.editor.open_any(path) {
@@ -2185,6 +2205,21 @@ impl Shell {
         }
         self.sync_marker();
         self.repaint_at = Some(Instant::now());
+    }
+
+    /// W18-I: where a file dropped now lands, in window physical pixels.
+    /// winit's drop carries no position, and on Windows the OS drag loop
+    /// reports no cursor moves while it runs, so the OS cursor is asked
+    /// (less the client area's screen origin); elsewhere the last reported
+    /// pointer position. `None` with no window.
+    fn drop_point(&self) -> Option<Vec2> {
+        let state = self.state.as_ref()?;
+        #[cfg(windows)]
+        if let (Some((x, y)), Ok(origin)) = (os_cursor_screen(), state.window.inner_position()) {
+            return Some(Vec2::new((x - origin.x) as f32, (y - origin.y) as f32));
+        }
+        let _ = state;
+        Some(self.cursor)
     }
 
     fn on_ime(&mut self, ime: &winit::event::Ime) {
@@ -2741,6 +2776,24 @@ fn system_theme(window: &Window) -> design::Theme {
     }
 }
 
+/// W18-I: the OS cursor in screen pixels (`GetCursorPos`), for a drop.
+#[cfg(windows)]
+fn os_cursor_screen() -> Option<(i32, i32)> {
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetCursorPos(point: *mut windows_sys::Win32::Foundation::POINT) -> i32;
+    }
+    let mut point = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+    // SAFETY: `point` is a live, writable POINT for the call's duration;
+    // GetCursorPos writes only it and reports failure as 0.
+    (unsafe { GetCursorPos(&mut point) } != 0).then_some((point.x, point.y))
+}
+
+/// W18-I: the Channels, Layer Comps, Timeline, Memory and drop routes.
+#[cfg(test)]
+#[path = "panels_w18.rs"]
+mod panels_w18;
+
 /// The canvas backdrop for `theme`, as an 8-bit sRGB display value.
 ///
 /// One function, two consumers: the empty-window clear below and
@@ -2980,7 +3033,9 @@ impl ApplicationHandler<crate::shell::AppEvent> for Shell {
             WindowEvent::ModifiersChanged(mods) => self.on_modifiers(mods.state()),
             WindowEvent::RedrawRequested => self.redraw(),
             WindowEvent::DroppedFile(path) => {
-                self.on_dropped_files(&[path]);
+                // W18-I: where it landed decides place (the canvas) or open.
+                let at = self.drop_point();
+                self.on_dropped_files_at(&[path], at);
             }
             WindowEvent::KeyboardInput {
                 event: key_event, ..

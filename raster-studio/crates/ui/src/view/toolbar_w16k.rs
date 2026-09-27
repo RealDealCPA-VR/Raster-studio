@@ -3,10 +3,9 @@
 //! * Zoom: Photopea's Pixel to Pixel (View > 100%) and Fit The Area (View >
 //!   Fit on Screen); Rotate View: Photopea's Angle field (the document
 //!   camera's rotation, -180 to 180 degrees, the Navigator's own route) and
-//!   Reset (View > Reset View Rotation). Not built (see the parity matrix):
-//!   the Zoom bar's Zoom In / Zoom Out toggle (a zoom click is stepped by the
-//!   canvas router, `canvas::input`, which reads only Alt) and the All
-//!   Documents box on the Zoom and Hand bars, so the Hand bar has no row.
+//!   Reset (View > Reset View Rotation). W18-F: the Zoom bar's Zoom In /
+//!   Zoom Out toggle and the Zoom and Hand bars' All Documents box
+//!   (`super::w18`).
 //! * Every selection tool: Refine Edge; the wand group (Object Selection,
 //!   Magic Wand, Quick Selection): Select Subject first.
 //! * Type and Vertical Type: Warp (Layer > Text > Warp Text...) and Convert
@@ -15,8 +14,9 @@
 //!   presets, applied exactly as a click in the panel applies one).
 //! * Crop: Photopea's "..." Crop by list - All Layers (Image > Reveal All),
 //!   Current Layer, Trim, Selection (Image > Crop to Selection), in
-//!   Photopea's words. Each row crops at once; Photopea sets the crop box
-//!   and waits for the commit (not built, see the parity matrix).
+//!   Photopea's words. W18-F: as in Photopea, a row sets the crop box to
+//!   those bounds and waits for the commit (the shell performs the posted
+//!   [`tools::registry::bar_w18::CropBy`]).
 //! * Artboard: the + buttons, a new artboard of the active one's size on
 //!   each side of it.
 //!
@@ -47,7 +47,8 @@ pub const ARTBOARD_ADD_KEYS: [(ArtboardSide, &str); 4] = [
 ];
 
 /// Crop by's rows, in Photopea's order (All Layers, Current Layer, Trim,
-/// Selection), as the menu actions they run.
+/// Selection), keyed by the menu actions whose bounds they box
+/// ([`crop_by_request`]; W18-F: a row no longer runs the action).
 pub const CROP_BY: [MenuAction; 4] = [
     MenuAction::RevealAll,
     MenuAction::CropToLayer,
@@ -149,13 +150,19 @@ fn angle_field(ui: &mut Ui) {
     }
 }
 
-/// Zoom and Rotate View have no settings, only Photopea's controls; `true`
-/// when `tool` is one of them (the bar then draws nothing else). The Hand
-/// is not: its bar says it has no options.
+/// Zoom, Hand and Rotate View have no settings, only Photopea's controls;
+/// `true` when `tool` is one of them (the bar then draws nothing else).
 pub(super) fn view_row(w: &mut Workspace, ui: &mut Ui, tool: ToolId) -> bool {
     use crate::strings::tr;
     match tool {
+        // W18-F: Photopea's Hand bar is its All Documents box.
+        ToolId::Hand => {
+            super::w18::all_documents(ui, tool);
+            true
+        }
         ToolId::Zoom => {
+            // W18-F: Photopea's Zoom In / Zoom Out pair leads the bar.
+            super::w18::zoom_direction(ui);
             captioned_button(
                 w,
                 ui,
@@ -172,6 +179,8 @@ pub(super) fn view_row(w: &mut Workspace, ui: &mut Ui, tool: ToolId) -> bool {
                 FIT_KEY,
                 tr("ui.w16k.bar.fit_the_area"),
             );
+            // W18-F: and its All Documents box ends it.
+            super::w18::all_documents(ui, tool);
             true
         }
         ToolId::RotateView => {
@@ -240,6 +249,16 @@ pub(super) fn trailing_row(w: &mut Workspace, ui: &mut Ui, tool: ToolId) {
         separator(ui);
         crop_by(w, ui);
     }
+    // W18-F: the clone tools' Alt (Select Source) toggle, last on the bar.
+    if super::w18::SOURCE_TOOLS.contains(&tool) {
+        separator(ui);
+        super::w18::select_source(ui, tool);
+    }
+    // W18-F: the Paint Bucket's pattern picker while it fills with one.
+    if tool == ToolId::PaintBucket && super::w18::bucket_fills_pattern(w) {
+        separator(ui);
+        super::w18::pattern_picker(ui);
+    }
     if tool == ToolId::Artboard {
         separator(ui);
         for (side, key) in ARTBOARD_ADD_KEYS {
@@ -287,8 +306,19 @@ fn brush_picker(w: &mut Workspace, ui: &mut Ui, tool: ToolId) {
     }
 }
 
+/// W18-F: the box a Crop by row sets, for the row `action` captions.
+pub fn crop_by_request(action: MenuAction) -> tools::registry::bar_w18::CropBy {
+    use tools::registry::bar_w18::CropBy;
+    match action {
+        MenuAction::RevealAll => CropBy::AllLayers,
+        MenuAction::CropToLayer => CropBy::CurrentLayer,
+        MenuAction::Trim => CropBy::Trim,
+        _ => CropBy::Selection,
+    }
+}
+
 /// Photopea's "..." Crop by list.
-fn crop_by(w: &mut Workspace, ui: &mut Ui) {
+fn crop_by(_w: &mut Workspace, ui: &mut Ui) {
     let opener_id = super::super::ids::tool_option(ToolId::Crop, CROP_BY_KEY);
     let opener = super::super::icon_button_id(ui, "overflow", true, opener_id);
     let popup = opener_id.with("popup");
@@ -317,6 +347,8 @@ fn crop_by(w: &mut Workspace, ui: &mut Ui) {
     );
     if let Some(action) = picked {
         ui.memory_mut(|m| m.close_popup());
-        w.emit(Intent::Action(action));
+        // W18-F: the row sets the box (the shell's next frame) rather than
+        // cropping; Enter or the Commit check crops.
+        tools::registry::bar_w18::post_crop_by(crop_by_request(action));
     }
 }

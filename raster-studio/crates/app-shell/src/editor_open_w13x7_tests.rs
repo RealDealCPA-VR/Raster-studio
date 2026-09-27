@@ -248,6 +248,14 @@ fn a_three_page_pdf_opens_pages_1_and_3_at_144_dpi_through_the_import_dialog() {
     assert!(names.iter().any(|n| n == "Page 1"), "{names:?}");
     assert!(names.iter().any(|n| n == "Page 3"), "{names:?}");
     assert!(!names.iter().any(|n| n == "Page 2"), "{names:?}");
+    // W18-H: each page's path is a shape layer in its artboard, at 144 dpi.
+    for board in ["Page 1", "Page 3"] {
+        let children = board_children(&ed, board);
+        assert!(
+            children.iter().any(|(_, k)| *k == "shape"),
+            "{board}: {children:?}"
+        );
+    }
     let status = ed.status().unwrap_or_default().to_string();
     assert!(status.contains("(pages 1 and 3) at 144 dpi"), "{status}");
     let (rgba, w) = shown(&ed);
@@ -318,6 +326,17 @@ fn separate_documents_open_one_document_per_chosen_page_and_escape_opens_nothing
         boards(&ed).is_empty(),
         "a page of its own is not an artboard"
     );
+    // W18-H: a page of its own opens as layers too: its path is a shape.
+    for doc in ed.documents() {
+        let tree = &doc.document.layers;
+        assert!(
+            tree.iter_depth_first()
+                .into_iter()
+                .any(|id| matches!(tree.get(id).unwrap().kind, layer_model::LayerKind::Shape(_))),
+            "{}",
+            doc.document.meta.title
+        );
+    }
 }
 
 fn solid(w: u32, h: u32, px: [u8; 4]) -> Vec<u8> {
@@ -563,4 +582,80 @@ fn the_dialogs_resolution_range_is_the_renderers() {
     for dpi in [pdf::MIN_DPI, pdf::MAX_DPI] {
         assert!(pdf::render_selected(&bytes, &[0], dpi, limits).is_ok());
     }
+}
+
+/// W18-H: `(name, kind)` of each child of the root group named `board`.
+fn board_children(ed: &Editor, board: &str) -> Vec<(String, &'static str)> {
+    let doc = ed.active().unwrap();
+    let tree = &doc.document.layers;
+    let id = tree
+        .root()
+        .iter()
+        .copied()
+        .find(|id| tree.get(*id).unwrap().name == board)
+        .unwrap_or_else(|| panic!("no artboard {board:?}"));
+    let layer_model::LayerKind::Group(group) = &tree.get(id).unwrap().kind else {
+        panic!("{board:?} is not a group");
+    };
+    group
+        .children
+        .iter()
+        .map(|c| {
+            let l = tree.get(*c).unwrap();
+            let kind = match &l.kind {
+                layer_model::LayerKind::Shape(_) => "shape",
+                layer_model::LayerKind::Text(_) => "text",
+                layer_model::LayerKind::Raster(r) if r.artboard.is_some() => "plate",
+                layer_model::LayerKind::Raster(_) => "raster",
+                _ => "other",
+            };
+            (l.name.clone(), kind)
+        })
+        .collect()
+}
+
+/// W18-H: each page of a multi-page PDF opens as layers inside its
+/// artboard (its paths as shape layers); a page the layer reader cannot
+/// keep live opens as one picture in its artboard, and the import report
+/// says which page and why. File > Revert rebuilds the same layers.
+#[test]
+fn a_multi_page_pdf_opens_each_page_as_layers_inside_its_artboard() {
+    let dir = tempfile::tempdir().unwrap();
+    let pdf = write(
+        dir.path(),
+        "layers.pdf",
+        &build_pdf(&[
+            (10, 10, "0 1 0 rg 0 0 10 10 re f 1 0 0 rg 2 2 3 3 re f"),
+            (6, 6, "0 0 1 rg 0 0 6 6 re f /Sh0 sh"),
+        ]),
+    );
+    let mut ed = editor(dir.path());
+    ed.open_paths(std::slice::from_ref(&pdf));
+    accept_import_defaults_for_test(&mut ed);
+    assert_eq!(root_names(&ed), vec!["Page 1", "Page 2"], "page 1 on top");
+    let page1 = board_children(&ed, "Page 1");
+    let shapes = page1.iter().filter(|(_, k)| *k == "shape").count();
+    assert_eq!(shapes, 2, "page 1's two paths are shape layers: {page1:?}");
+    assert!(page1.iter().any(|(_, k)| *k == "plate"), "{page1:?}");
+    let page2 = board_children(&ed, "Page 2");
+    assert!(
+        page2.iter().any(|(n, k)| n == "Page 2" && *k == "raster"),
+        "page 2 (a shading) opens as its picture: {page2:?}"
+    );
+    let status = ed.status().unwrap_or_default().to_string();
+    assert!(status.contains("as layers"), "{status}");
+    assert!(status.contains("import report"), "{status}");
+    let (rgba, w) = shown(&ed);
+    assert_eq!(at(&rgba, w, 0, 0), [0, 255, 0, 255], "page 1's green");
+    // PDF space is bottom-up: the red square sits at rows 5..8 from the top.
+    assert_eq!(at(&rgba, w, 3, 6), [255, 0, 0, 255], "page 1's red square");
+    let doc = ed.active().unwrap();
+    assert!(!doc.is_dirty() && !doc.history.can_undo());
+
+    let before = (root_names(&ed), board_children(&ed, "Page 1"), shown(&ed));
+    let first = ed.active().unwrap().document.layers.root()[0];
+    ed.apply_command(editor_core::Command::DeleteLayer { layer_id: first });
+    ed.revert_active().unwrap();
+    let after = (root_names(&ed), board_children(&ed, "Page 1"), shown(&ed));
+    assert_eq!(after, before, "Revert rebuilds the same layers");
 }

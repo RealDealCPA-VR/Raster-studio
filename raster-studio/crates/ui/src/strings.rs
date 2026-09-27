@@ -23,14 +23,24 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
 
+// W18-K: the language gates for the tables and faces added in wave 18.
+#[cfg(test)]
+#[path = "i18n/w18k_tests.rs"]
+mod w18k_tests;
+
 /// The languages the catalogue carries. `En` is the source of truth.
 ///
-/// W16-N: Photopea's More > Language list, cut to the languages this build
-/// translates in full — every English string the catalogue knows has a row in
-/// each of their tables (`crates/ui/src/i18n/<code>.tsv`), which
+/// W16-N, W18-K: Photopea's More > Language list, cut to the left-to-right
+/// languages this build translates in full — every English string the
+/// catalogue knows has a row in each of their tables (`crates/ui/src/i18n/<code>.tsv`), which
 /// `every_language_table_translates_every_catalogue_string` enforces. The rest
 /// of Photopea's list is not offered: a language picker that switched to a
-/// half-English UI would promise what the table cannot show.
+/// half-English UI would promise what the table cannot show. Photopea's
+/// right-to-left languages (Arabic, Hebrew, Persian, Central Kurdish, N'Ko)
+/// are not offered: egui lays every line out left to right and does no bidi
+/// reordering or mirroring. Thai, Lao, Tibetan and Tamil are not offered
+/// either: their marks stack and reorder through OpenType shaping, which
+/// egui's glyph-by-glyph layout does not do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Locale {
     #[default]
@@ -47,6 +57,30 @@ pub enum Locale {
     ZhCn,
     Ja,
     Ko,
+    Nl,
+    Sv,
+    Da,
+    No,
+    Fi,
+    Cs,
+    Sk,
+    Hu,
+    Ro,
+    Pt,
+    Ca,
+    Hr,
+    Sl,
+    Id,
+    Vi,
+    ZhTw,
+    El,
+    Bg,
+    Sr,
+    Mk,
+    Et,
+    Lt,
+    Eo,
+    Sq,
 }
 
 impl Locale {
@@ -54,16 +88,40 @@ impl Locale {
     /// (English, then the Latin-script languages, Cyrillic, CJK).
     pub const ALL: &'static [Locale] = &[
         Locale::En,
+        Locale::Id,
+        Locale::Ca,
+        Locale::Cs,
+        Locale::Da,
         Locale::De,
+        Locale::Et,
         Locale::Es,
+        Locale::Eo,
         Locale::Fr,
+        Locale::Hr,
         Locale::It,
+        Locale::Lt,
+        Locale::Hu,
+        Locale::Nl,
+        Locale::No,
         Locale::Pl,
+        Locale::Pt,
         Locale::PtBr,
+        Locale::Ro,
+        Locale::Sq,
+        Locale::Sk,
+        Locale::Sl,
+        Locale::Fi,
+        Locale::Sv,
+        Locale::Vi,
         Locale::Tr,
+        Locale::El,
+        Locale::Bg,
+        Locale::Mk,
         Locale::Ru,
+        Locale::Sr,
         Locale::Uk,
         Locale::ZhCn,
+        Locale::ZhTw,
         Locale::Ja,
         Locale::Ko,
     ];
@@ -94,6 +152,30 @@ impl Locale {
             Self::ZhCn => "zh-CN",
             Self::Ja => "ja",
             Self::Ko => "ko",
+            Self::Nl => "nl",
+            Self::Sv => "sv",
+            Self::Da => "da",
+            Self::No => "no",
+            Self::Fi => "fi",
+            Self::Cs => "cs",
+            Self::Sk => "sk",
+            Self::Hu => "hu",
+            Self::Ro => "ro",
+            Self::Pt => "pt",
+            Self::Ca => "ca",
+            Self::Hr => "hr",
+            Self::Sl => "sl",
+            Self::Id => "id",
+            Self::Vi => "vi",
+            Self::ZhTw => "zh-TW",
+            Self::El => "el",
+            Self::Bg => "bg",
+            Self::Sr => "sr",
+            Self::Mk => "mk",
+            Self::Et => "et",
+            Self::Lt => "lt",
+            Self::Eo => "eo",
+            Self::Sq => "sq",
         }
     }
 
@@ -108,9 +190,15 @@ impl Locale {
     }
 
     /// Whether this language's script needs the bundled CJK face
-    /// ([`install_fonts`]); egui's own font covers Latin and Cyrillic.
+    /// ([`install_fonts`]); egui's own font covers Latin, Greek and Cyrillic.
     pub const fn needs_cjk_font(self) -> bool {
-        matches!(self, Self::ZhCn | Self::Ja | Self::Ko)
+        matches!(self, Self::ZhCn | Self::ZhTw | Self::Ja | Self::Ko)
+    }
+
+    /// W18-K: whether this language needs the bundled Vietnamese face
+    /// ([`install_fonts`]) for the precomposed letters egui's font lacks.
+    pub const fn needs_vietnamese_font(self) -> bool {
+        matches!(self, Self::Vi)
     }
 
     /// The translation table, one `English<TAB>translation` row per line.
@@ -129,6 +217,30 @@ impl Locale {
             Self::ZhCn => include_str!("i18n/zh-CN.tsv"),
             Self::Ja => include_str!("i18n/ja.tsv"),
             Self::Ko => include_str!("i18n/ko.tsv"),
+            Self::Nl => include_str!("i18n/nl.tsv"),
+            Self::Sv => include_str!("i18n/sv.tsv"),
+            Self::Da => include_str!("i18n/da.tsv"),
+            Self::No => include_str!("i18n/no.tsv"),
+            Self::Fi => include_str!("i18n/fi.tsv"),
+            Self::Cs => include_str!("i18n/cs.tsv"),
+            Self::Sk => include_str!("i18n/sk.tsv"),
+            Self::Hu => include_str!("i18n/hu.tsv"),
+            Self::Ro => include_str!("i18n/ro.tsv"),
+            Self::Pt => include_str!("i18n/pt.tsv"),
+            Self::Ca => include_str!("i18n/ca.tsv"),
+            Self::Hr => include_str!("i18n/hr.tsv"),
+            Self::Sl => include_str!("i18n/sl.tsv"),
+            Self::Id => include_str!("i18n/id.tsv"),
+            Self::Vi => include_str!("i18n/vi.tsv"),
+            Self::ZhTw => include_str!("i18n/zh-TW.tsv"),
+            Self::El => include_str!("i18n/el.tsv"),
+            Self::Bg => include_str!("i18n/bg.tsv"),
+            Self::Sr => include_str!("i18n/sr.tsv"),
+            Self::Mk => include_str!("i18n/mk.tsv"),
+            Self::Et => include_str!("i18n/et.tsv"),
+            Self::Lt => include_str!("i18n/lt.tsv"),
+            Self::Eo => include_str!("i18n/eo.tsv"),
+            Self::Sq => include_str!("i18n/sq.tsv"),
         })
     }
 
@@ -186,7 +298,8 @@ struct Catalogue {
 
 /// The parsed table for `locale`, built once on first use.
 fn catalogue(locale: Locale) -> Option<&'static Catalogue> {
-    static CATALOGUES: [OnceLock<Catalogue>; 13] = [const { OnceLock::new() }; 13];
+    static CATALOGUES: [OnceLock<Catalogue>; Locale::ALL.len()] =
+        [const { OnceLock::new() }; Locale::ALL.len()];
     let source = locale.source()?;
     Some(CATALOGUES[locale.index()].get_or_init(|| parse_catalogue(source)))
 }
@@ -280,11 +393,12 @@ fn fonts_installed_id() -> egui::Id {
 
 /// W16-N: add the bundled CJK face (a subset of Noto Sans CJK SC, SIL OFL 1.1:
 /// `i18n/OFL.txt`) to egui's fallback chain, after egui's own fonts, so the
-/// Chinese, Japanese and Korean tables — and those languages' names in the
-/// language list — draw as glyphs rather than empty boxes. Idempotent per
+/// Chinese (Simplified and, since W18-K, Traditional), Japanese and Korean
+/// tables — and those languages' names in the language list — draw as
+/// glyphs rather than empty boxes; W18-K adds a Vietnamese face beside it. Idempotent per
 /// context: the chrome calls it with every theme install.
 ///
-/// The face is cut to the characters the three tables use (plus kana and
+/// The face is cut to the characters the four CJK tables use (plus kana and
 /// CJK punctuation); arbitrary CJK text a user types into a dialog field can
 /// still meet a glyph the subset does not carry.
 pub fn install_fonts(ctx: &egui::Context) {
@@ -297,12 +411,16 @@ pub fn install_fonts(ctx: &egui::Context) {
         CJK_FONT_NAME.to_string(),
         egui::FontData::from_static(CJK_FONT),
     );
+    // W18-K: the Vietnamese letters egui's Ubuntu face lacks (U+1EA0 to
+    // U+1EF9), from Noto Sans Light (SIL OFL 1.1: `i18n/OFL-NotoSans.txt`).
+    fonts.font_data.insert(
+        VIETNAMESE_FONT_NAME.to_string(),
+        egui::FontData::from_static(VIETNAMESE_FONT),
+    );
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        fonts
-            .families
-            .entry(family)
-            .or_default()
-            .push(CJK_FONT_NAME.to_string());
+        let chain = fonts.families.entry(family).or_default();
+        chain.push(VIETNAMESE_FONT_NAME.to_string());
+        chain.push(CJK_FONT_NAME.to_string());
     }
     ctx.set_fonts(fonts);
     ctx.data_mut(|d| d.insert_temp(id, true));
@@ -313,6 +431,12 @@ pub const CJK_FONT_NAME: &str = "raster-noto-sans-cjk-subset";
 
 /// The bundled CJK face (see [`install_fonts`]).
 const CJK_FONT: &[u8] = include_bytes!("i18n/NotoSansCJKsc-subset.otf");
+
+/// W18-K: the name the Vietnamese face is registered under.
+pub const VIETNAMESE_FONT_NAME: &str = "raster-noto-sans-vietnamese-subset";
+
+/// W18-K: the bundled Vietnamese face (see [`install_fonts`]).
+const VIETNAMESE_FONT: &[u8] = include_bytes!("i18n/NotoSans-Light-vi-subset.ttf");
 /// Every catalogue entry: the English source string first, then any
 /// translations. A locale missing from a row falls back to English at lookup.
 const TABLE: &[(&str, &[(Locale, &str)])] = &[
@@ -537,6 +661,16 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.w16.channels.menu.delete", &[(Locale::En, "Delete")]),
     ("ui.w16.channels.spot.delete", &[(Locale::En, "Delete this spot channel")]),
     ("ui.w16.channels.spot.options", &[(Locale::En, "Spot Channel Options…")]),
+    // W18-C: the component rows of a CMYK or Lab document.
+    ("ui.w18.channels.cyan", &[(Locale::En, "Cyan")]),
+    ("ui.w18.channels.magenta", &[(Locale::En, "Magenta")]),
+    ("ui.w18.channels.yellow", &[(Locale::En, "Yellow")]),
+    ("ui.w18.channels.black", &[(Locale::En, "Black")]),
+    ("ui.w18.channels.lightness", &[(Locale::En, "Lightness")]),
+    ("ui.w18.channels.a", &[(Locale::En, "a")]),
+    ("ui.w18.channels.b", &[(Locale::En, "b")]),
+    ("ui.w18.channels.cmyk", &[(Locale::En, "CMYK")]),
+    ("ui.w18.channels.lab", &[(Locale::En, "Lab")]),
     ("ui.w16.mask.delete", &[(Locale::En, "Delete")]),
     ("ui.w16.mask.apply", &[(Locale::En, "Apply")]),
     ("ui.w16.vector.mask.disable", &[(Locale::En, "Disable Vector Mask")]),
@@ -551,6 +685,25 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.w16k.crop_by.current_layer", &[(Locale::En, "Current Layer")]),
     ("ui.w16k.crop_by.trim", &[(Locale::En, "Trim")]),
     ("ui.w16k.crop_by.selection", &[(Locale::En, "Selection")]),
+    // W18-G: Export As > RAW's layout, File > Save PSD/PSB's options.
+    ("ui.w18g.raw.channels", &[(Locale::En, "Channels")]),
+    ("ui.w18g.raw.depth", &[(Locale::En, "Depth")]),
+    ("ui.w18g.raw.8.bits", &[(Locale::En, "8 Bits")]),
+    ("ui.w18g.raw.16.bits", &[(Locale::En, "16 Bits")]),
+    ("ui.w18g.raw.byte.order", &[(Locale::En, "Byte Order")]),
+    ("ui.w18g.psd.title", &[(Locale::En, "Save PSD/PSB")]),
+    ("ui.w18g.psd.format", &[(Locale::En, "Format")]),
+    ("ui.w18g.psd.minify", &[(Locale::En, "Minify the file")]),
+    ("ui.w18g.psd.blank.preview", &[(Locale::En, "Blank preview image")]),
+    ("ui.w18g.psd.zip", &[(Locale::En, "ZIP for pixel data")]),
+    ("ui.w18g.psd.save", &[(Locale::En, "Save")]),
+    ("ui.w18g.psd.into.zip", &[(Locale::En, "Put the file into ZIP")]),
+    ("ui.w18g.export.artboards", &[(Locale::En, "Artboards")]),
+    ("ui.w18g.export.slices", &[(Locale::En, "Slices")]),
+    ("ui.w18g.slices.no", &[(Locale::En, "No Slices")]),
+    ("ui.w18g.slices.all", &[(Locale::En, "All Slices")]),
+    ("ui.w18g.slices.user", &[(Locale::En, "User Slices")]),
+    ("ui.w18g.export.reverse.pages", &[(Locale::En, "Reverse pages")]),
     ("ui.w16.navigator.degrees", &[(Locale::En, "\u{b0}")]),
     ("ui.w16.comps.last.state", &[(Locale::En, "Last Document State")]),
     ("ui.w16.comps.last.state.none", &[(Locale::En, "Kept when a comp is first applied")]),
@@ -863,6 +1016,33 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.slice_options.confirm", &[(Locale::En, "OK")]),
     ("ui.slice_options.name.empty", &[(Locale::En, "A slice needs a name")]),
     ("ui.slice_options.name.taken", &[(Locale::En, "Another slice already has this name")]),
+    // W18-A: the per-tool canvas menu and Divide Slices.
+    ("ui.canvas_menu.unavailable", &[(Locale::En, "Nothing under the pointer for this row")]),
+    ("ui.canvas_menu.make_work_path", &[(Locale::En, "Make Work Path")]),
+    ("ui.canvas_menu.remove_anchor", &[(Locale::En, "Remove Anchor Point")]),
+    ("ui.canvas_menu.remove_path", &[(Locale::En, "Remove Path")]),
+    ("ui.canvas_menu.make_selection", &[(Locale::En, "Make Selection")]),
+    ("ui.canvas_menu.fill", &[(Locale::En, "Fill")]),
+    ("ui.canvas_menu.stroke", &[(Locale::En, "Stroke")]),
+    ("ui.canvas_menu.edit_text", &[(Locale::En, "Edit")]),
+    ("ui.canvas_menu.delete_slice", &[(Locale::En, "Delete")]),
+    ("ui.canvas_menu.divide_slice", &[(Locale::En, "Divide…")]),
+    ("ui.canvas_menu.no_selection", &[(Locale::En, "Make a selection first")]),
+    ("ui.canvas_menu.no_anchor", &[(Locale::En, "Right-click on an anchor point of the path")]),
+    ("ui.canvas_menu.no_path_here", &[(Locale::En, "Right-click inside a path")]),
+    ("ui.canvas_menu.no_path", &[(Locale::En, "Select or draw a path first")]),
+    ("ui.canvas_menu.no_text", &[(Locale::En, "Right-click on a text layer")]),
+    ("ui.canvas_menu.no_slice", &[(Locale::En, "Right-click inside a slice")]),
+    ("ui.divide_slice.title", &[(Locale::En, "Divide Slices")]),
+    ("ui.divide_slice.horizontally", &[(Locale::En, "Horizontally")]),
+    ("ui.divide_slice.vertically", &[(Locale::En, "Vertically")]),
+    ("ui.divide_slice.equal", &[(Locale::En, "N equal parts")]),
+    ("ui.divide_slice.pixels", &[(Locale::En, "N pixels per part")]),
+    ("ui.divide_slice.n", &[(Locale::En, "N")]),
+    ("ui.divide_slice.caption", &[(Locale::En, "Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.")]),
+    ("ui.divide_slice.none", &[(Locale::En, "Tick Horizontally or Vertically")]),
+    ("ui.divide_slice.nothing", &[(Locale::En, "These settings make no cut: raise N or pick a smaller pixel count")]),
+    ("ui.divide_slice.confirm", &[(Locale::En, "OK")]),
     ("ui.rename_layer.name.empty", &[(Locale::En, "The name cannot be empty")]),
     ("ui.rename_layer.name.unchanged", &[(Locale::En, "The name has not changed")]),
     // W9-K: Layer > Text > Warp Text...
@@ -1216,6 +1396,16 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.toolbar.unit.px", &[(Locale::En, " px")]),
     ("ui.toolbar.unit.degrees", &[(Locale::En, "\u{00B0}")]),
     ("ui.toolbar.commit.hint", &[(Locale::En, "Commit (Enter)")]),
+    // W18-F: the bar's Cancel cross, the Zoom / Hand toggles, the clone
+    // source toggle and the Paint Bucket's pattern picker.
+    ("ui.w18f.cancel.hint", &[(Locale::En, "Cancel (Esc)")]),
+    ("ui.w18f.zoom_in", &[(Locale::En, "Zoom In")]),
+    ("ui.w18f.zoom_out", &[(Locale::En, "Zoom Out")]),
+    ("ui.w18f.all_documents", &[(Locale::En, "All Documents")]),
+    ("ui.w18f.select_source", &[(Locale::En, "Select Source")]),
+    ("ui.w18f.select_source.alt", &[(Locale::En, "Alt")]),
+    ("ui.w18f.pattern", &[(Locale::En, "Pattern")]),
+    ("ui.w18f.no_patterns", &[(Locale::En, "No patterns are defined yet")]),
     ("ui.toolbar.swap.colours.x", &[(Locale::En, "Swap colours  (X)")]),
     ("ui.toolbar.default.colours.d.2", &[(Locale::En, "Default colours  (D)")]),
     // W9-L: the Move bar's Align / Distribute captions and Free Transform's
@@ -1238,6 +1428,18 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ),
     ("ui.toolbar.path.send.to.back", &[(Locale::En, "Send to Back")]),
     ("ui.toolbar.path.delete", &[(Locale::En, "Delete")]),
+    // W18-E: the Pen bar's Make buttons.
+    ("ui.toolbar.pen.make", &[(Locale::En, "Make")]),
+    ("ui.toolbar.pen.make.selection", &[(Locale::En, "Selection")]),
+    ("ui.toolbar.pen.make.mask", &[(Locale::En, "Mask")]),
+    ("ui.toolbar.pen.make.shape", &[(Locale::En, "Shape")]),
+    (
+        "ui.toolbar.pen.make.no.path",
+        &[(
+            Locale::En,
+            "There is no path; draw one or select it in the Paths panel",
+        )],
+    ),
     ("ui.toolbar.reference.top.left", &[(Locale::En, "Reference point: Top Left")]),
     ("ui.toolbar.reference.top", &[(Locale::En, "Reference point: Top")]),
     ("ui.toolbar.reference.top.right", &[(Locale::En, "Reference point: Top Right")]),
@@ -1513,6 +1715,18 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.export_pdf.resolution", &[(Locale::En, "Resolution")]),
     ("ui.export_pdf.landscape", &[(Locale::En, "Landscape")]),
     ("ui.export_pdf.export", &[(Locale::En, "Export")]),
+    // W18-I: the Memory panel.
+    ("ui.w18.memory.no_document", &[(Locale::En, "Open a document to see its memory")]),
+    ("ui.w18.memory.image", &[(Locale::En, "Image data")]),
+    ("ui.w18.memory.image.value", &[(Locale::En, "{size} ({tiles} tiles)")]),
+    ("ui.w18.memory.history", &[(Locale::En, "History")]),
+    ("ui.w18.memory.history.value", &[(Locale::En, "{undo} undo / {redo} redo steps")]),
+    ("ui.w18.memory.clipboard", &[(Locale::En, "Clipboard")]),
+    ("ui.w18.memory.clipboard.pixels", &[(Locale::En, "Holds copied pixels")]),
+    ("ui.w18.memory.clipboard.empty", &[(Locale::En, "Empty")]),
+    ("ui.w18.memory.purge.clipboard", &[(Locale::En, "Purge Clipboard")]),
+    ("ui.w18.memory.purge.histories", &[(Locale::En, "Purge Histories")]),
+    ("ui.w18.memory.purge.all", &[(Locale::En, "Purge All")]),
 ];
 
 /// Keys that must resolve. The tests walk this list, so a table row whose key
@@ -1556,6 +1770,15 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.w16.channels.menu.delete",
     "ui.w16.channels.spot.delete",
     "ui.w16.channels.spot.options",
+    "ui.w18.channels.cyan",
+    "ui.w18.channels.magenta",
+    "ui.w18.channels.yellow",
+    "ui.w18.channels.black",
+    "ui.w18.channels.lightness",
+    "ui.w18.channels.a",
+    "ui.w18.channels.b",
+    "ui.w18.channels.cmyk",
+    "ui.w18.channels.lab",
     "ui.w16.mask.delete",
     "ui.w16.mask.apply",
     "ui.w16.vector.mask.disable",
@@ -1571,11 +1794,40 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.w16k.crop_by.current_layer",
     "ui.w16k.crop_by.trim",
     "ui.w16k.crop_by.selection",
+    "ui.w18g.raw.channels",
+    "ui.w18g.raw.depth",
+    "ui.w18g.raw.8.bits",
+    "ui.w18g.raw.16.bits",
+    "ui.w18g.raw.byte.order",
+    "ui.w18g.psd.title",
+    "ui.w18g.psd.format",
+    "ui.w18g.psd.minify",
+    "ui.w18g.psd.blank.preview",
+    "ui.w18g.psd.zip",
+    "ui.w18g.psd.save",
+    "ui.w18g.psd.into.zip",
+    "ui.w18g.export.artboards",
+    "ui.w18g.export.slices",
+    "ui.w18g.slices.no",
+    "ui.w18g.slices.all",
+    "ui.w18g.slices.user",
+    "ui.w18g.export.reverse.pages",
     "ui.w16.comps.last.state",
     "ui.w16.comps.last.state.none",
     "ui.w16.comps.flag.visibility",
     "ui.w16.comps.flag.position",
     "ui.w16.comps.flag.appearance",
+    // W18-I.
+    "ui.w18.memory.no_document",
+    "ui.w18.memory.image",
+    "ui.w18.memory.history",
+    "ui.w18.memory.history.value",
+    "ui.w18.memory.clipboard",
+    "ui.w18.memory.clipboard.pixels",
+    "ui.w18.memory.clipboard.empty",
+    "ui.w18.memory.purge.clipboard",
+    "ui.w18.memory.purge.histories",
+    "ui.w18.memory.purge.all",
     "ui.w16.notes.author",
     "ui.docks.channels.spot.hint",
     // W13X-7.
@@ -1849,6 +2101,33 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.slice_options.confirm",
     "ui.slice_options.name.empty",
     "ui.slice_options.name.taken",
+    // W18-A.
+    "ui.canvas_menu.unavailable",
+    "ui.canvas_menu.make_work_path",
+    "ui.canvas_menu.remove_anchor",
+    "ui.canvas_menu.remove_path",
+    "ui.canvas_menu.make_selection",
+    "ui.canvas_menu.fill",
+    "ui.canvas_menu.stroke",
+    "ui.canvas_menu.edit_text",
+    "ui.canvas_menu.delete_slice",
+    "ui.canvas_menu.divide_slice",
+    "ui.canvas_menu.no_selection",
+    "ui.canvas_menu.no_anchor",
+    "ui.canvas_menu.no_path_here",
+    "ui.canvas_menu.no_path",
+    "ui.canvas_menu.no_text",
+    "ui.canvas_menu.no_slice",
+    "ui.divide_slice.title",
+    "ui.divide_slice.horizontally",
+    "ui.divide_slice.vertically",
+    "ui.divide_slice.equal",
+    "ui.divide_slice.pixels",
+    "ui.divide_slice.n",
+    "ui.divide_slice.caption",
+    "ui.divide_slice.none",
+    "ui.divide_slice.nothing",
+    "ui.divide_slice.confirm",
     "ui.rename_layer.name.empty",
     "ui.rename_layer.name.unchanged",
     "ui.warp_text.title",
@@ -1902,6 +2181,15 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.toolbar.unit.px",
     "ui.toolbar.unit.degrees",
     "ui.toolbar.commit.hint",
+    // W18-F.
+    "ui.w18f.cancel.hint",
+    "ui.w18f.zoom_in",
+    "ui.w18f.zoom_out",
+    "ui.w18f.all_documents",
+    "ui.w18f.select_source",
+    "ui.w18f.select_source.alt",
+    "ui.w18f.pattern",
+    "ui.w18f.no_patterns",
     // W9-L: the Move bar's Align / Distribute and the reference grid.
     "ui.toolbar.align",
     "ui.toolbar.distribute",
@@ -1912,6 +2200,11 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.toolbar.path.send.backward",
     "ui.toolbar.path.send.to.back",
     "ui.toolbar.path.delete",
+    "ui.toolbar.pen.make",
+    "ui.toolbar.pen.make.selection",
+    "ui.toolbar.pen.make.mask",
+    "ui.toolbar.pen.make.shape",
+    "ui.toolbar.pen.make.no.path",
     "ui.toolbar.reference.top.left",
     "ui.toolbar.reference.top",
     "ui.toolbar.reference.top.right",

@@ -2,6 +2,41 @@
 # the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
 # Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
 @name	Français
+Artboards	Plans de travail
+No Slices	Aucune tranche
+All Slices	Toutes les tranches
+User Slices	Tranches utilisateur
+Put the file into ZIP	Mettre le fichier dans un ZIP
+16 Bits	16 bits
+8 Bits	8 bits
+AVIF…	AVIF…
+Blank preview image	Image d'aperçu vide
+Byte Order	Ordre des octets
+Depth	Profondeur
+Duplicate Into…	Dupliquer dans…
+Guides from Layer	Repères depuis le calque
+Minify the file	Réduire le fichier
+Nothing under the pointer for this row	Rien sous le pointeur pour cette commande
+Make Work Path	Créer un tracé de travail
+RAW…	RAW…
+Remove Anchor Point	Supprimer le point d’ancrage
+Remove Path	Supprimer le tracé
+Make Selection	Créer une sélection
+Divide…	Diviser…
+Right-click on an anchor point of the path	Faites un clic droit sur un point d’ancrage du tracé
+Right-click inside a path	Faites un clic droit à l’intérieur d’un tracé
+Save PSD/PSB	Enregistrer en PSD/PSB
+Save PSD/PSB…	Enregistrer en PSD/PSB…
+Select or draw a path first	Sélectionnez ou dessinez d’abord un tracé
+Right-click on a text layer	Faites un clic droit sur un calque de texte
+Right-click inside a slice	Faites un clic droit à l’intérieur d’une tranche
+Divide Slices	Diviser les tranches
+N equal parts	N parties égales
+N pixels per part	N pixels par partie
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Découpe la tranche sur laquelle vous avez fait un clic droit, ou la zone de travail s’il n’y en avait pas, en une grille de tranches.
+Tick Horizontally or Vertically	Cochez Horizontalement ou Verticalement
+These settings make no cut: raise N or pick a smaller pixel count	Ces réglages ne font aucune coupe : augmentez N ou choisissez moins de pixels
  fps	 i/s
  frames	 images
  ms	 ms
@@ -291,6 +326,10 @@ Columns	Colonnes
 Columns and rows with gutters between them, inside optional margins, in pixels.	Colonnes et rangées séparées par des gouttières, dans des marges facultatives, en pixels.
 Combine Shapes	Combiner les formes
 Commit (Enter)	Valider (Entrée)
+Cancel (Esc)	Annuler (Échap)
+All Documents	Tous les documents
+Select Source	Sélectionner la source
+Alt	Alt
 Commit Contents	Valider le contenu
 Composite	Composite
 Condensed	Étroit
@@ -857,7 +896,6 @@ New Folder	Nouveau dossier
 New Guide	Nouveau repère
 New Guide Layout	Nouvelle disposition de repères
 New Guide Layout…	Nouvelle disposition de repères…
-New Guides from Shape	Nouveaux repères d’après la forme
 New Guide…	Nouveau repère…
 New Layer	Nouveau calque
 New Layer Based Slice	Nouvelle tranche d’après le calque
@@ -1494,6 +1532,7 @@ Trim	Rogner
 Trim Away	Supprimer
 Trim…	Rogner…
 Tritone	Trichromie
+Turn into JPG	Convertir en JPG
 Turn on Resample to change the pixel count.	Activez Rééchantillonnage pour changer le nombre de pixels.
 Twirl…	Tourbillon…
 Twist	Torsion
@@ -1587,6 +1626,7 @@ Written with the document's palette.	Écrit avec la palette du document.
 Yellow	Jaune
 Yellow / Blue	Jaune / Bleu
 Yellows	Jaunes
+ZIP for pixel data	ZIP pour les données de pixels
 ZigZag…	Zigzag…
 Zoom In	Zoom avant
 Zoom Out	Zoom arrière
@@ -1621,3 +1661,17 @@ vector mask thumbnail — click to edit the vector mask	vignette du masque vecto
 {path} is a {space} profile; an RGB document takes an RGB profile	{path} est un profil {space} ; un document RVB prend un profil RVB
 {path} is {len} bytes, larger than any colour profile	{path} fait {len} octets, plus que n’importe quel profil colorimétrique
 {reason}; this one is {space}	{reason} ; celui-ci est {space}
+a	a
+b	b
+Open a document to see its memory	Ouvrez un document pour voir sa mémoire
+Image data	Données d'image
+{undo} undo / {redo} redo steps	{undo} annulations / {redo} rétablissements
+Holds copied pixels	Contient des pixels copiés
+{size} ({tiles} tiles)	{size} ({tiles} tuiles)
+Empty	Vide
+Purge Clipboard	Purger le presse-papiers
+Purge Histories	Purger les historiques
+Purge All	Tout purger
+Make	Créer
+There is no path; draw one or select it in the Paths panel	Aucun tracé ; dessinez-en un ou sélectionnez-le dans le panneau Tracés
+Reverse pages	Inverser les pages

@@ -25,11 +25,17 @@
 //!   `SoLd`/`PlLd` plus a matching `lnk2`/`lnk3`/`lnkD`/`lnkE` entry becomes
 //!   a smart object whose source is the decoded file (a linked one read from
 //!   its path, and linked again), whose transform maps it onto those corners
-//!   and whose filters are live again. What keeps the raster fallback, named
-//!   with the reason: a filter with no Photoshop smart filter (see
-//!   [`psd::placed::smart_filters::MAPPED`]), a Wrap/Mirror edge, a
-//!   smart-filter mask, and on the way in a linked file that cannot be read
-//!   or a filter this build does not have.
+//!   and whose filters are live again. W18-J: every filter with a Photoshop
+//!   equivalent is mapped ([`psd::placed::smart_filters::MAPPED`]); an edge
+//!   mode or other setting Photoshop lacks rides as an extra `Fltr` key. The
+//!   smart-filter mask is written by Save as PSD ([`write_filter_masks`]: its
+//!   settings in `filterFXStyle`, its pixels in the document's `FEid` block)
+//!   and read back by File > Open ([`import_filter_mask`]). What keeps the
+//!   raster fallback, named with the reason: a filter in
+//!   [`psd::placed::smart_filters::RASTERISED`], a filter mask under a
+//!   rotated, scaled or sub-pixel placement or on an object whose file
+//!   another smart object also places, and on the way in a linked file that
+//!   cannot be read or a filter this build does not have.
 //! * **Adjustments with no `.psd` layer** (W16-J): Auto, Desaturate,
 //!   Equalize, Shadows/Highlights, Replace Color, HDR Toning and Match Color
 //!   have no Photoshop adjustment layer, so their effect is written as
@@ -63,6 +69,25 @@ pub(super) struct PsdExportExtras {
     /// effect's pixels ([`adjustment_as_pixels`]) because a `.psd` has no
     /// layer for it.
     pub rasterised_adjustments: Vec<String>,
+    /// W18-J: smart objects written live with a filter mask, waiting for
+    /// [`write_filter_masks`] (which the save route calls before
+    /// [`PsdExportExtras::finish`]).
+    pub pending_filter_masks: Vec<PendingFilterMask>,
+    /// W18-J: the document's `FEid` entries.
+    pub filter_effects: Vec<psd::placed::smart_filters::FilterEffects>,
+}
+
+/// W18-J: a smart object whose `SoLd` names a filter mask the `FEid` block
+/// must carry.
+#[derive(Debug, Clone)]
+pub(super) struct PendingFilterMask {
+    /// The placed layer's id (its `SoLd` `placed` key).
+    pub placed: String,
+    pub mask: layer_model::LayerMask,
+    /// The object's integer translation: the mask's layer space onto the
+    /// canvas.
+    pub dx: i64,
+    pub dy: i64,
 }
 
 impl PsdExportExtras {
@@ -80,6 +105,10 @@ impl PsdExportExtras {
 
     /// Put the collected document-level blocks into `file`.
     pub fn finish(self, file: &mut psd::PsdFile) {
+        debug_assert!(
+            self.pending_filter_masks.is_empty(),
+            "W18-J: write_filter_masks runs before finish"
+        );
         if self.linked.iter().any(|f| f.embedded) {
             file.extra.push(psd::TaggedBlock::new(
                 *b"lnk2",
@@ -96,6 +125,13 @@ impl PsdExportExtras {
             file.extra.push(psd::TaggedBlock::new(
                 *b"Patt",
                 psd::pattern::encode_block(&self.patterns),
+            ));
+        }
+        // W18-J: the smart-filter masks' pixels.
+        if !self.filter_effects.is_empty() {
+            file.extra.push(psd::TaggedBlock::new(
+                psd::placed::smart_filters::FILTER_EFFECTS_KEY,
+                psd::placed::smart_filters::encode_filter_effects(&self.filter_effects),
             ));
         }
     }
@@ -409,13 +445,38 @@ pub(super) fn smart_blocks(
     if !transform.is_finite() {
         return Err("its transform is not finite".into());
     }
-    if object.filter_mask.is_some() {
-        return Err("its smart-filter mask is not written to a .psd".into());
-    }
-    let filter_fx = if object.filters.is_empty() {
+    // W18-J: the filter mask's settings ride in `filterFXStyle` and its
+    // pixels in `FEid`, written by `write_filter_masks` in canvas pixels —
+    // so only under an integer translation of the object.
+    let mut pending = None;
+    let mask_flags = match &object.filter_mask {
+        None => None,
+        Some(mask) => {
+            let (dx, dy, exact) = translation_of(transform);
+            if !exact || *mask.transform != glam::Affine2::IDENTITY {
+                return Err(
+                    "its smart-filter mask is under a rotated, scaled or sub-pixel placement, \
+                     which a .psd filter mask (canvas pixels) cannot hold"
+                        .into(),
+                );
+            }
+            pending = Some((mask.clone(), dx, dy));
+            Some(psd::placed::smart_filters::FilterMaskFlags {
+                enabled: mask.enabled,
+                linked: mask.linked,
+                density: (mask.density() * 255.0).round().clamp(0.0, 255.0) as u8,
+                feather: f64::from(mask.feather_px()),
+                inverted: mask.inverted,
+            })
+        }
+    };
+    let filter_fx = if object.filters.is_empty() && mask_flags.is_none() {
         None
     } else {
-        Some(psd::placed::smart_filters::encode_stack(&object.filters).map_err(|w| w.join("; "))?)
+        Some(
+            psd::placed::smart_filters::encode_stack_masked(&object.filters, mask_flags)
+                .map_err(|w| w.join("; "))?,
+        )
     };
     let origin = document
         .asset_origin(object.asset)
@@ -478,6 +539,34 @@ pub(super) fn smart_blocks(
         let p = apply(transform, x, y);
         corners[i * 2] = p[0];
         corners[i * 2 + 1] = p[1];
+    }
+    if let Some((mask, dx, dy)) = pending {
+        // A `.psd` names a filter mask by the file the object places, so a
+        // second object placing the same file would open wearing this mask.
+        let shared = document
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .filter(|l| {
+                matches!(
+                    document.layers.get(*l).map(|l| &l.kind),
+                    Some(LayerKind::SmartObject(so)) if so.asset == object.asset
+                )
+            })
+            .count();
+        if shared > 1 {
+            return Err(
+                "its smart-filter mask is on an object whose file another smart object also \
+                 places, and a .psd names a filter mask by the file it places"
+                    .into(),
+            );
+        }
+        extras.pending_filter_masks.push(PendingFilterMask {
+            placed: id.clone(),
+            mask,
+            dx,
+            dy,
+        });
     }
     let placed = PlacedLayer {
         id,
@@ -617,6 +706,205 @@ fn smart_from_psd(
         },
         source: decoded,
     })
+}
+
+// ------------------------------------------- W18-J: smart-filter masks
+
+/// RGBA8 pixels as the four `FEid` planes (16-bit samples, big-endian and
+/// widened exactly, in a 16-bit document).
+fn filter_effects_planes(rgba: &[u8], deep: bool) -> [Option<Vec<u8>>; 4] {
+    let plane = |c: usize| -> Vec<u8> {
+        let samples = rgba.iter().skip(c).step_by(4).copied();
+        if deep {
+            samples
+                .flat_map(|v| (u16::from(v) * 257).to_be_bytes())
+                .collect()
+        } else {
+            samples.collect()
+        }
+    };
+    [
+        Some(plane(0)),
+        Some(plane(1)),
+        Some(plane(2)),
+        Some(plane(3)),
+    ]
+}
+
+/// W18-J: the `FEid` entry of every smart object [`smart_blocks`] wrote live
+/// with a filter mask: its unfiltered pixels (what the filter mask shows
+/// where it is black, which Photopea draws from this block) and its mask in
+/// canvas pixels. The mask rectangle covers the object's whole stored
+/// extent, so the white a reader assumes outside it is never read where
+/// this build's mask is black; an inverted mask is written inverted (a
+/// `.psd` filter mask has no invert switch) and flagged so it reads back as
+/// the same mask. Called by the save route between the layer records and
+/// [`PsdExportExtras::finish`].
+pub(super) fn write_filter_masks(
+    document: &Document,
+    tiles: &MemoryTileSource,
+    extras: &mut PsdExportExtras,
+) -> Result<(), ImportError> {
+    let canvas = DocRect::canvas(document.width(), document.height());
+    for pending in std::mem::take(&mut extras.pending_filter_masks) {
+        let owner = document.layers.iter_depth_first().into_iter().find(|id| {
+            matches!(
+                document.layers.get(*id).map(|l| &l.kind),
+                Some(LayerKind::SmartObject(so))
+                    if so.filter_mask.as_ref().map(|m| m.id) == Some(pending.mask.id)
+            )
+        });
+        let Some(id) = owner else {
+            continue;
+        };
+        let mut staged = document.clone();
+        if let Some(layer) = staged.layers.get_mut(id) {
+            layer.mask = None;
+            layer.effects = layer_model::LayerEffects::default();
+            if let LayerKind::SmartObject(so) = &mut layer.kind {
+                so.filters.clear();
+                so.filter_mask = None;
+            }
+        }
+        let rendered = compositor::composite_subtree(
+            &staged,
+            tiles,
+            id,
+            raster::PixelRect::new(0, 0, document.width(), document.height()),
+            0,
+            compositor::CompositeOptions::default(),
+        )?;
+        let rgba = rendered.to_rgba8(&document.meta.color_space);
+        let (rect, planes) = match crop_to_content(&rgba, canvas) {
+            Some((bounds, cropped)) => (bounds, filter_effects_planes(&cropped, extras.deep)),
+            None => (DocRect::EMPTY, [None, None, None, None]),
+        };
+        let layer_area = document
+            .pixels
+            .tiles(PixelKey::Layer(id))
+            .map(tile_map_rect)
+            .unwrap_or(DocRect::EMPTY);
+        let mask_map = document.pixels.tiles(PixelKey::Mask(pending.mask.id));
+        let area = layer_area.union(mask_map.map(tile_map_rect).unwrap_or(DocRect::EMPTY));
+        let mut data = match mask_map {
+            Some(map) => coverage_from_tiles(map, tiles, area),
+            None => vec![0u8; area.width() as usize * area.height() as usize],
+        };
+        if pending.mask.inverted {
+            for v in &mut data {
+                *v = 255 - *v;
+            }
+        }
+        if extras.deep {
+            data = data
+                .into_iter()
+                .flat_map(|v| (u16::from(v) * 257).to_be_bytes())
+                .collect();
+        }
+        extras
+            .filter_effects
+            .push(psd::placed::smart_filters::FilterEffects {
+                id: pending.placed,
+                rect: rect.to_psd(),
+                depth: if extras.deep { 16 } else { 8 },
+                planes,
+                mask: Some(psd::placed::smart_filters::FilterEffectsMask {
+                    rect: area.offset(pending.dx, pending.dy).to_psd(),
+                    data,
+                }),
+            });
+    }
+    Ok(())
+}
+
+/// W18-J: the smart-filter mask the file's `FEid` block holds for the
+/// placed layer `source`, attached to the smart object `id` (already in
+/// `document`, its source tiles stored): the mask's pixels as the object's
+/// filter-mask tiles in its layer space, its switch, link, density, feather
+/// and invert from `filterFXStyle`. `Ok(false)` when the file has no mask for
+/// it; `Err` names why a mask it has cannot be attached (the object's
+/// placement is not an integer translation), and the object keeps its
+/// filters without it. Called by the open route after the object's tiles.
+pub(super) fn import_filter_mask(
+    extra: &[psd::TaggedBlock],
+    source: &psd::PsdLayer,
+    id: LayerId,
+    document: &mut Document,
+    tiles: &mut MemoryTileSource,
+) -> Result<bool, String> {
+    use psd::placed::smart_filters as sf;
+    let opts = psd::ReadOptions::default();
+    let Some(placed) = PlacedLayer::of(source, &opts) else {
+        return Ok(false);
+    };
+    let Some((entry, mask)) = sf::filter_effects_of(extra)
+        .into_iter()
+        .filter(|e| e.id == placed.id)
+        .find_map(|e| e.mask.clone().map(|m| (e, m)))
+    else {
+        return Ok(false);
+    };
+    let flags = sf::filter_fx_of(source, &opts)
+        .map(|fx| sf::decode_mask_flags(&fx))
+        .unwrap_or_default();
+    let transform = document
+        .layers
+        .get(id)
+        .ok_or("the smart object is not in the document")?
+        .transform;
+    let (dx, dy, exact) = translation_of(transform);
+    if !exact {
+        return Err(
+            "its smart-filter mask is in canvas pixels and the object is rotated or scaled; \
+             the filters apply without the mask"
+                .into(),
+        );
+    }
+    let mut data: Vec<u8> = if entry.depth == 16 {
+        mask.data.as_chunks::<2>().0.iter().map(|c| c[0]).collect()
+    } else {
+        mask.data.clone()
+    };
+    let rect = DocRect::from_psd(mask.rect).offset(-dx, -dy);
+    if data.len() != rect.width() as usize * rect.height() as usize {
+        return Err("its smart-filter mask's pixels do not fill their rectangle".into());
+    }
+    if flags.inverted {
+        for v in &mut data {
+            *v = 255 - *v;
+        }
+    }
+    // Outside its rectangle a `.psd` filter mask is white.
+    let default = if flags.inverted { 0 } else { 255 };
+    let layer_area = document
+        .pixels
+        .tiles(PixelKey::Layer(id))
+        .map(tile_map_rect)
+        .unwrap_or(DocRect::EMPTY);
+    let region = if default == 0 {
+        rect
+    } else {
+        rect.union(layer_area)
+    };
+    let edits =
+        tile_edits_for_coverage(Some(&data), rect.to_psd(), default, &region.tiles(), tiles);
+    let mut filter_mask = LayerMask::new(MaskId::new());
+    filter_mask.enabled = flags.enabled;
+    filter_mask.linked = flags.linked;
+    filter_mask.inverted = flags.inverted;
+    let _ = filter_mask.set_density(f32::from(flags.density) / 255.0);
+    let _ = filter_mask.set_feather_px(flags.feather as f32);
+    if !edits.is_empty() {
+        let delta = TileDelta::new(edits).map_err(|e| e.to_string())?;
+        document
+            .pixels
+            .apply(PixelKey::Mask(filter_mask.id), &delta);
+    }
+    match document.layers.get_mut(id).map(|l| &mut l.kind) {
+        Some(LayerKind::SmartObject(so)) => so.filter_mask = Some(filter_mask),
+        _ => return Err("the layer is not a smart object".into()),
+    }
+    Ok(true)
 }
 
 // ------------------------------------------- W16-J: adjustments as pixels
@@ -1255,6 +1543,10 @@ pub(super) mod svg_path {
 #[cfg(test)]
 #[path = "psd_w16_tests.rs"]
 mod w16_tests;
+
+#[cfg(test)]
+#[path = "psd_w18j_tests.rs"]
+mod w18j_tests;
 
 #[cfg(test)]
 mod tests {

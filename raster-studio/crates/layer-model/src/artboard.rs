@@ -7,8 +7,16 @@
 //! raster **background plate**: a [`crate::RasterLayer`] carrying
 //! [`crate::RasterLayer::artboard`]. The plate names the artboard's rect and
 //! background colour, and its pixels are that colour over that rect, so the
-//! artboard is visible — and composites, exports and round-trips through PSD
-//! — through the ordinary group and raster paths with no new layer kind.
+//! artboard is visible — and composites and exports — through the ordinary
+//! group and raster paths with no new layer kind.
+//!
+//! W18-B: in a `.psd` an artboard is NOT this plate. Photoshop marks the
+//! group record with an `artb` block (rect, background, preset) and draws
+//! the background itself, so `app_shell`'s PSD export writes the plate as
+//! that block instead of a layer record, and its import builds the plate
+//! back from the block (`psd::artboard`). The plate's own pixels beyond its
+//! background colour, and a translucent background's alpha, have no place
+//! in the block and are not written.
 //! The field is appended to `RasterLayer` and omitted while `None`, so a
 //! document from before artboards opens unchanged.
 //!

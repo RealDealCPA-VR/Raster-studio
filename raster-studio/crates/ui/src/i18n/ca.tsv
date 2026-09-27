@@ -1,0 +1,1677 @@
+# Raster Studio interface strings, ca. One row per line: the English source, a TAB,
+# the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
+# Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
+@name	Català
+ fps	 fps
+ frames	 fotogrames
+ ms	 ms
+ px	 px
+0 bytes	0 bytes
+16 Bits/Channel	16 bits/canal
+16 bit	16 bits
+32 Bits/Channel	32 bits/canal
+3D	3D
+50% Grey	Gris al 50%
+50% Threshold	Llindar al 50%
+8 Bits/Channel	8 bits/canal
+8 bit	8 bits
+90° Clockwise	90° en sentit horari
+90° Counter Clockwise	90° en sentit antihorari
+A CSV row has the wrong number of fields, at line	Una fila del CSV té un nombre incorrecte de camps, a la línia
+A blank canvas at any size	Un llenç en blanc de qualsevol mida
+A colour channel cannot be deleted	No es pot suprimir un canal de color
+A layered raster editor	Un editor ràster amb capes
+A palette holds 2 to 256 colours	Una paleta conté de 2 a 256 colors
+A saved selection already has that name	Ja hi ha una selecció desada amb aquest nom
+A saved selection: click to open Select > Load Selection, then choose it by name there	Una selecció desada: feu clic per obrir Selecciona > Carrega la selecció i trieu-la allà pel nom
+A slice needs a name	Un sector necessita un nom
+AV1 (smaller, newer players)	AV1 (més petit, reproductors més nous)
+About Raster Studio	Quant al Raster Studio
+Absolute Colorimetric	Colorimètric absolut
+Action sets	Conjunts d'accions
+Actions	Accions
+Adaptive (median cut)	Adaptatiu (tall de la mediana)
+Add "copy" to copied layers	Afegeix «còpia» a les capes copiades
+Add Artboard Above	Afegeix una mesa de treball a sobre
+Add Artboard Below	Afegeix una mesa de treball a sota
+Add Artboard Left	Afegeix una mesa de treball a l'esquerra
+Add Artboard Right	Afegeix una mesa de treball a la dreta
+Add Filter Mask	Afegeix màscara de filtre
+Add Media	Afegeix multimèdia
+Add Noise…	Afegeix soroll…
+Add a layer mask	Afegeix una màscara de capa
+Add a smart filter mask	Afegeix una màscara de filtre intel·ligent
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Col·loca un fitxer d'imatge o de vídeo (Fitxer > Col·loca incrustat); un vídeo esdevé una capa de vídeo al capçal de reproducció
+Add an adjustment layer	Afegeix una capa d'ajust
+Add another instance of this effect	Afegeix una altra instància d'aquest efecte
+Add current colour	Afegeix el color actual
+Add export	Afegeix una exportació
+Add frame	Afegeix un fotograma
+Add or remove room around the image. Pixels are not resampled.	Afegeix o treu espai al voltant de la imatge. Els píxels no es remostregen.
+Add shortcut	Afegeix una drecera
+Add to Selection	Afegeix a la selecció
+Adds one guide at a document coordinate, in pixels.	Afegeix una guia en una coordenada del document, en píxels.
+Adjustment	Ajust
+Adjustments	Ajustaments
+Advanced	Avançat
+Again	Repeteix
+Again with Copy	Una altra vegada amb còpia
+Aliased (pencil)	Dentat (llapis)
+Align	Alinea
+Align the bottom edge to the canvas	Alinea la vora inferior amb el llenç
+Align the left edge to the canvas	Alinea la vora esquerra amb el llenç
+Align the right edge to the canvas	Alinea la vora dreta amb el llenç
+Align the top edge to the canvas	Alinea la vora superior amb el llenç
+Align with layer	Alinea amb la capa
+All	Tot
+All Caps	Tot majúscules
+All Caps shapes every lowercase letter as its capital; Small Caps shapes it as a capital at 70 % size. The stored text keeps the case you typed.	Tot majúscules dibuixa cada minúscula com a majúscula; Versaletes la dibuixa com a majúscula al 70 % de la mida. El text desat conserva les majúscules i minúscules que heu escrit.
+All Layers	Totes les capes
+Alpha	Alfa
+Already used by	Ja la fa servir
+Alt Tag	Etiqueta Alt
+Amount	Quantitat
+An export needs at least one output	Una exportació necessita almenys una sortida
+An image or project from this computer	Una imatge o un projecte d'aquest ordinador
+Angle	Angle
+Angle (degrees)	Angle (graus)
+Angle jitter	Variació de l'angle
+Animation	Animació
+Another slice already has this name	Un altre sector ja té aquest nom
+Appearance	Aparença
+Applied	Aplicat
+Apply	Aplica
+Apply Guides	Aplica les guies
+Apply Image	Aplica la imatge
+Apply Image…	Aplica la imatge…
+Apply Mask	Aplica la màscara
+Apply Style	Aplica l'estil
+Apply Style 1	Aplica l'estil 1
+Apply Style Preset…	Aplica un estil predefinit…
+Apply the next comp	Aplica la composició següent
+Apply the previous comp	Aplica la composició anterior
+Apply this mask	Aplica aquesta màscara
+Approximate. The composited result is what the canvas shows.	Aproximat. El resultat compost és el que mostra el llenç.
+Arbitrary…	Arbitrari…
+Arc	Arc
+Arc Lower	Arc inferior
+Arc Upper	Arc superior
+Arch	Arc
+Arrange	Organitza
+Artboard	Obrador
+Artboard from Layers	Obrador a partir de capes
+Artboards in one document	Meses de treball en un document
+Artboards to Files…	Meses de treball a fitxers…
+Assign Profile	Assigna un perfil
+Assigned {name}: the pixel numbers are unchanged, so the colours look different	S'ha assignat {name}: els valors dels píxels no canvien, de manera que els colors es veuen diferents
+Author	Autor
+Auto Color	Color automàtic
+Auto Contrast	Contrast automàtic
+Auto Tone	To automàtic
+Auto leading	Interlineat automàtic
+Auto-Align Layers…	Alinea les capes automàticament…
+Auto-Blend Layers…	Fusiona les capes automàticament…
+Automate	Automatitza
+Autosaves of never-saved documents go here; empty uses the default	Aquí van les còpies automàtiques dels documents mai desats; si és buit, s'usa el valor predeterminat
+Average	Promig
+BMP…	BMP…
+Back to the colour this opened on	Torna al color amb què s'ha obert
+Background — double-click for the picker	Fons — feu doble clic per al selector
+Based On	Basat en
+Baseline shift	Canvi de la línea base
+Baseline to baseline. Auto leading follows the type size.	De línia de base a línia de base. L'interlineat automàtic segueix la mida del text.
+Batch	Lot
+Batch…	Lot…
+Bend	Torça
+Bevel	Bisell
+Bevel & Emboss	Bisell i relleu
+Bevel & Emboss…	Bisell i relleu…
+Bind a text replacement variable to a text layer, or a visibility variable to any layer.	Vinculeu una variable de substitució de text a una capa de text, o una variable de visibilitat a qualsevol capa.
+Bitmap	Mapa de bits
+Bitmap…	Mapa de bits…
+Black	Negre
+Black & White	Blanc i negre
+Black & White…	Blanc i negre…
+Black to Transparent	Negre a transparent
+Black to White	Negre a blanc
+Black to white through the inks	Negre a blanc a través de les tintes
+Blacks	Negres
+Blend If	Fusiona si
+Blend Mode: Color	Mode de fusió: Color
+Blend Mode: Color Burn	Mode de fusió: Cremat de color
+Blend Mode: Color Dodge	Mode de fusió: Sobreexposició de color
+Blend Mode: Darken	Mode de fusió: Enfosqueix
+Blend Mode: Difference	Mode de fusió: Diferència
+Blend Mode: Dissolve	Mode de fusió: Dissol
+Blend Mode: Exclusion	Mode de fusió: Exclusió
+Blend Mode: Hard Light	Mode de fusió: Llum forta
+Blend Mode: Hard Mix	Mode de fusió: Barreja dura
+Blend Mode: Hue	Mode de fusió: To
+Blend Mode: Lighten	Mode de fusió: Aclareix
+Blend Mode: Linear Burn	Mode de fusió: Cremat lineal
+Blend Mode: Linear Dodge (Add)	Mode de fusió: Sobreexposició lineal (suma)
+Blend Mode: Linear Light	Mode de fusió: Llum lineal
+Blend Mode: Luminosity	Mode de fusió: Lluminositat
+Blend Mode: Multiply	Mode de fusió: Multiplica
+Blend Mode: Normal	Mode de fusió: Normal
+Blend Mode: Overlay	Mode de fusió: Superposa
+Blend Mode: Pin Light	Mode de fusió: Llum puntual
+Blend Mode: Saturation	Mode de fusió: Saturació
+Blend Mode: Screen	Mode de fusió: Trama
+Blend Mode: Soft Light	Mode de fusió: Llum suau
+Blend Mode: Vivid Light	Mode de fusió: Llum intensa
+Blending	Fusió
+Blending Options	Opcions de fusió
+Blending Options…	Opcions de fusió…
+Blending options	Opcions de fusió
+Blends a source document, layer or channel into the active layer as one step.	Fusiona un document, capa o canal d'origen a la capa activa en un sol pas.
+Blends one channel of each of two sources into a new channel, a selection or a new document.	Fusiona un canal de cadascun de dos orígens en un canal nou, una selecció o un document nou.
+Blue	Blau
+Blues	Blaus
+Blur	Desenfoca
+Blur Gallery	Galeria de desenfocament
+Blur More	Difumina més
+Bold	Negreta
+Border Selection	Selecció de vora
+Border…	Vora…
+Both axes	Tots dos eixos
+Bottom	Part Inferior
+Bottom Edges	Vores inferiors
+Bottom Left	Part Inferior a l'Esquerra
+Bottom Right	A Baix a la Dreta
+Bottom Right Pixel Color	Color del píxel inferior dret
+Bottom left	Inferior esquerra
+Bottom right	Inferior dreta
+Box Blur…	Control de difuminat…
+Box height	Alçada de la caixa
+Brightness	Brillantor
+Brightness jitter	Variació de la brillantor
+Brightness/Contrast	Brillantor/Contrast
+Brightness/Contrast…	Brillantor/Contrast…
+Bring Forward	Porta endavant
+Bring to Front	Porta al davant
+Brush Editor	Editor de pinzells
+Brush: Background	Pinzell: fons
+Brush: Foreground	Pinzell: primer pla
+Brushes	Pinzells
+Bulge	Infla
+Butt	Plana
+CMYK Color	Color CMYK
+Calculations	Càlculs
+Calculations…	Càlculs…
+Camera Raw…	Camera Raw…
+Canvas Size	Mida del llenç
+Canvas Size…	Mida del llenç…
+Canvas extension	Extensió del llenç
+Caps	Extrems
+Carries the XMP; the source's EXIF goes into JPEG only	Porta l'XMP; l'EXIF de l'origen només va al JPEG
+Cell size (pixels)	Mida de la cel·la (píxels)
+Center	Centre
+Center horizontally on the canvas	Centra horitzontalment al llenç
+Center vertically on the canvas	Centra verticalment al llenç
+Centimeters	Centímetres
+Centre	Centre
+Centre the view on this note	Centra la vista en aquesta nota
+Change Bit Depth	Canvia la profunditat de bits
+Change Colour Mode	Canvia el mode de color
+Change Layer Properties	Canvia les propietats de la capa
+Change how many pixels the document has, or how large it prints.	Canvieu quants píxels té el document, o la mida amb què s'imprimeix.
+Channel	Canal
+Channel Mixer	Mesclador de canals
+Channel Mixer…	Mesclador de canals…
+Channel thumbnail	Miniatura del canal
+Channels	Canals
+Character	Caràcters
+Character Style	Estil de caràcter
+Character Styles	Estils de caràcter
+Checkerboard	Escaquer
+Choose 2 to 256 colours	Trieu de 2 a 256 colors
+Choose a colour profile	Trieu un perfil de color
+Choose a destination folder	Trieu una carpeta de destinació
+Choose a source folder	Trieu una carpeta d'origen
+Choose at least one page to open	Trieu almenys una pàgina per obrir
+Choose at least one side to trim	Trieu almenys un costat per retallar
+Choose the Action to play	Trieu l'acció que voleu reproduir
+Choose the open grayscale document each channel of the new RGB document comes from.	Trieu el document en escala de grisos obert d'on ve cada canal del nou document RGB.
+Choose the pages to open, their resolution and how they open.	Trieu les pàgines que s'obriran, la seva resolució i com s'obren.
+Choose the source and the destination folders.	Trieu les carpetes d'origen i de destinació.
+Choose…	Tria…
+Clear	Buida
+Clear All	Esborra-ho tot
+Clear Guides	Esborra les guies
+Clear History	Esborra l'historial
+Clear Layer Style	Esborra l'estil de capa
+Clear Slices	Esborra els sectors
+Clear Strokes	Esborra els traços
+Clear existing guides	Esborra les guies existents
+Clear the {noun} from the active text layer	Esborra el {noun} de la capa de text activa
+Cleared {n} slice(s)	S'han esborrat {n} sectors
+Click an item in the panel first	Feu clic primer en un element del tauler
+Click anywhere to sample a colour	Feu clic a qualsevol lloc per mostrejar un color
+Click anywhere to sample a colour, or press Escape.	Feu clic a qualsevol lloc per mostrejar un color, o premeu Escape.
+Click the graph to add a point, drag a point to bend the curve, drag it off the graph to remove it	Feu clic al gràfic per afegir un punt, arrossegueu un punt per corbar la corba, arrossegueu-lo fora del gràfic per eliminar-lo
+Click the preview to sample a colour from it	Feu clic a la previsualització per mostrejar-ne un color
+Click the preview to sample the colour to replace	Feu clic a la previsualització per mostrejar el color que cal substituir
+Click the ramp to edit its stops.	Feu clic a la rampa per editar-ne les parades.
+Clip to layer below	Retalla a la capa de sota
+Clipboard	Porta-retalls
+Clipping	Retall
+Close	Tanca
+Close All	Tanca-ho tot
+Close Alpha Channel	Tanca el canal alfa
+Close Others	Tanca els altres
+Close panel	Tanca el tauler
+Clouds	Núvols
+Codec	Còdec
+Color	Color
+Color Balance	Balanç de color
+Color Balance…	Balanç de color…
+Color Burn	Crema el color
+Color Dodge	Aclareix el color
+Color Dynamics	Dinàmica de color
+Color Halftone…	Mig to de color…
+Color Intensity	Intensitat del color
+Color Label	Etiqueta de color
+Color Lookup	Cerca de colors
+Color Lookup Tables…	Taules de consulta de color…
+Color Lookup…	Cerca de colors…
+Color Overlay	Superposició de color
+Color Overlay…	Superposició de color…
+Color Picker	Tria un color
+Color Range	Rang de color
+Color Range…	Rang de color…
+Color fringe cleanup: pulls the boundary pixels' color toward the nearby interior ink — a separate edit from mask refinement.	Neteja de franges de color: acosta el color dels píxels de la frontera a la tinta interior propera — una edició separada del refinament de la màscara.
+Color to Alpha…	Color cap a Alfa…
+Colors	Colors
+Colour	Color
+Colour varies once per stroke.	El color varia un cop per traç.
+Colours	Colors
+Colours must be 1 to 64, the tolerance above 0 and the corner length at least 1	Els colors han de ser d'1 a 64, la tolerància superior a 0 i la longitud de la cantonada almenys 1
+Columns	Columnes
+Columns and rows with gutters between them, inside optional margins, in pixels.	Columnes i files amb separacions entre elles, dins de marges opcionals, en píxels.
+Combine Shapes	Combina les formes
+Commit (Enter)	Confirma (Retorn)
+Commit Contents	Confirma el contingut
+Composite	Compost
+Condensed	Condensada
+Cone	Con
+Constant	Constant
+Constrain proportions	Mantén les proporcions
+Content-Aware	Segons el contingut
+Content-Aware Scale	Escala segons el contingut
+Contour	Contorn
+Contract Selection	Contrau la selecció
+Contract by	Contrau en
+Contract…	Redueix…
+Contrast	Contrast
+Conversion Options	Opcions de conversió
+Convert Formats	Converteix formats
+Convert Formats…	Converteix formats…
+Convert for Smart Filters	Converteix per a filtres intel·ligents
+Convert to Layers	Converteix en capes
+Convert to Linked…	Converteix en enllaçat…
+Convert to Paragraph Text	Converteix en text de paràgraf
+Convert to Point Text	Converteix en text de punt
+Convert to Profile	Converteix a un perfil
+Convert to Profile works on 8- and 16-bit documents	Converteix a un perfil funciona en documents de 8 i 16 bits
+Convert to Profile…	Converteix a un perfil…
+Convert to Shape	Converteix en forma
+Convert to Smart Object	Converteix en objecte intel·ligent
+Converted to {name} ({intent}): the numbers changed so the colours look the same	S'ha convertit a {name} ({intent}): els valors han canviat perquè els colors es vegin iguals
+Cool	Fred
+Copper	Coure
+Copy	Copia
+Copy Layer Style	Copia l'estil de capa
+Copy Merged	Còpia fusionada
+Copyright Notice	Avís de drets d'autor
+Corner length	Longitud de la cantonada
+Corner radius	Radi de la cantonada
+Corner radius applies to rectangles; this path has no corners to round	El radi de la cantonada s'aplica als rectangles; aquest traçat no té cantonades per arrodonir
+Corners	Cantonades
+Count jitter	Variació del nombre
+Create Clipping Mask	Crea una màscara de retall
+Create Layer	Crea una capa
+Create Layers	Crea capes
+Crop	Buida
+Crop and Straighten Photos	Escapça i redreça les fotos
+Crops the canvas to the content, judged by the basis below.	Escapça el llenç al contingut, segons la base de sota.
+Crystallize…	Cristal·litza…
+Current Layer	Capa actual
+Current Path	Camí actual
+Curve tolerance	Tolerància de la corba
+Curves	Corbes
+Curves…	Corbes…
+Custom	Personalitzat
+Custom Brush	Pinzell personalitzat
+Custom: with the Move tool, drag the 16 mesh handles on the canvas	Personalitzat: amb l'eina Mou, arrossegueu les 16 nanses de la malla al llenç
+Custom…	Personalitzat…
+Cut	Retalla
+Cyan	Cian
+Cyan / Red	Cian / Vermell
+Cyans	Cians
+DDS…	DDS…
+DXF…	DXF…
+Dark	Fosc
+Dark Blue	Blau fosc
+Dark Grey	Gris fosc
+Darken	Enfosqueix
+Darker Color	Color més fosc
+Dash	Guions
+Data Set	Conjunt de dades
+Data Sets	Conjunts de dades
+Data Sets…	Conjunts de dades…
+Default	Predeterminat
+Default colours  (D)	Colors predeterminats  (D)
+Default colours (D)	Colors predeterminats (D)
+Define	Defineix
+Define Brush Preset…	Defineix un pinzell predefinit…
+Define Custom Shape…	Defineix una forma personalitzada…
+Define New	Definició nova
+Define Pattern…	Defineix un patró…
+Define…	Defineix…
+Delete	Elimina
+Delete Filter Mask	Elimina màscara de filtre
+Delete Layer	Elimina la capa
+Delete Mask	Suprimeix la màscara
+Delete Vector Mask	Elimina màscara vectorial
+Delete action	Suprimeix l'acció
+Delete channel	Suprimeix el canal
+Delete frame	Suprimeix el fotograma
+Delete path	Suprimeix el traçat
+Delete selected layers	Suprimeix les capes seleccionades
+Delete set and its actions	Suprimeix el conjunt i les seves accions
+Delete stop	Suprimeix la parada
+Delete the applied comp	Suprimeix la composició aplicada
+Delete the selected keyframe	Suprimeix el fotograma clau seleccionat
+Delete the selected tool preset	Suprimeix l'eina predefinida seleccionada
+Delete the selected {noun}	Suprimeix el {noun} seleccionat
+Delete the smart filter mask	Suprimeix la màscara de filtre intel·ligent
+Delete this note	Suprimeix aquesta nota
+Delete this smart filter	Suprimeix aquest filtre intel·ligent
+Delete this spot channel	Suprimeix aquest canal de tinta plana
+Density	Densitat
+Dents…	Abonyegaments…
+Desaturate	Dessatura
+Description	Descripció
+Deselect	Deselecciona
+Deselect Layers	Desselecciona les capes
+Despeckle	Elimina els pics
+Destination	Destinació
+Destination Space	Espai de destinació
+Detail	Detall
+Detail scales	Escales de detall
+Diamond	Diamant
+Difference	Diferència
+Difference Clouds	Diferencia de núvols
+Diffuse…	Difusió…
+Diffusion	Difusió
+Diffusion Dither	Tramat per difusió
+Disable / Enable Filter Mask	Desactiva / activa la màscara de filtre
+Disable / Enable Mask	Desactiva / activa la màscara
+Disable / Enable Vector Mask	Desactiva / activa la màscara vectorial
+Disable Mask	Desactiva la màscara
+Disable Vector Mask	Inhabilita màscara vectorial
+Displace…	Desplaça…
+Dissolve	Dissol
+Distance	Distància
+Distort	Distorsiona
+Distribute	Distribueix
+Dither	Trama
+Dither…	Trama…
+Divide	Divideix
+Dock this panel here	Acobla aquest tauler aquí
+Document	Document
+Document Bounds	Límits del document
+Document Info	Informació del document
+Document Title	Títol del document
+Document size	Mida del document
+Double-click to edit in Layer Style; drag to the trash to delete	Feu doble clic per editar a Estil de capa; arrossegueu a la paperera per suprimir
+Double-click to edit this filter's settings	Feu doble clic per editar la configuració d'aquest filtre
+Double-click to rename	Feu doble clic per canviar el nom
+Drag a line with the Ruler first	Primer arrossegueu una línia amb el Regle
+Drag to zoom the view	Arrossegueu per ampliar la vista
+Drop Shadow	Ombra paral·lela
+Drop Shadow…	Ombra paral·lela…
+Duotone	Duotò
+Duotone Options	Opcions de duotò
+Duotone…	Duotò…
+Duplicate	Duplica
+Duplicate Layer	Duplica la capa
+Duplicate Layer…	Duplica la capa…
+Duplicate frame	Duplica el fotograma
+Dust & Scratches…	Pols i ratllades…
+EMF…	EMF…
+EXIF and XMP writing is not implemented — only ICC is embedded	L'escriptura d'EXIF i XMP no està implementada — només s'incrusta l'ICC
+EXR…	EXR…
+Ease In	Entrada suau
+Ease Out	Sortida suau
+Edge Glow	Resplendor de vores
+Edge refinement: feather, shift, smooth, and contrast over the mask's existing coverage — not subject recognition.	Refinament de vores: difumina, desplaça, suavitza i contrasta sobre la cobertura existent de la màscara — no és reconeixement d'objectes.
+Edges	Vores
+Edit	Edita
+Edit Adjustment	Edita l'ajust
+Edit Adjustment…	Edita l'ajust…
+Edit Alpha Channel	Edita el canal alfa
+Edit Contents…	Edita el contingut…
+Edit Document Records	Edita els registres del document
+Edit Fill	Edita l'emplenament
+Edit Filter Mask	Edita la màscara de filtre
+Edit Generator	Edita el generador
+Edit Group	Edita el grup
+Edit Guides	Edita les guies
+Edit Raster	Edita el ràster
+Edit Saved Selection	Edita la selecció desada
+Edit Shape	Edita la forma
+Edit Slices	Edita els sectors
+Edit Smart object	Edita l'objecte intel·ligent
+Edit Text	Edita el text
+Edit Timeline	Edita la línia de temps
+Edit brush…	Edita el pinzell…
+Edit fill	Edita l'emplenament
+Edit gradient stops — click to open the editor	Edita les parades del degradat — feu clic per obrir l'editor
+Edit in Quick Mask Mode	Edita en mode de màscara ràpida
+Edit this ramp	Edita aquesta rampa
+Effects	Efectes
+Effects apply to the whole layer and undo as one step.	Els efectes s'apliquen a tota la capa i es desfan en un sol pas.
+Embed EXIF and XMP	Incrusta l'EXIF i l'XMP
+Embed Linked	Incrusta l'enllaçat
+Embed colour profile	Incrusta el perfil de color
+Embedded source	Origen incrustat
+Emboss…	Relleu…
+Enable / disable the smart filter mask	Activa / desactiva la màscara de filtre intel·ligent
+Enable Mask	Activa la màscara
+Enable Vector Mask	Habilita màscara vectorial
+Enable at least one export	Activeu almenys una exportació
+Enabled	Activat
+Enlarge smaller images	Amplia les imatges més petites
+Enter a colour like #3366CC	Introduïu un color com ara #3366CC
+Entropy	Entropia
+Equalize	Equalitza
+Essentials	Bàsic
+Every enabled row is written when you export.	Totes les files activades s'escriuen en exportar.
+Every image in the source folder is fitted into the box and written to the destination folder in its own format.	Cada imatge de la carpeta d'origen s'ajusta a la caixa i s'escriu a la carpeta de destinació en el seu propi format.
+Every parameter is at its neutral value — there is nothing to clean	Tots els paràmetres són al valor neutre — no hi ha res a netejar
+Every parameter is at its neutral value — there is nothing to refine	Tots els paràmetres són al valor neutre — no hi ha res a refinar
+Every variable needs a name	Cada variable necessita un nom
+Exact	Exacte
+Exclude Overlapping Shapes	Exclou les formes superposades
+Exclusion	Exclusió
+Expand Selection	Expandeix la selecció
+Expand by	Expandeix en
+Expand the dock	Expandeix l'acoblador
+Expanded	Expandida
+Expand…	Expandeix…
+Export	Exporta
+Export As	Exporta com a
+Export Color Lookup	Exporta la consulta de color
+Export Contents…	Exporta el contingut…
+Export Diagnostics…	Exporta els diagnòstics…
+Export Layers…	Exporta les capes…
+Export PDF	Exporta PDF
+Export as .ABR…	Exporta com a .ABR…
+Export as .ACO…	Exporta com a .ACO…
+Export as .ASL…	Exporta com a .ASL…
+Export set as .atn	Exporta el conjunt com a .atn
+Export…	Exporta…
+Exposure	Exposició
+Exposure…	Exposició…
+Extra Bold	Extranegreta
+Extra Condensed	Extracondensada
+Extra Expanded	Extraexpandida
+Extra Light	Extrafina
+Extras	Extres
+Extrude…	Extrusió…
+Eyedropper	Comptagotes
+Face	Tall
+Facet	Faceta
+Fade	Esvaeix
+Fade…	Esvaeix…
+Family	Família
+Feather	Difumina
+Feather Selection	Difumina la selecció
+Feather radius	Radi de difuminat
+Feather…	Difumina…
+Fibers…	Fibres…
+Field Blur…	Desenfocament de camp…
+File	Fitxer
+File Info	Informació del fitxer
+File Info…	Informació del fitxer…
+File name	Nom del fitxer
+Files that fail are listed in batch-errors.txt in the destination.	Els fitxers que fallen es llisten a batch-errors.txt a la destinació.
+Fill	Omple
+Fill Filter Mask	Emplena la màscara de filtre
+Fill Layer	Capa d'emplenament
+Fill Mask	Emplena la màscara
+Fill Screen	Omple la pantalla
+Fill in File Info, or open a file that has EXIF, to embed metadata	Ompliu la Informació del fitxer, o obriu un fitxer amb EXIF, per incrustar metadades
+Fill path with the foreground colour, on a new shape layer	Emplena el traçat amb el color de primer pla, en una capa de forma nova
+Fill type	Tipus d'emplenament
+Fills the active selection with the chosen contents.	Emplena la selecció activa amb el contingut triat.
+Fill…	Omple…
+Filter	Filtre
+Filter Gallery	Galeria de filtres
+Filter Gallery…	Galeria de filtres…
+Find Edges	Detecta els contorns
+First line	Primera línia
+Fish	Peix
+Fisheye	Ull de peix
+Fit The Area	Adapta a l'àrea
+Fit on Screen	Ajusta a la pantalla
+Fit the whole image in the window	Ajusta tota la imatge a la finestra
+Fixed height	Alçada fixa
+Flag	Senyal
+Flame…	Flama…
+Flat Angled 40	Pla angulat 40
+Flatten Image	Aplana la imatge
+Flip Canvas Horizontal	Capgira el llenç horitzontalment
+Flip Canvas Vertical	Capgira el llenç verticalment
+Flip Horizontal	Capgira horitzontalment
+Flip Vertical	Capgira verticalment
+Flip View Horizontal	Capgira la vista horitzontalment
+Flip View Vertical	Capgira la vista verticalment
+Flow jitter	Variació del flux
+Folders	Carpetes
+Font: 	Tipus de lletra: 
+Foreground strokes mark what to keep, background strokes what to drop; Preview shows the cut.	Els traços de primer pla marquen què cal conservar, els de fons què cal descartar; la Previsualització mostra el retall.
+Foreground — double-click for the picker	Primer pla — feu doble clic per al selector
+Foreground/background jitter	Variació primer pla/fons
+Format	Format
+Fourier	Fourier
+Fourier Transform	Transformada de Fourier
+Fragment	Fragment
+Frame	Fotograma
+Frames	Fotogrames
+Free Transform	Transformació lliure
+Free Transform a Copy	Transformació lliure d'una còpia
+From Transparency	A partir de transparència
+Fullscreen	Pantalla completa
+Fuzziness	Tolerància
+GIF…	GIF…
+Gamma	Gamma
+Gamut Warning	Avís de gamma
+Gaussian	Gausià
+Gaussian Blur…	Difuminat gaussià…
+Generate Mockups	Genera maquetes
+Generate Mockups…	Genera maquetes…
+Give the brush a name	Doneu un nom al pinzell
+Give the export a file name	Doneu un nom de fitxer a l'exportació
+Glass Menus	Menús de vidre
+Global light	Llum global
+Glyphs	Glifs
+Gradient	Degradat
+Gradient Editor	Editor de degradat
+Gradient Map	Mapa de degradat
+Gradient Map…	Mapa de degradat…
+Gradient Overlay	Superposició de degradat
+Gradient Overlay…	Superposició de degradat…
+Gradient…	Degradat…
+Gray	Gris
+Grayscale	Escala de grisos
+Green	Verd
+Greens	Verds
+Grid	Quadrícula
+Grid points	Punts de la quadrícula
+Group	Grup
+Group Layers	Agrupa les capes
+Grow	Créixer
+Guide Guy	Guide Guy
+Guides	Guies
+Gutter	Separació
+H	Al
+H.264 (plays everywhere)	H.264 (es reprodueix a tot arreu)
+HDR Toning	Tonalitat HDR
+HDR Toning…	Tonalitat HDR…
+HSB/HSL…	HSB/HSL…
+Halftone Screen	Trama de semitons
+Hard Light	Llum forta
+Hard Mix	Mescla màxima
+Hard Round 24	Rodó dur 24
+Hard Round 4	Rodó dur 4
+Hard edges, no blending. Pixel art only — it aliases on downscale.	Vores dures, sense fusió. Només per a pixel art — queda dentat en reduir.
+Harder Brush	Pinzell més dur
+Height	Alçada
+Height to 110%	Alçada al 110%
+Height to 125%	Alçada al 125%
+Height to 80%	Alçada al 80%
+Height to 90%	Alçada al 90%
+Help	Ajuda
+Hide All	Amaga-ho tot
+Hide Layers	Amaga les capes
+Hide Selection	Amaga la selecció
+Hide the source layer	Amaga la capa d'origen
+High Contrast	Contrast alt
+High Pass…	Filtre passaalt…
+Highlights	Ressaltats
+Histogram	Histograma
+Histories	Historials
+History	Historial
+Hold	Mantén
+Horizontal Centers	Centres horitzontals
+Horizontal Distortion	Distorsió horitzontal
+Horizontal center guide	Guia central horitzontal
+Horizontal scale, in percent: widens or narrows the glyphs and their spacing	Escala horitzontal, en percentatge: eixampla o estreny els glifs i el seu espaiat
+Horizontally	horitzontalment
+Hue	To
+Hue jitter	Variació del to
+Hue/Saturation	To/Saturació
+Hue/Saturation…	To/Saturació…
+ICC profile	Perfil ICC
+ICO…	ICO…
+Image	Imatge
+Image Options	Opcions d'imatge
+Image Rotation	Rotació de la imatge
+Image Size	Mida de la imatge
+Image Size…	Mida de la imatge…
+Image size	Mida de la imatge
+Import CSV…	Importa CSV…
+Import PDF	Importa PDF
+Import a CSV of data sets first	Primer importeu un CSV de conjunts de dades
+Import a CSV: the first row names the variables, every further row is one data set.	Importeu un CSV: la primera fila anomena les variables, cada fila següent és un conjunt de dades.
+In use	En ús
+Inches	Polzades
+Indexed Color	Color indexat
+Indexed Color…	Color indexat…
+Inflate	Infla
+Info	Informació
+Ink	Tinta
+Ink Color	Color de la tinta
+Ink printed at 0, 25, 50, 75 and 100% tint	Tinta impresa al 0, 25, 50, 75 i 100% de tint
+Inner Glow	Resplendor intern
+Inner Glow…	Resplendor intern…
+Inner Radius	Radi interior
+Inner Shadow	Ombra interior
+Inner Shadow…	Ombra interior…
+Inside	Dins
+Intent	Propòsit
+Intersect Shape Areas	Interseca les àrees de forma
+Intersect with Selection	Interseca amb la selecció
+Inverse	Inverteix
+Inverse Fourier Transform	Transformada de Fourier inversa
+Invert	Invertir
+Invert coverage	Inverteix la cobertura
+Invert has no parameters	Inverteix no té paràmetres
+Iris Blur…	Desenfocament de l'iris…
+Italic	Cursiva
+JPEG carries the XMP and the source's EXIF	El JPEG porta l'XMP i l'EXIF de l'origen
+JPG…	JPG…
+Justify	Justifica
+Kaleidoscope…	Calidoscopi…
+Keep as it was	Deixa-ho com era
+Kept when a comp is first applied	Es desa quan s'aplica una composició per primer cop
+Kerning	Interlletratge
+Keyboard Shortcut Sheet…	Full de dreceres de teclat…
+Keyboard Shortcuts…	Dreceres del teclat…
+Keywords	Paraules clau
+Kind	Tipus
+Kurtosis	Curtosi
+Lab Color	Color Lab
+Landscape	Horitzontal
+Language	Llengua
+Large	Gran
+Last Document State	Últim estat del document
+Last Filter	Darrer filtre
+Last line	Última línia
+Layer	Capa
+Layer Comps	Composició de capa
+Layer Edges	Vores de la capa
+Layer Mask	Màscara de capa
+Layer Properties	Propietats de la capa
+Layer Style	Estil de la capa
+Layer knocks out drop shadow	La capa exclou l'ombra paral·lela
+Layer via Copy	Capa via còpia
+Layer via Cut	Capa via retall
+Layers	Capes
+Layers panel options	Opcions del tauler Capes
+Left	Esquerra
+Left Edges	Vores esquerres
+Left indent	Sagnat esquerre
+Length	Longitud
+Lens Blur…	Difuminat de lent…
+Lens Correction…	Correcció de les lents…
+Lens Flare…	Llum enlluernador…
+Level	Nivell
+Levels	Nivells
+Levels…	Nivells…
+Light	Llum
+Light Grey	Gris clar
+Lighten	Aclareix
+Lighter Color	Color més clar
+Lighting Effects…	Efectes d'il·luminació…
+Lightness	Brillantor
+Line	Línia
+Linear	Lineal
+Linear Burn	Crema lineal
+Linear Dodge (Add)	Sobreexposició lineal (suma)
+Linear Light	Llum lineal
+Link / Unlink Mask	Enllaça / desenllaça la màscara
+Link Layers	Enllaça capes
+Link selected layers	Enllaça les capes seleccionades
+Link with layer	Enllaça amb la capa
+Linked	Enllaçat
+Linked file	Fitxer enllaçat
+Liquify…	Liqua…
+Live Shape	Formes en directe
+Live preview	Previsualització en directe
+Live preview is off.	La previsualització en directe està desactivada.
+Load	Carrega
+Load .atn	Carrega .atn
+Load .cube file…	Carrega un fitxer .cube…
+Load Selection	Carrega la selecció
+Load Selection…	Carrega la selecció…
+Load actions	Carrega accions
+Load channel as selection	Carrega el canal com a selecció
+Load path as a selection	Carrega el traçat com a selecció
+Loaded file	Fitxer carregat
+Lock	Bloca
+Lock All	Bloqueja-ho tot
+Lock Guides	Bloqueja les guies
+Lock Image Pixels	Bloqueja els píxels de la imatge
+Lock Position	Bloqueja la posició
+Lock Transparent Pixels	Bloqueja els píxels transparents
+Lock all	Bloqueja-ho tot
+Lock pixels	Bloqueja els píxels
+Lock position	Bloqueja la posició
+Lock transparent pixels	Bloqueja els píxels transparents
+Long-tap as a right click	Toc llarg com a clic dret
+Lookup table	Taula de consulta
+Luminance	Luminància
+Luminance of the preview source; the markers are the black and white points.	Luminància de l'origen de la previsualització; els marcadors són els punts negre i blanc.
+Luminosity	Lluminositat
+MP4…	MP4…
+Magenta	Magenta
+Magenta / Green	Magenta / Verd
+Magentas	Magentes
+Magic Cut	Tall màgic
+Magic Cut…	Tall màgic…
+Make Frames	Crea fotogrames
+Make a selection first	Primer feu una selecció
+Make work path from selection	Crea un traçat de treball a partir de la selecció
+Manual	Manual
+Maps every colour onto one palette. The document keeps RGBA pixels; GIF and PNG export write this palette.	Assigna cada color a una paleta. El document conserva píxels RGBA; l'exportació GIF i PNG escriu aquesta paleta.
+Maps the active layer onto a palette as one undo step; the document stays RGB.	Assigna la capa activa a una paleta en un sol pas de desfer; el document continua sent RGB.
+Margins	Marges
+Mark this state so you can come back to it	Marca aquest estat per poder-hi tornar
+Mask	Màscara
+Mask Properties	Propietats de la màscara
+Mask source	Origen de la màscara
+Match Color	Combina el color
+Match Color…	Combina el color…
+Matting	Eliminació d'halo
+Maximum	Màxim
+Maximum…	Màxim…
+Mean	Mitjana
+Median	Mitjana
+Median…	Mitjana…
+Medium	Mitjà
+Memory	Memòria
+Menu Bar and Canvas	Barra de menús i llenç
+Merge	Fusiona
+Merge Channels	Combina els canals
+Merge Channels…	Combina els canals…
+Merge Down	Fusiona cap avall
+Merge Layers	Fusiona les capes
+Merge Visible	Combina les visibles
+Merged	Combinat
+Method	Mètode
+Metrics	Mètrica
+Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.	Mètrica fa servir l'interlletratge per parells del tipus de lletra; 0 el desactiva; Manual posa una quantitat (1/1000 em) entre cada parell del text tal com és ara, i els caràcters escrits després comencen sense interlletratge; necessita almenys dos caràcters, de manera que el text més curt i els valors predeterminats de l'eina Text no l'ofereixen. El modelador no té interlletratge òptic, per això aquest mode no s'ofereix.
+Mezzotint…	Manera negra…
+Midtones	Tons mitjans
+Millimeters	Mil·límetres
+Min diameter	Diàmetre mínim
+Min roundness	Rodonesa mínima
+Min size	Mida mínima
+Minimal	Mínim
+Minimum	Mínim
+Minimum size only applies when pressure controls size.	La mida mínima només s'aplica quan la pressió controla la mida.
+Minimum…	Mínim…
+Miter	Biaix
+Mode	Mode
+Modify	Modifica
+Monochrome	Monocrom
+Monotone	Monotò
+More readouts	Més lectures
+More tabs	Més pestanyes
+Mosaic…	Mosaic…
+Motion Blur…	Difumina mode moviment…
+Move Layer	Mou la capa
+Move a control first: these settings would change nothing	Primer moveu un control: aquesta configuració no canviaria res
+Move this panel	Mou aquest tauler
+Move this panel within its dock	Mou aquest tauler dins del seu acoblador
+Move to	Mou a
+Move with the layer	Mou amb la capa
+Multiply	Multiplica
+Name	Nom
+Name Change	Canvi de nom
+Name the channel first.	Primer doneu un nom al canal.
+Navigator	Navegador
+Nearest Neighbour	Veí més proper
+Neutralize	Neutralitza
+Neutrals	Neutres
+New	Nou
+New Adjustment Layer	Nova capa d'ajustament
+New Channel	Canal nou
+New Document	Document nou
+New Fill Layer	Nova capa d'emplenament
+New Folder	Nova carpeta
+New Guide	Guia nova
+New Guide Layout	Disposició de guies nova
+New Guide Layout…	Disposició de guies nova…
+New Guide…	Guia nova…
+New Layer	Nova capa
+New Layer Based Slice	Sector nou basat en capa
+New Selection	Selecció nova
+New Smart Object via Copy	Objecte intel·ligent nou via còpia
+New Snapshot	Instantània nova
+New Spot Channel	Canal de tinta plana nou
+New Spot Channel…	Canal de tinta plana nou…
+New Style Preset	Estil predefinit nou
+New Video Group	Grup de vídeo nou
+New channel	Canal nou
+New folder	Carpeta nova
+New group	Grup nou
+New layer	Capa nova
+New layer comp	Composició de capes nova
+New note at the centre of the view	Nota nova al centre de la vista
+New path (saves the Work Path when it is selected)	Traçat nou (desa el traçat de treball quan està seleccionat)
+New set	Conjunt nou
+New size	Mida nova
+New style from the active layer	Estil nou a partir de la capa activa
+New tool preset from the active tool	Eina predefinida nova a partir de l'eina activa
+New {noun} from the active text layer	{noun} nou a partir de la capa de text activa
+New…	Nou…
+Next Blend Mode	Mode de fusió següent
+No Color	Sense color
+No character styles yet. New records the active text layer's font, size and look.	Encara no hi ha estils de caràcter. Nou enregistra el tipus de lletra, la mida i l'aspecte de la capa de text activa.
+No command loads a channel as the selection in this build; the Select menu's Load Selection restores a saved selection instead	Cap ordre carrega un canal com a selecció en aquesta versió; Carrega la selecció del menú Selecciona restaura en canvi una selecció desada
+No commands to bind	No hi ha ordres per vincular
+No document	Cap document
+No document is open	No hi ha cap document obert
+No export selected	No hi ha cap exportació seleccionada
+No faces listed for this family name	No hi ha talls per a aquest nom de família
+No frames yet. Add frame makes an _a_ layer: each one is a frame, bottom first.	Encara no hi ha fotogrames. Afegeix un fotograma crea una capa _a_: cadascuna és un fotograma, començant per la de baix.
+No guide crosses the canvas	Cap guia no travessa el llenç
+No installed family matches	No hi coincideix cap família instal·lada
+No layer comps yet. New Layer Comp records every layer's visibility, position and appearance.	Encara no hi ha composicions de capes. Composició de capes nova enregistra la visibilitat, la posició i l'aspecte de cada capa.
+No layers yet. Add one with the + button below.	Encara no hi ha capes. Afegiu-ne una amb el botó + de sota.
+No layers yet: each top-level layer gets a bar on the timeline.	Encara no hi ha capes: cada capa de nivell superior té una barra a la línia de temps.
+No notes yet. Click the canvas with the Note tool (I), or New Note pins one at the centre of the view; notes are saved with the document and never exported.	Encara no hi ha notes. Feu clic al llenç amb l'eina Nota (I), o Nota nova en fixa una al centre de la vista; les notes es desen amb el document i no s'exporten mai.
+No open document is the same size as this one	Cap document obert té la mateixa mida que aquest
+No paragraph styles yet. New records the active text layer's alignment, indents and spacing.	Encara no hi ha estils de paràgraf. Nou enregistra l'alineació, els sagnats i l'espaiat de la capa de text activa.
+No pattern chosen — the overlay paints nothing.	No s'ha triat cap patró — la superposició no pinta res.
+No patterns are defined yet	Encara no hi ha patrons definits
+No profile file was chosen	No s'ha triat cap fitxer de perfil
+No recent files yet	Encara no hi ha fitxers recents
+No selection has been saved	No s'ha desat cap selecció
+No source recorded for this object	No hi ha cap origen enregistrat per a aquest objecte
+No stop selected	No hi ha cap parada seleccionada
+No style presets yet. Define one with Layer > Layer Style > Define Style Preset, or add a Photoshop library with File > Open (.asl).	Encara no hi ha estils predefinits. Definiu-ne un amb Capa > Estil de capa > Defineix un estil predefinit, o afegiu una biblioteca de Photoshop amb Fitxer > Obre (.asl).
+No styles yet. The + button saves the active layer's style; File > Open loads an .asl style library.	Encara no hi ha estils. El botó + desa l'estil de la capa activa; Fitxer > Obre carrega una biblioteca d'estils .asl.
+No such command	Aquesta ordre no existeix
+No tool presets yet. New Tool Preset saves the active tool with its current options.	Encara no hi ha eines predefinides. Eina predefinida nova desa l'eina activa amb les opcions actuals.
+Noise	Soroll
+None	Cap
+Normal	Normal
+Normal Map…	Mapa normal…
+Not a hex colour	No és un color hexadecimal
+Not installed — shaping with	No instal·lat — es modela amb
+Not saved yet	Encara no desat
+Notes	Anotacions
+Nothing has changed	No ha canviat res
+Nothing in this submenu is available right now	Ara mateix no hi ha res disponible en aquest submenú
+Nothing is left to learn the background from: paint over it with the background brush.	No queda res d'on aprendre el fons: pinteu-lo amb el pinzell de fons.
+Nothing to measure yet — paint or place something on this layer first	Encara no hi ha res a mesurar — primer pinteu o col·loqueu alguna cosa en aquesta capa
+Nothing to preview.	No hi ha res a previsualitzar.
+OK	Fet
+Oblique	Obliqua
+Off: the wheel pans the view and Ctrl+wheel zooms	Desactivat: la roda desplaça la vista i Ctrl+roda amplia
+Offset…	Desplaçament…
+Oil Paint…	Pintura a l'oli…
+One page holding the flattened image; no vector content.	Una pàgina amb la imatge aplanada; sense contingut vectorial.
+Onion skin	Pell de ceba
+Only English is available in this build	En aquesta versió només hi ha l'anglès
+Only a mask channel can be loaded as a selection here	Aquí només es pot carregar un canal de màscara com a selecció
+Only web-safe colours	Només colors segurs per al web
+Opacity	Opacitat
+Opacity 10%	Opacitat 10%
+Opacity 100%	Opacitat 100%
+Opacity 20%	Opacitat 20%
+Opacity 30%	Opacitat 30%
+Opacity 40%	Opacitat 40%
+Opacity 50%	Opacitat 50%
+Opacity 60%	Opacitat 60%
+Opacity 70%	Opacitat 70%
+Opacity 80%	Opacitat 80%
+Opacity 90%	Opacitat 90%
+Opacity jitter	Variació de l'opacitat
+Opacity key	Clau d'opacitat
+Opacity must be between 0% and 100%	L'opacitat ha d'estar entre 0% i 100%
+Opacity scales the layer and its effects; Fill scales the layer's own pixels only.	L'opacitat escala la capa i els seus efectes; l'Emplenament escala només els píxels de la capa.
+Opacity stops sit above the bar, colour stops below it.	Les parades d'opacitat van per sobre de la barra, les de color per sota.
+Open	Obre
+Open .ABR…	Obre .ABR…
+Open .ACO…	Obre .ACO…
+Open .ASL…	Obre .ASL…
+Open Recent	Obre un recent
+Open a document first	Primer obriu un document
+Open a document to animate it.	Obriu un document per animar-lo.
+Open a document to apply styles to its layers.	Obriu un document per aplicar estils a les seves capes.
+Open a document to insert glyphs into its text.	Obriu un document per inserir glifs al seu text.
+Open a document to keep text styles in it.	Obriu un document per desar-hi estils de text.
+Open a document to lay guides out on it.	Obriu un document per disposar-hi guies.
+Open a document to pin notes on it.	Obriu un document per fixar-hi notes.
+Open a document to record layer comps.	Obriu un document per enregistrar composicions de capes.
+Open a document to see its CSS	Obriu un document per veure'n el CSS
+Open a document to see its facts.	Obriu un document per veure'n les dades.
+Open a document to see its histogram	Obriu un document per veure'n l'histograma
+Open a document to see its history	Obriu un document per veure'n l'historial
+Open a document to see its properties	Obriu un document per veure'n les propietats
+Open another document, or add another pixel layer, to match its colours.	Obriu un altre document, o afegiu una altra capa de píxels, per fer coincidir els seus colors.
+Open as	Obre com a
+Open editor…	Obre l'editor…
+Open or close the folder	Obre o tanca la carpeta
+Open the Adjustments panel	Obre el tauler Ajustos
+Open…	Obre…
+Operation	Operació
+Orange	Taronja
+Other	Altres
+Out of gamut	Fora de gamma
+Outer Glow	Resplendor exterior
+Outer Glow…	Resplendor exterior…
+Outline the path	Contorneja el traçat
+Output	Sortida
+Output channel	Canal de sortida
+Outside	Fora
+Overlay	Superposa
+PBM…	PBM…
+PDF Presentation…	Presentació PDF…
+PDF…	PDF…
+PGM…	PGM…
+PNG…	PNG…
+PPM…	PPM…
+Page	Pàgina
+Page {n}	Pàgina {n}
+Page {page} opens at {w} x {h} px	La pàgina {page} s'obre a {w} x {h} px
+Pages	Pàgines
+Paint	Pinta
+Paint Filter Mask	Pinta la màscara de filtre
+Paint Mask	Pinta la màscara
+Paint over the part to keep with the foreground brush first.	Primer pinteu la part que cal conservar amb el pinzell de primer pla.
+Paint over what to keep and over what to drop	Pinteu sobre el que cal conservar i sobre el que cal descartar
+Paint the inside of the path	Pinta l'interior del traçat
+Painting	Pintura
+Paints a band along the active selection's border.	Pinta una banda al llarg de la vora de la selecció activa.
+Pair kerning	Interlletratge per parells
+Palette	Paleta
+Paragraph	Paràgraf
+Paragraph Style	Estil de paràgraf
+Paragraph Styles	Estils de paràgraf
+Particles…	Partícules…
+Paste	Enganxa
+Paste Into	Enganxa dins
+Paste Layer Style	Enganxa l'estil de capa
+Paste Outside	Enganxa fora
+Paste Special	Enganxament especial
+Paste in Place	Enganxa al lloc
+Path	Camí
+Path Blur…	Desenfocament del camí…
+Path editing lives in the Paths panel	L'edició de traçats es fa al tauler Traçats
+Paths	Camí
+Pattern	Patró
+Pattern Dither	Tramat de patró
+Pattern Overlay	Superposició de patró
+Pattern Overlay…	Superposició de patró…
+Pattern Preview	Previsualització del patró
+Pattern…	Patró…
+Pencil 1px	Llapis 1px
+Percent	Percentatge
+Perceptual	Perceptiu
+Perspective	Perspectiva
+Perspective Warp	Deformació de perspectiva
+Photo Filter	Filtre fotogràfic
+Photo Filter…	Filtre fotogràfic…
+Photography	Fotografia
+Picas	Piques
+Pick a filter; it applies at its default settings.	Trieu un filtre; s'aplica amb la configuració predeterminada.
+Pin Light	Llum focal
+Pinch…	Pessiga…
+Pixel Grid	Quadrícula de píxels
+Pixel dimensions	Dimensions en píxels
+Pixel mask	Màscara de píxels
+Pixel to Pixel	Píxel a píxel
+Pixelate	Pixela
+Pixels	Píxels
+Place Embedded…	Col·loca incrustat…
+Place Linked…	Col·loca enllaçat…
+Play	Reprodueix
+Play from step	Reprodueix des del pas
+Play selection	Reprodueix la selecció
+Play this step (unchecked steps are passed over)	Reprodueix aquest pas (els passos no marcats s'ometen)
+Plays a recorded Action on every image in the source folder and saves each result to the destination.	Reprodueix una acció enregistrada en cada imatge de la carpeta d'origen i desa cada resultat a la destinació.
+Pointer	Punter
+Pointillize…	Puntillisme…
+Points	Punts
+Polar Coordinates…	Coordenades polars…
+Position	Posició
+Position is locked — unlock it in the Layers panel to move or resize	La posició està bloquejada — desbloquegeu-la al tauler Capes per moure o redimensionar
+Position key	Clau de posició
+Posterize	Reduir el nombre de colors
+Posterize…	Reduir el nombre de colors…
+Precise Cursor	Cursor precís
+Preferences…	Preferències…
+Preserve Transparency	Conserva la transparència
+Preserve luminosity	Conserva la lluminositat
+Preset Manager…	Gestor d'estils…
+Press a key…	Premeu una tecla…
+Pressure controls flow	La pressió controla el flux
+Pressure controls size	La pressió controla la mida
+Preview	Previsualització
+Preview against	Previsualitza sobre
+Preview is off.	La previsualització està desactivada.
+Previewed on the active layer; applied to its pixels as one undoable step.	Es previsualitza a la capa activa; s'aplica als seus píxels en un sol pas que es pot desfer.
+Previous Blend Mode	Mode de fusió anterior
+Print Size	Mida d'impressió
+Print as PDF…	Imprimeix com a PDF…
+Print size	Mida d'impressió
+Prints the grayscale image through one to four inks, each through its own curve. The inks are applied to the pixels when the mode changes.	Imprimeix la imatge en escala de grisos amb d'una a quatre tintes, cadascuna amb la seva corba. Les tintes s'apliquen als píxels quan canvia el mode.
+Print…	Imprimeix…
+Profile	Perfil
+Profile from File…	Perfil des d'un fitxer…
+Profiles are assigned to RGB documents	Els perfils s'assignen a documents RGB
+Profiles are converted between in RGB documents	Els perfils es converteixen entre si en documents RGB
+Profiles belong to RGB documents; convert to RGB first	Els perfils pertanyen a documents RGB; primer convertiu a RGB
+Proof Colors	Colors de prova
+Properties	Propietats
+Puppet Warp	Deformació de titella
+Purge	Purga
+Purple	Lila
+Quadtone	Quadritò
+Quality	Qualitat
+Quick Export Layer as PNG…	Exportació ràpida de la capa com a PNG…
+Quit	Surt
+RGB Color	Color RGB
+Radial Blur…	Difuminat radial…
+Radius	Radi
+Radius (px)	Radi (px)
+Range	Tram
+Raster Studio Help	Ajuda del Raster Studio
+Rasterize	Rasteritza
+Reassign anyway	Reassigna igualment
+Recent	Recents
+Record	Enregistra
+Record Source Size	Enregistra la mida de l'origen
+Record an Action in the Actions panel first	Primer enregistreu una acció al tauler Accions
+Record an edit, then replay the whole sequence on any document with at least as many layers.	Enregistreu una edició i després reproduïu tota la seqüència en qualsevol document amb almenys tantes capes.
+Record into set	Enregistra al conjunt
+Recording: every edit is captured until Stop	S'està enregistrant: cada edició es captura fins a Atura
+Red	Vermell
+Redefine the selected {noun} from the active text layer, restyling every layer that uses it	Redefineix el {noun} seleccionat a partir de la capa de text activa, i canvia l'estil de cada capa que el fa servir
+Redo	Refés
+Reds	Vermells
+Reduce Colors	Redueix els colors
+Reduce Colors changed nothing: the layer already uses only colours of that palette	Redueix els colors no ha canviat res: la capa ja només fa servir colors d'aquesta paleta
+Reduce Colors: the layer now uses at most {n} colours	Redueix els colors: ara la capa fa servir com a màxim {n} colors
+Reduce Colors…	Redueix els colors…
+Reduce Noise…	Disminuir soroll…
+Reduces the grayscale image to pure black and white. The layers are flattened into one, over white.	Redueix la imatge en escala de grisos a blanc i negre purs. Les capes s'aplanen en una de sola, sobre blanc.
+Reference point: Bottom	Punt de referència: inferior
+Reference point: Bottom Left	Punt de referència: inferior esquerra
+Reference point: Bottom Right	Punt de referència: inferior dreta
+Reference point: Centre	Punt de referència: centre
+Reference point: Left	Punt de referència: esquerra
+Reference point: Right	Punt de referència: dreta
+Reference point: Top	Punt de referència: superior
+Reference point: Top Left	Punt de referència: superior esquerra
+Reference point: Top Right	Punt de referència: superior dreta
+Refine	Refina
+Refine Edge…	Refina la vora…
+Refine Mask	Refina la màscara
+Refine Mask…	Refina la màscara…
+Regular	Regular
+Relative	Relatiu
+Relative Colorimetric	Colorimètric relatiu
+Release Clipping Mask	Allibera la màscara de retall
+Release Notes	Notes de la versió
+Relink to File…	Torna a enllaçar amb un fitxer…
+Remove Black Matte	Elimina el fons negre
+Remove Color Fringe	Elimina la franja de color
+Remove Color Fringe…	Elimina la franja de color…
+Remove Fringe	Elimina la franja
+Remove White Matte	Elimina el fons blanc
+Remove export	Elimina l'exportació
+Remove this instance of the effect	Elimina aquesta instància de l'efecte
+Remove this shortcut	Elimina aquesta drecera
+Rename Layer	Canvia el nom de la capa
+Rename Layer…	Canvia el nom de la capa…
+Rename set	Canvia el nom del conjunt
+Render	Renderitza
+Rendering the preview…	S'està renderitzant la previsualització…
+Repeat…	Repeteix…
+Replace Color	Substitueix el color
+Replace Color…	Substitueix el color…
+Replace Contents	Substitueix el contingut
+Replace Contents…	Substitueix el contingut…
+Replace existing guides	Substitueix les guies existents
+Replay	Torna a reproduir
+Report an Issue	Informa d'un problema
+Reselect	Torna a seleccionar
+Reset	Restableix
+Reset Transform	Restableix la transformació
+Reset View Rotation	Restableix la rotació de la vista
+Reset all shortcuts	Restableix totes les dreceres
+Resize Canvas	Redimensiona el llenç
+Resize Images	Redimensiona les imatges
+Resize Images…	Redimensiona les imatges…
+Resolution	Resolució
+Resolution must be greater than zero	La resolució ha de ser superior a zero
+Restore Layer	Restaura la capa
+Result	Resultat
+Return this tool to its defaults	Torna aquesta eina als valors predeterminats
+Reveal All	Mostra-ho tot
+Reveal Selection	Revela la selecció
+Reverse	Inverteix
+Revert	Reverteix
+Rewrites every pixel layer's numbers so the picture looks the same under the destination profile, as one undo step.	Reescriu els valors de cada capa de píxels perquè la imatge es vegi igual amb el perfil de destinació, en un sol pas de desfer.
+Right	Dreta
+Right (narrow)	Dreta (estret)
+Right (wide)	Dreta (ample)
+Right Edges	Vores dretes
+Right indent	Sagnat dret
+Right-click a swatch to remove it	Feu clic dret en una mostra per eliminar-la
+Ring	Anell
+Ripple…	Onades del mar…
+Rise	Augmenta
+Rotate	Gira
+Rotate 180°	Gira 180°
+Rotate 90° Clockwise	Gira 90° en sentit horari
+Rotate 90° Counter Clockwise	Gira 90° en sentit antihorari
+Rotate Canvas	Gira el llenç
+Rotate the active layer so the measured line is level (Enter)	Gira la capa activa perquè la línia mesurada quedi anivellada (Retorn)
+Rotates the canvas and every layer. Right angles are pixel-exact; other angles resample.	Gira el llenç i totes les capes. Els angles rectes són exactes al píxel; els altres angles es remostregen.
+Rotation key	Clau de rotació
+Round	Rodó
+Round (computed)	Rodó (calculat)
+Rounded Steps	Passos arrodonits
+Roundness jitter	Variació de la rodonesa
+Rows	Files
+Rulers	Regles
+Run	Executa
+SVG…	SVG…
+Same Radii	Igualar radis
+Sample a colour from the canvas	Mostreja un color del llenç
+Sample radius	Radi de mostreig
+Sampled	Mostrejat
+Sampled colour	Color mostrejat
+Sampled tip not loaded; painting round	Punta mostrejada no carregada; es pinta rodó
+Satin…	Setinat…
+Saturation	Saturació
+Saturation jitter	Variació de la saturació
+Save	Desa
+Save As	Desa com a
+Save As…	Desa com a…
+Save Brush	Desa el pinzell
+Save Selection	Desa la selecció
+Save Selection…	Desa la selecció…
+Save actions	Desa les accions
+Save as PSD…	Desa com a PSD…
+Save current brush	Desa el pinzell actual
+Save selection as channel	Desa la selecció com a canal
+Saves every image in the source folder to the destination in another format, quality or size.	Desa cada imatge de la carpeta d'origen a la destinació en un altre format, qualitat o mida.
+Scale	Escala
+Scale %	Escala %
+Scale Effects	Efectes d'escala
+Scale Effects…	Efectes d'escala…
+Scale H	Escala H
+Scale V	Escala V
+Scale key	Clau d'escala
+Scale:	Escala:
+Scales every size and distance of the active layer's style as one undo step.	Escala totes les mides i distàncies de l'estil de la capa activa en un sol pas de desfer.
+Scaling by 100% changes nothing	Escalar al 100% no canvia res
+Scratch directory	Directori temporal
+Screen	Pantalla
+Screen, print and social presets	Valors predefinits de pantalla, impressió i xarxes socials
+Script…	Script…
+Scroll wheel zooms instead of scrolling	La roda del ratolí amplia en lloc de desplaçar
+Search Commands…	Cerca ordres…
+Search layers	Cerca capes
+Search layers by name	Cerca capes pel nom
+Select	Selecciona
+Select All	Selecciona-ho tot
+Select Bottom Layer	Selecciona la capa inferior
+Select Layer Above	Selecciona la capa de sobre
+Select Layer Below	Selecciona la capa de sota
+Select Linked Layers	Selecciona les capes enllaçades
+Select None	No seleccionis res
+Select Top Layer	Selecciona la capa superior
+Select a layer first	Primer seleccioneu una capa
+Select a layer to see its CSS	Seleccioneu una capa per veure'n el CSS
+Select a layer to see its properties	Seleccioneu una capa per veure'n les propietats
+Select a layer: a click on a style applies it to the active layer.	Seleccioneu una capa: un clic en un estil l'aplica a la capa activa.
+Select a path first	Primer seleccioneu un traçat
+Select a text layer, or type into one: a click inserts the glyph at the caret.	Seleccioneu una capa de text, o escriviu-hi: un clic insereix el glif al cursor.
+Select a text layer to edit its type	Seleccioneu una capa de text per editar-ne el text
+Select every pixel near one colour	Selecciona tots els píxels propers a un color
+Selection	Selecció
+Selection Edges	Vores de la selecció
+Selection: white is replaced, black is kept.	Selecció: el blanc se substitueix, el negre es conserva.
+Selective Color	Color selectiu
+Selective Color…	Color selectiu…
+Selects a band of this width along the selection's edge	Selecciona una banda d'aquesta amplada al llarg de la vora de la selecció
+Semi Condensed	Semicondensada
+Semi Expanded	Semiexpandida
+Semibold	Seminegreta
+Send Backward	Mou cap al fons
+Send to Back	Envia cap endarrere
+Separate documents	Documents separats
+Separate keywords with commas or semicolons.	Separeu les paraules clau amb comes o punts i comes.
+Sepia	Sèpia
+Set	Conjunt
+Set the History Brush to paint from this state (the marked row)	Fes que el Pinzell d'historial pinti des d'aquest estat (la fila marcada)
+Shadows	Ombres
+Shadows/Highlights	Ombres/Llums
+Shadows/Highlights…	Ombres/Llums…
+Shape	Forma
+Shape Dynamics	Dinàmica de la forma
+Shape Mosaic…	Mosaic de formes…
+Shape Properties	Propietats de la forma
+Sharpen	Realça la vora
+Sharpen Edges	Ressalta les vores
+Sharpen More	Ressalta més
+Sharpest, with a little ringing on hard edges.	El més nítid, amb una mica d'halo a les vores dures.
+Shear…	Inclina…
+Shift Edge	Desplaça la vora
+Show	Mostra
+Show / Hide Layer	Mostra / amaga la capa
+Show / hide layer	Mostra / amaga la capa
+Show / hide the effects list	Mostra / amaga la llista d'efectes
+Show / hide the layer style	Mostra / amaga l'estil de capa
+Show / hide this channel	Mostra / amaga aquest canal
+Show / hide this effect	Mostra / amaga aquest efecte
+Show / hide this path	Mostra / amaga aquest traçat
+Show / hide this smart filter	Mostra / amaga aquest filtre intel·ligent
+Show Layers	Mostra les capes
+Show every layer	Mostra totes les capes
+Show or hide the position, size and alignment fields	Mostra o amaga els camps de posició, mida i alineació
+Show or hide the recorded steps	Mostra o amaga els passos enregistrats
+Show or hide the set's actions	Mostra o amaga les accions del conjunt
+Show this alpha channel alone in grayscale and paint into it; click again to store it	Mostra aquest canal alfa sol en escala de grisos i pinta-hi; feu clic de nou per desar-lo
+Sides	Costats
+Similar	Similar
+Size	Mida
+Size jitter	Variació de la mida
+Skew	Inclina
+Skewness	Asimetria
+Slice Options	Opcions de sector
+Slice Options…	Opcions de sector…
+Slices	Sectors
+Slices from Guides	Sectors a partir de guies
+Slices…	Sectors…
+Small	Petit
+Small Caps	Versaletes
+Smart Blur…	Difuminat intel·ligent…
+Smart Filter	Filtre intel·ligent
+Smart Filters	Filtres intel·ligents
+Smart Guides	Guies intel·ligents
+Smart Object	Objecte intel·ligent
+Smart Sharpen…	Realçat intel·ligent…
+Smart filter mask: click to paint on it	Màscara de filtre intel·ligent: feu clic per pintar-hi
+Smooth	Suau
+Smooth Selection	Suavitza la selecció
+Smooth draws grey-scale edges; None draws hard, aliased edges. The glyph scaler has one smooth mode, so Sharp, Crisp and Strong are not offered.	Suau dibuixa vores en escala de grisos; Cap dibuixa vores dures i dentades. El rasteritzador de glifs té un sol mode suau, per això no s'ofereixen Nítid, Definit ni Fort.
+Smooth…	Suau…
+Snap	Ajusta
+Snap To	Ajusta a
+Soft Light	Llum suau
+Soft Round 100	Rodó suau 100
+Soft Round 24	Rodó suau 24
+Soft and cheap. Good for a small enlargement.	Suau i ràpid. Bo per a una ampliació petita.
+Softer Brush	Pinzell més suau
+Solarize	Solarització
+Solid Color…	Color sòlid…
+Solidity	Solidesa
+Source	Font
+Source 1	Origen 1
+Source 2	Origen 2
+Source Space	Espai d'origen
+Spectrum	Espectre
+Spherize…	Esfèric…
+Spin Blur…	Difuminat de gir…
+Splits the active layer into Linear Light detail layers over a residual, finest on top; together they recomposite to the layer.	Divideix la capa activa en capes de detall en Llum lineal sobre un residu, la més fina a dalt; juntes tornen a compondre la capa.
+Spot Channel	Canal de tinta plana
+Spot Channel Options…	Opcions del canal de tinta plana…
+Spot channel: composited over the image as its ink	Canal de tinta plana: compost sobre la imatge com a tinta
+Square	Quadrat
+Squeeze	Comprimeix
+Stack Mode	Mode de pila
+Stamp Visible	Estampa les visibles
+Standard	Estàndard
+Standard Deviation	Desviació estàndard
+Standard ligatures	Lligadures estàndard
+Step Backward	Pas enrere
+Step Forward	Pas endavant
+Stop	Atura
+Straighten Layer	Redreça la capa
+Strength	Intensitat
+Stroke	Traç
+Stroke path with the foreground colour at the brush size, on a new shape layer	Traça el traçat amb el color de primer pla a la mida del pinzell, en una capa de forma nova
+Stroke…	Traç…
+Style	Estil
+Styles	Estils
+Styles enabled	Estils activats
+Stylize	Estilitza
+Sub	Subíndex
+Subject	Assumpte
+Subtract	Sostreu
+Subtract Front Shape	Resta la forma frontal
+Subtract from Selection	Resta de la selecció
+Summation	Suma
+Sunset	Posta de sol
+Super	Superíndex
+Superscript raises and shrinks the text; subscript lowers and shrinks it.	El superíndex eleva i redueix el text; el subíndex l'abaixa i el redueix.
+Surface Blur…	Difuminat de superfície…
+Swap colours  (X)	Intercanvia els colors  (X)
+Swap foreground and background (X)	Intercanvia primer pla i fons (X)
+Swatches	Mostres
+TGA…	TGA…
+TIF…	TIF…
+Templates	Plantilles
+Text	Text
+Text Properties	Propietats del text
+Text overflows the box	El text desborda la caixa
+Text replacement	Substitució de text
+Texture Dilation…	Dilatació de textura…
+That channel is no longer in the document	Aquest canal ja no és al document
+That file could not be used:	No s'ha pogut fer servir aquest fitxer:
+The CSV ends inside a quoted field	El CSV acaba dins d'un camp entre cometes
+The CSV has a header but no data sets	El CSV té una capçalera però cap conjunt de dades
+The CSV is empty	El CSV és buit
+The CSV names a variable that is not defined:	El CSV anomena una variable que no està definida:
+The active layer is not in the document	La capa activa no és al document
+The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	L'objecte intel·ligent actiu mostra cada imatge de la carpeta d'origen per torns; cada resultat s'exporta com a PNG a la carpeta de destinació.
+The amount must be within	La quantitat ha d'estar dins de
+The angle must be a finite number of degrees	L'angle ha de ser un nombre finit de graus
+The balanced default for photographs.	El valor predeterminat equilibrat per a fotografies.
+The canvas grows to fit the rotated image.	El llenç creix per encabir la imatge girada.
+The canvas must be at least 1 x 1 pixel	El llenç ha de fer almenys 1 x 1 píxel
+The cell size must be 2 to 200 pixels	La mida de la cel·la ha de ser de 2 a 200 píxels
+The cut is empty: paint more of the part to keep.	El retall és buit: pinteu més de la part que cal conservar.
+The destination is the profile the document already has	La destinació és el perfil que el document ja té
+The destination must be another folder than the source.	La destinació ha de ser una carpeta diferent de l'origen.
+The document has no layers	El document no té capes
+The document is already in {name}	El document ja és en {name}
+The document is already tagged with this profile	El document ja està etiquetat amb aquest perfil
+The document is already tagged {name}	El document ja està etiquetat com a {name}
+The document's own profile: {error}	El perfil del document: {error}
+The first {shown} of {n} pages are listed; a longer file opens only those.	Es llisten les primeres {shown} de {n} pàgines; un fitxer més llarg només obre aquestes.
+The image has no opaque pixels to count	La imatge no té píxels opacs per comptar
+The ink is laid over the image; the selection, if there is one, is where it prints.	La tinta es posa sobre la imatge; la selecció, si n'hi ha, és on s'imprimeix.
+The last stop has no segment after it.	L'última parada no té cap segment després.
+The layer has no pixels to cut.	La capa no té píxels per retallar.
+The layer's pixels are locked	Els píxels de la capa estan bloquejats
+The list is empty	La llista és buida
+The margins and gutters leave no room for a column or a row	Els marges i les separacions no deixen espai per a cap columna ni fila
+The margins and gutters leave no room for a column or a row.	Els marges i les separacions no deixen espai per a cap columna ni fila.
+The name cannot be empty	El nom no pot ser buit
+The name has not changed	El nom no ha canviat
+The name is the file File > Export > Slices writes this slice as. The URL and Alt Tag go into the HTML page it writes beside the images.	El nom és el fitxer amb què Fitxer > Exporta > Sectors escriu aquest sector. L'URL i l'etiqueta Alt van a la pàgina HTML que s'escriu al costat de les imatges.
+The new canvas is smaller — content outside it will be clipped.	El llenç nou és més petit — el contingut de fora es retallarà.
+The next text layer the Type tool creates starts with this style.	La propera capa de text que creï l'eina Text començarà amb aquest estil.
+The panel is already on this side	El tauler ja és en aquest costat
+The path encloses no pixel of the canvas	El traçat no inclou cap píxel del llenç
+The position must be a finite number	La posició ha de ser un nombre finit
+The preview runs the real brush engine.	La previsualització fa servir el motor de pinzell real.
+The resolution must be 1 to 2400 ppi	La resolució ha de ser d'1 a 2400 ppp
+The resolution must be {min} to {max} dpi	La resolució ha de ser de {min} a {max} ppp
+The rulers and the size readouts use this unit	Els regles i les lectures de mida fan servir aquesta unitat
+The scale must be between 1% and 1000%	L'escala ha d'estar entre l'1% i el 1000%
+The selection is kept with the document under this name	La selecció es desa amb el document amb aquest nom
+The source and destination must be different folders	L'origen i la destinació han de ser carpetes diferents
+The steps this snapshot named have been discarded	S'han descartat els passos que anomenava aquesta instantània
+The table needs a name	La taula necessita un nom
+The warp has not changed	La deformació no ha canviat
+There are no guides to slice along	No hi ha guies per on seccionar
+There are no slices to clear	No hi ha sectors per esborrar
+There is no history to clear	No hi ha historial per esborrar
+There is no live selection to combine with	No hi ha cap selecció activa amb què combinar
+These are matrix-shaper profiles, which carry no perceptual or saturation tables: those two intents convert as Relative Colorimetric.	Aquests són perfils de matriu, que no tenen taules perceptives ni de saturació: aquests dos propòsits es converteixen com a Colorimètric relatiu.
+Thin	Fina
+Third-party notices	Avisos de tercers
+This Layer	Aquesta capa
+This adjustment has no panel controls	Aquest ajust no té controls al tauler
+This adjustment has no settings.	Aquest ajust no té configuració.
+This build keeps channels on layers; it has no free-standing alpha channels yet	Aquesta versió manté els canals a les capes; encara no té canals alfa independents
+This effect is off. Tick it in the list to edit it.	Aquest efecte està desactivat. Marqueu-lo a la llista per editar-lo.
+This format cannot store CMYK, so the document is written as RGB. Choose JPEG or TIFF for CMYK.	Aquest format no pot desar CMYK, de manera que el document s'escriu com a RGB. Trieu JPEG o TIFF per a CMYK.
+This format could not be previewed.	No s'ha pogut previsualitzar aquest format.
+This format has no metadata slot: nothing is embedded	Aquest format no té espai per a metadades: no s'incrusta res
+This format has no palette, so the indexed colours are written as RGB. Choose PNG or GIF for the palette.	Aquest format no té paleta, de manera que els colors indexats s'escriuen com a RGB. Trieu PNG o GIF per a la paleta.
+This format stores 8 bits per channel	Aquest format desa 8 bits per canal
+This is a Lab document. No format here stores Lab, so it is converted to RGB on export.	Aquest és un document Lab. Cap format d'aquí desa Lab, per això es converteix a RGB en exportar.
+This layer has no mask	Aquesta capa no té màscara
+This panel is already at the bottom of its dock	Aquest tauler ja és a la part inferior del seu acoblador
+This panel is already at the top of its dock	Aquest tauler ja és a la part superior del seu acoblador
+This tool has no options	Aquesta eina no té opcions
+This tool is already at its defaults	Aquesta eina ja té els valors predeterminats
+This window cannot read screen pixels, so the eyedropper is unavailable	Aquesta finestra no pot llegir píxels de la pantalla, per això el comptagotes no està disponible
+This works on a pixel layer; the active layer is a {kind}	Això funciona en una capa de píxels; la capa activa és {kind}
+This works on an 8-bit document	Això funciona en un document de 8 bits
+This works on an RGB document	Això funciona en un document RGB
+Threshold	Llindar
+Threshold…	Llindar…
+Thumbnail Size	Mida de les miniatures
+Thumbnail size	Mida de les miniatures
+Thumbnails by Document	Miniatures per document
+Thumbnails by Layer	Miniatures per capa
+Tiles/List	Mosaic/Llista
+Tiles…	Rajoles…
+Tilt-Shift…	Canvi d'inclinació…
+Timeline	Línia de temps
+Tint	Tint
+Tint hue	To del tint
+Tint saturation	Saturació del tint
+To canvas	Al llenç
+Toggle Link	Commuta l'enllaç
+Tonal width	Amplada tonal
+Tone	To
+Tone and Detail	To i detall
+Tool Presets	Predefinits de l'eina
+Top	A Dalt
+Top Edges	Vores superiors
+Top Left	A Dalt a l'Esquerra
+Top Left Pixel Color	Color del píxel superior esquerre
+Top Right	A Dalt a la Dreta
+Top left	Superior esquerra
+Top right	Superior dreta
+Trace Contour…	Traça contorn…
+Traces the active layer's colours into shape layers, one per colour.	Traça els colors de la capa activa en capes de forma, una per color.
+Transform	Transforma
+Transform Layer	Transforma la capa
+Transform Selection	Transforma la selecció
+Transparency	Transparència
+Transparent Pixels	Píxels transparents
+Trim	Retalla
+Trim Away	Retalla
+Trim…	Retalla…
+Tritone	Tritò
+Turn on Resample to change the pixel count.	Activeu Remostreja per canviar el nombre de píxels.
+Twirl…	Regira…
+Twist	Gira
+Two variables share a name	Dues variables comparteixen un nom
+Type	Tipus
+Type a zoom level	Escriviu un nivell de zoom
+Type is edited in Character and Paragraph	El text s'edita a Caràcter i Paràgraf
+Type tool defaults	Valors predeterminats de l'eina Text
+UI scale	Escala de la interfície
+URL	URL
+US Letter	Carta EUA
+Ultra Condensed	Ultracondensada
+Ultra Expanded	Ultraexpandida
+Underlying Layer	Capa subjacent
+Undo	Desfés
+Ungroup Layers	Desagrupa les capes
+Uniform	Uniforme
+Unite Shapes	Uneix les formes
+Units	Unitats
+Unmake Frames	Desfés els fotogrames
+Unsaved changes	Canvis no desats
+Unsharp Mask…	Emmascara les parts borroses…
+Update the applied comp from the layers	Actualitza la composició aplicada a partir de les capes
+Use Black Point Compensation	Fes servir la compensació del punt negre
+Use global light	Fes servir la llum global
+Using:	S'utilitza:
+Vanishing Point…	Punt de fuga…
+Variables	Variables
+Variance	Variància
+Vector Mask	Màscara vectorial
+Vector density	Densitat vectorial
+Vector enabled	Vectorial activat
+Vector feather	Difuminat vectorial
+Vector invert	Inversió vectorial
+Vector mask	Màscara vectorial
+Vectorize	Vectoritza
+Vectorize Bitmap	Vectoritza el mapa de bits
+Vectorize Bitmap…	Vectoritza el mapa de bits…
+Vertical Centers	Centres verticals
+Vertical Distortion	Distorsió vertical
+Vertical center guide	Guia central vertical
+Vertical scale, in percent: stretches the glyphs about the baseline; leading is unchanged	Escala vertical, en percentatge: estira els glifs al voltant de la línia de base; l'interlineat no canvia
+Vertically	verticalment
+Vibrance	Vivesa
+Vibrance…	Vivesa…
+View	Visualitza
+Violet	Violeta
+Visibility	Visibilitat
+Visible adjustment layers	Capes d'ajust visibles
+Vivid Light	Llum intensa
+W	Am
+WEBP…	WEBP…
+Waiting for the composite…	S'està esperant el compost…
+Warm	Càlid
+Warp	Deforma
+Warp Style	Estil de deformació
+Warp Text	Deforma el text
+Warp Text…	Deforma el text…
+Wave	Ona
+Wavelet Decompose	Descomposició wavelet
+Wavelet Decompose splits into 2 to 7 scales	La descomposició wavelet divideix en 2 a 7 escales
+Wavelet Decompose works on an sRGB document	La descomposició wavelet funciona en un document sRGB
+Wavelet Decompose: the layer has no pixels	Descomposició wavelet: la capa no té píxels
+Wavelet Decompose: {n} detail layers over a residual; the source layer is hidden	Descomposició wavelet: {n} capes de detall sobre un residu; la capa d'origen queda amagada
+Wavelet Decompose…	Descomposició wavelet…
+Wave…	Ona…
+Web (216)	Web (216)
+WebP (lossless)	WebP (sense pèrdua)
+WebP (lossy)	WebP (amb pèrdua)
+Weight	Gruix
+White	Blanc
+White to Black	Blanc a negre
+Whites	Blancs
+Width	Amplada
+Width and height must be at least 1 pixel	L'amplada i l'alçada han de ser d'almenys 1 píxel
+Width must be between 1 and 250 pixels	L'amplada ha d'estar entre 1 i 250 píxels
+Width to 110%	Amplada al 110%
+Width to 125%	Amplada al 125%
+Width to 80%	Amplada al 80%
+Width to 90%	Amplada al 90%
+Window	Finestra
+Wind…	Vent…
+With Handles	Amb nanses
+Work Path	Traçat de treball
+Workspace	Espai de treball
+Wrap to box	Ajusta a la caixa
+Writes the visible adjustment layers, applied to an identity lattice, as a 3D LUT (.cube).	Escriu les capes d'ajust visibles, aplicades a una xarxa identitat, com a LUT 3D (.cube).
+Written as CMYK: a naive ink model, not an ICC press profile.	S'escriu com a CMYK: un model de tinta senzill, no un perfil ICC d'impremta.
+Written as XMP into PNG, JPEG and TIFF files by Export As.	Exporta com a ho escriu com a XMP en fitxers PNG, JPEG i TIFF.
+Written with the document's palette.	S'escriu amb la paleta del document.
+Yellow	Groc
+Yellow / Blue	Groc / Blau
+Yellows	Grocs
+ZigZag…	Ziga-Zaga…
+Zoom In	Amplia
+Zoom Out	Redueix
+Zoom in	Amplia
+Zoom out	Redueix
+Zoom to Selection	Amplia a la selecció
+a layer could not be rewritten	no s'ha pogut reescriure una capa
+before / after	abans / després
+changed	canviat
+content thumbnail — click to edit the layer's pixels	miniatura del contingut — feu clic per editar els píxels de la capa
+dpi	ppp
+edits are aimed at this mask — right-click for view and mask options	les edicions van a aquesta màscara — feu clic dret per a opcions de vista i de màscara
+lines past the box	línies fora de la caixa
+mask off	màscara desactivada
+mask thumbnail — click to edit the layer's mask	miniatura de la màscara — feu clic per editar la màscara de la capa
+minutes (0 is off)	minuts (0 és desactivat)
+no drop	no es deixa anar
+px	px
+records here	enregistra aquí
+skipped on play:	s'omet en reproduir:
+the layers could not be added	no s'han pogut afegir les capes
+the profile cannot be transformed ({error})	el perfil no es pot transformar ({error})
+to	a
+vector mask thumbnail — click to edit the vector mask	miniatura de la màscara vectorial — feu clic per editar la màscara vectorial
+{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time	{format}: la línia de temps, {frames} fotogrames a {fps} fps durant {length} ms; cada fotograma mostra les capes en el seu moment
+{label} is not answered by this route	{label} no té resposta per aquesta via
+{label} was refused: {reason}	{label} s'ha rebutjat: {reason}
+{name} Residual	{name} Residu
+{name} Scale {k}	{name} Escala {k}
+{name}: {n} pages	{name}: {n} pàgines
+{n} slices from the guides ({cols} x {rows}); they replace the slices there were	{n} sectors a partir de les guies ({cols} x {rows}); substitueixen els sectors que hi havia
+{path} is a {space} profile; an RGB document takes an RGB profile	{path} és un perfil {space}; un document RGB necessita un perfil RGB
+{path} is {len} bytes, larger than any colour profile	{path} fa {len} bytes, més que qualsevol perfil de color
+{reason}; this one is {space}	{reason}; aquest és {space}
+16 Bits	16 bits
+8 Bits	8 bits
+AVIF…	AVIF…
+Blank preview image	Imatge de previsualització en blanc
+Byte Order	Ordre dels bytes
+Depth	Profunditat
+Duplicate Into…	Duplica a…
+Guides from Layer	Guies de la capa
+Minify the file	Minimitza el fitxer
+Nothing under the pointer for this row	No hi ha res sota el punter per a aquesta fila
+Make Work Path	Crea un traçat de treball
+RAW…	RAW…
+Remove Anchor Point	Elimina el punt d'ancoratge
+Remove Path	Elimina el traçat
+Make Selection	Crea una selecció
+Divide…	Divideix…
+Right-click on an anchor point of the path	Feu clic dret en un punt d'ancoratge del traçat
+Right-click inside a path	Feu clic dret dins d'un traçat
+Save PSD/PSB	Desa PSD/PSB
+Save PSD/PSB…	Desa PSD/PSB…
+Select or draw a path first	Primer seleccioneu o dibuixeu un traçat
+Right-click on a text layer	Feu clic dret en una capa de text
+Right-click inside a slice	Feu clic dret dins d'un sector
+Divide Slices	Divideix els sectors
+N equal parts	N parts iguals
+N pixels per part	N píxels per part
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Talla el sector on heu fet clic dret, o el llenç si no n'hi havia cap, en una quadrícula de sectors.
+Tick Horizontally or Vertically	Marqueu Horitzontalment o Verticalment
+These settings make no cut: raise N or pick a smaller pixel count	Aquesta configuració no fa cap tall: augmenteu N o trieu un nombre de píxels més petit
+Cancel (Esc)	Cancel·la (Esc)
+All Documents	Tots els documents
+Select Source	Selecciona l'origen
+Alt	Alt
+Turn into JPG	Converteix en JPG
+ZIP for pixel data	ZIP per a les dades de píxels
+a	a
+b	b
+Open a document to see its memory	Obriu un document per veure'n la memòria
+Image data	Dades de la imatge
+{undo} undo / {redo} redo steps	{undo} passos de desfer / {redo} de refer
+Holds copied pixels	Conté píxels copiats
+{size} ({tiles} tiles)	{size} ({tiles} tessel·les)
+Empty	Buit
+Purge Clipboard	Purga el porta-retalls
+Purge Histories	Purga els historials
+Purge All	Purga-ho tot
+Make	Crea
+There is no path; draw one or select it in the Paths panel	No hi ha cap traçat; dibuixeu-ne un o seleccioneu-lo al tauler Traçats
+Artboards	Obradors
+No Slices	Sense sectors
+All Slices	Tots els sectors
+User Slices	Sectors d'usuari
+Put the file into ZIP	Posa el fitxer en un ZIP
+Reverse pages	Inverteix les pàgines

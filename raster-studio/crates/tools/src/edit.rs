@@ -111,9 +111,14 @@ pub struct MoveTool {
     copy: bool,
     /// W16-F: a press on one of Show Transform Controls' handles (a corner,
     /// a side or the rotate band outside a corner) runs that drag as a Free
-    /// Transform session over the framed box, committed at the release as
-    /// ONE step. `None` for every other Move gesture.
+    /// Transform session over the framed box. W18-F: the release keeps the
+    /// session open, as Photopea's does: later presses keep editing it and
+    /// Enter (or the bar's Commit check) lands it as ONE step, Escape (or the
+    /// Cancel cross) drops it. `None` for every other Move gesture.
     handle_drag: Option<Box<crate::transform::TransformTool>>,
+    /// W18-F: a handle drag's button is down (the session is being dragged
+    /// rather than held for the commit).
+    handle_dragging: bool,
 }
 
 impl Default for MoveTool {
@@ -131,6 +136,7 @@ impl Default for MoveTool {
             layer: None,
             copy: false,
             handle_drag: None,
+            handle_dragging: false,
         }
     }
 }
@@ -427,6 +433,13 @@ impl Tool for MoveTool {
         event: PointerEvent,
     ) -> Result<(), ToolError> {
         crate::error::finite_pt("move start", event.pos)?;
+        // W18-F: while a handle-drag session is held for the commit, every
+        // press edits it (as Free Transform's do) until Enter or Escape.
+        if let Some(session) = self.handle_drag.as_mut() {
+            session.on_pointer_down(ctx, event)?;
+            self.handle_dragging = true;
+            return Ok(());
+        }
         // W16-F: Show Transform Controls' handles are live (Photopea): a
         // press on one begins a Free Transform session over the framed box
         // and this drag is that session's handle drag. Alt keeps its copy
@@ -441,6 +454,7 @@ impl Tool for MoveTool {
                 session.begin(bounds)?;
                 session.on_pointer_down(ctx, event)?;
                 self.handle_drag = Some(session);
+                self.handle_dragging = true;
                 return Ok(());
             }
         }
@@ -520,19 +534,11 @@ impl Tool for MoveTool {
         ctx: &mut ToolContext<'_>,
         event: PointerEvent,
     ) -> Result<(), ToolError> {
-        // W16-F: a Show Transform Controls handle drag commits its session
-        // as ONE step, and the box then frames where the ink went.
-        if let Some(mut drag) = self.handle_drag.take() {
-            drag.on_pointer_up(ctx, event)?;
-            let moved = drag
-                .state
-                .as_ref()
-                .and_then(|s| s.dest_bounds_unclipped(drag.session_mode()));
-            drag.commit(ctx)?;
-            if moved.is_some() {
-                self.display_bounds = moved;
-            }
-            return Ok(());
+        // W18-F: a Show Transform Controls handle drag ends its drag and
+        // keeps the session open for the commit ([`Tool::commit`]).
+        if let Some(drag) = self.handle_drag.as_mut() {
+            self.handle_dragging = false;
+            return drag.on_pointer_up(ctx, event);
         }
         let Some(start) = self.start.take() else {
             return Ok(());
@@ -692,10 +698,34 @@ impl Tool for MoveTool {
         self.copy = false;
         // W16-F: an Escaped handle drag commits nothing.
         self.handle_drag = None;
+        self.handle_dragging = false;
     }
 
     fn is_active(&self) -> bool {
         self.start.is_some() || self.handle_drag.is_some()
+    }
+
+    /// W18-F: a released Show Transform Controls session waits here.
+    fn has_pending_commit(&self) -> bool {
+        self.handle_drag.is_some() && !self.handle_dragging
+    }
+
+    /// W18-F: Enter (or the Commit check) lands the held handle-drag
+    /// session as ONE step, and the box then frames where the ink went.
+    fn commit(&mut self, ctx: &mut ToolContext<'_>) -> Result<(), ToolError> {
+        let Some(mut drag) = self.handle_drag.take() else {
+            return Ok(());
+        };
+        self.handle_dragging = false;
+        let moved = drag
+            .state
+            .as_ref()
+            .and_then(|s| s.dest_bounds_unclipped(drag.session_mode()));
+        drag.commit(ctx)?;
+        if moved.is_some() {
+            self.display_bounds = moved;
+        }
+        Ok(())
     }
 }
 
@@ -3025,6 +3055,16 @@ mod w16f_show_transform_tests {
         assert_eq!(active, Some(crate::transform::Handle::Corner(2)));
         assert_eq!(state.corners[2], Vec2::new(35.0, 33.0));
         tool.on_pointer_up(&mut ctx, at(35.0, 33.0)).unwrap();
+        // W18-F: the release keeps the session open for Enter.
+        assert!(ctx.drain().is_empty(), "the release commits nothing");
+        assert!(tool.has_pending_commit(), "the session waits for Enter");
+        let Some(crate::tool::SessionGeometry::Transform { state, .. }) = tool.live_geometry()
+        else {
+            panic!("the held quad stays on screen");
+        };
+        assert_eq!(state.corners[2], Vec2::new(35.0, 33.0));
+        tool.commit(&mut ctx).unwrap();
+        assert!(!tool.has_pending_commit());
         let cmds = ctx.drain();
         let [Command::TransformLayer { layer_id, matrix }] = &cmds[..] else {
             panic!("one layer transform: {cmds:?}");
@@ -3069,6 +3109,7 @@ mod w16f_show_transform_tests {
         tool.on_pointer_down(&mut ctx, at(12.0, 12.0)).unwrap();
         tool.on_pointer_move(&mut ctx, at(68.0, 12.0)).unwrap();
         tool.on_pointer_up(&mut ctx, at(68.0, 12.0)).unwrap();
+        tool.commit(&mut ctx).unwrap();
         let cmds = ctx.drain();
         let [Command::TransformLayer { matrix, .. }] = &cmds[..] else {
             panic!("one layer transform: {cmds:?}");
@@ -3111,5 +3152,60 @@ mod w16f_show_transform_tests {
             panic!("{cmds:?}");
         };
         assert_eq!(*matrix, translation_matrix(Vec2::new(-15.0, -9.0)));
+    }
+}
+
+/// W18-F: a released Show Transform Controls drag stays open: a second drag
+/// edits the same session, Enter lands both as one step, Escape drops it.
+#[cfg(test)]
+mod w18f_show_transform_tests {
+    use super::*;
+    use crate::tiles::MemoryTiles;
+
+    fn at(x: f32, y: f32) -> PointerEvent {
+        PointerEvent::at(x, y)
+    }
+
+    #[test]
+    fn two_drags_are_one_held_session_that_enter_lands_and_escape_drops() {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, PixelRect::new(0, 0, 96, 96));
+        let layer = LayerId::new();
+        ctx.active_layer = Some(layer);
+        ctx.active_layer_content_bounds = Some(PixelRect::new(20, 24, 30, 18));
+        let mut tool = MoveTool {
+            show_transform: true,
+            ..MoveTool::default()
+        };
+        tool.seed_display(&ctx);
+        // The bottom-right corner to (35, 33), then on to (30, 30).
+        tool.on_pointer_down(&mut ctx, at(50.0, 42.0)).unwrap();
+        tool.on_pointer_move(&mut ctx, at(35.0, 33.0)).unwrap();
+        tool.on_pointer_up(&mut ctx, at(35.0, 33.0)).unwrap();
+        assert!(ctx.drain().is_empty());
+        assert!(tool.has_pending_commit());
+        tool.on_pointer_down(&mut ctx, at(35.0, 33.0)).unwrap();
+        assert!(!tool.has_pending_commit(), "a drag in flight is not held");
+        tool.on_pointer_move(&mut ctx, at(35.0, 33.0)).unwrap();
+        tool.on_pointer_up(&mut ctx, at(35.0, 33.0)).unwrap();
+        assert!(ctx.drain().is_empty(), "neither release commits");
+        assert!(tool.has_pending_commit());
+        // Escape drops it: nothing lands, nothing is held.
+        let mut escaped = MoveTool {
+            show_transform: true,
+            ..MoveTool::default()
+        };
+        escaped.seed_display(&ctx);
+        escaped.on_pointer_down(&mut ctx, at(50.0, 42.0)).unwrap();
+        escaped.on_pointer_move(&mut ctx, at(35.0, 33.0)).unwrap();
+        escaped.on_pointer_up(&mut ctx, at(35.0, 33.0)).unwrap();
+        escaped.cancel(&mut ctx);
+        assert!(!escaped.has_pending_commit());
+        assert!(ctx.drain().is_empty(), "an Escaped session writes nothing");
+        // Enter lands the first tool's session as one command.
+        tool.commit(&mut ctx).unwrap();
+        let cmds = ctx.drain();
+        assert_eq!(cmds.len(), 1, "{cmds:?}");
+        assert!(matches!(cmds[0], Command::TransformLayer { .. }));
     }
 }

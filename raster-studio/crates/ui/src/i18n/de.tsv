@@ -2,6 +2,41 @@
 # the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
 # Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
 @name	Deutsch
+Artboards	Zeichenflächen
+No Slices	Keine Slices
+All Slices	Alle Slices
+User Slices	Benutzer-Slices
+Put the file into ZIP	Datei in ZIP packen
+16 Bits	16 Bit
+8 Bits	8 Bit
+AVIF…	AVIF…
+Blank preview image	Leeres Vorschaubild
+Byte Order	Bytereihenfolge
+Depth	Tiefe
+Duplicate Into…	Duplizieren in…
+Guides from Layer	Hilfslinien aus Ebene
+Minify the file	Datei verkleinern
+Nothing under the pointer for this row	Unter dem Zeiger ist nichts für diesen Eintrag
+Make Work Path	Arbeitspfad erstellen
+RAW…	RAW…
+Remove Anchor Point	Ankerpunkt entfernen
+Remove Path	Pfad entfernen
+Make Selection	Auswahl erstellen
+Divide…	Teilen…
+Right-click on an anchor point of the path	Klicken Sie mit der rechten Maustaste auf einen Ankerpunkt des Pfads
+Right-click inside a path	Klicken Sie mit der rechten Maustaste in einen Pfad
+Save PSD/PSB	PSD/PSB speichern
+Save PSD/PSB…	PSD/PSB speichern…
+Select or draw a path first	Wählen oder zeichnen Sie zuerst einen Pfad
+Right-click on a text layer	Klicken Sie mit der rechten Maustaste auf eine Textebene
+Right-click inside a slice	Klicken Sie mit der rechten Maustaste in ein Slice
+Divide Slices	Slices teilen
+N equal parts	N gleiche Teile
+N pixels per part	N Pixel pro Teil
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Teilt das Slice, auf das Sie rechts geklickt haben, oder die Arbeitsfläche, wenn es keines gab, in ein Raster aus Slices.
+Tick Horizontally or Vertically	Aktivieren Sie „Horizontal“ oder „Vertikal“
+These settings make no cut: raise N or pick a smaller pixel count	Diese Einstellungen schneiden nichts: Erhöhen Sie N oder wählen Sie weniger Pixel
  fps	 fps
  frames	 Frames
  ms	 ms
@@ -291,6 +326,10 @@ Columns	Spalten
 Columns and rows with gutters between them, inside optional margins, in pixels.	Spalten und Zeilen mit Abständen dazwischen, innerhalb optionaler Ränder, in Pixeln.
 Combine Shapes	Formen kombinieren
 Commit (Enter)	Bestätigen (Eingabe)
+Cancel (Esc)	Abbrechen (Esc)
+All Documents	Alle Dokumente
+Select Source	Quelle wählen
+Alt	Alt
 Commit Contents	Inhalt übernehmen
 Composite	Gesamt
 Condensed	Schmal
@@ -857,7 +896,6 @@ New Folder	Neuer Ordner
 New Guide	Neue Hilfslinie
 New Guide Layout	Neues Hilfslinienlayout
 New Guide Layout…	Neues Hilfslinienlayout…
-New Guides from Shape	Neue Hilfslinien aus Form
 New Guide…	Neue Hilfslinie…
 New Layer	Neue Ebene
 New Layer Based Slice	Neuer ebenenbasierter Slice
@@ -1494,6 +1532,7 @@ Trim	Zuschneiden
 Trim Away	Wegschneiden
 Trim…	Zuschneiden…
 Tritone	Triplex
+Turn into JPG	In JPG umwandeln
 Turn on Resample to change the pixel count.	Aktivieren Sie Neu berechnen, um die Pixelanzahl zu ändern.
 Twirl…	Strudel…
 Twist	Verdrehen
@@ -1587,6 +1626,7 @@ Written with the document's palette.	Mit der Palette des Dokuments geschrieben.
 Yellow	Gelb
 Yellow / Blue	Gelb / Blau
 Yellows	Gelbtöne
+ZIP for pixel data	ZIP für Pixeldaten
 ZigZag…	Zickzack…
 Zoom In	Einzoomen
 Zoom Out	Auszoomen
@@ -1621,3 +1661,17 @@ vector mask thumbnail — click to edit the vector mask	Vektormaskenminiatur –
 {path} is a {space} profile; an RGB document takes an RGB profile	{path} ist ein {space}-Profil; ein RGB-Dokument braucht ein RGB-Profil
 {path} is {len} bytes, larger than any colour profile	{path} ist {len} Byte groß, größer als jedes Farbprofil
 {reason}; this one is {space}	{reason}; dieses ist {space}
+a	a
+b	b
+Open a document to see its memory	Öffnen Sie ein Dokument, um seinen Speicher zu sehen
+Image data	Bilddaten
+{undo} undo / {redo} redo steps	{undo} Rückgängig / {redo} Wiederholen
+Holds copied pixels	Enthält kopierte Pixel
+{size} ({tiles} tiles)	{size} ({tiles} Kacheln)
+Empty	Leer
+Purge Clipboard	Zwischenablage leeren
+Purge Histories	Protokolle leeren
+Purge All	Alles leeren
+Make	Erstellen
+There is no path; draw one or select it in the Paths panel	Es gibt keinen Pfad; zeichnen Sie einen oder wählen Sie ihn im Pfade-Bedienfeld aus
+Reverse pages	Seiten umkehren

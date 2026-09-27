@@ -2,6 +2,41 @@
 # the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
 # Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
 @name	Українська
+Artboards	Монтажні області
+No Slices	Без фрагментів
+All Slices	Усі фрагменти
+User Slices	Фрагменти користувача
+Put the file into ZIP	Помістити файл у ZIP
+16 Bits	16 біт
+8 Bits	8 біт
+AVIF…	AVIF…
+Blank preview image	Порожнє зображення попереднього перегляду
+Byte Order	Порядок байтів
+Depth	Глибина
+Duplicate Into…	Дублювати в…
+Guides from Layer	Напрямні з шару
+Minify the file	Зменшити файл
+Nothing under the pointer for this row	Під вказівником немає нічого для цього пункту
+Make Work Path	Створити робочий контур
+RAW…	RAW…
+Remove Anchor Point	Видалити опорну точку
+Remove Path	Видалити контур
+Make Selection	Створити виділення
+Divide…	Розділити…
+Right-click on an anchor point of the path	Клацніть правою кнопкою на опорній точці контуру
+Right-click inside a path	Клацніть правою кнопкою всередині контуру
+Save PSD/PSB	Зберегти PSD/PSB
+Save PSD/PSB…	Зберегти PSD/PSB…
+Select or draw a path first	Спершу виберіть або намалюйте контур
+Right-click on a text layer	Клацніть правою кнопкою на текстовому шарі
+Right-click inside a slice	Клацніть правою кнопкою всередині фрагмента
+Divide Slices	Розділити фрагменти
+N equal parts	N рівних частин
+N pixels per part	N пікселів на частину
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Розрізає фрагмент, на якому ви клацнули правою кнопкою (або полотно, якщо його не було), на сітку фрагментів.
+Tick Horizontally or Vertically	Позначте «По горизонталі» або «По вертикалі»
+These settings make no cut: raise N or pick a smaller pixel count	Ці налаштування нічого не розрізають: збільште N або виберіть менше пікселів
  fps	 кадр/с
  frames	 кадрів
  ms	 мс
@@ -291,6 +326,10 @@ Columns	Стовпці
 Columns and rows with gutters between them, inside optional margins, in pixels.	Стовпці й рядки з проміжками між ними, усередині необов'язкових полів, у пікселях.
 Combine Shapes	Об'єднати фігури
 Commit (Enter)	Застосувати (Enter)
+Cancel (Esc)	Скасувати (Esc)
+All Documents	Усі документи
+Select Source	Вибрати джерело
+Alt	Alt
 Commit Contents	Застосувати вміст
 Composite	Поєднаний
 Condensed	Вузький
@@ -857,7 +896,6 @@ New Folder	Нова тека
 New Guide	Нова напрямна
 New Guide Layout	Новий макет напрямних
 New Guide Layout…	Новий макет напрямних…
-New Guides from Shape	Нові напрямні з фігури
 New Guide…	Нова напрямна…
 New Layer	Новий шар
 New Layer Based Slice	Новий фрагмент із шару
@@ -1494,6 +1532,7 @@ Trim	Тримінг
 Trim Away	Обрізати
 Trim…	Тримінг…
 Tritone	Тріотон
+Turn into JPG	Перетворити на JPG
 Turn on Resample to change the pixel count.	Увімкніть «Інтерполяцію», щоб змінити кількість пікселів.
 Twirl…	Скручування…
 Twist	Скрутка
@@ -1587,6 +1626,7 @@ Written with the document's palette.	Записано з палітрою док
 Yellow	Жовтий
 Yellow / Blue	Жовтий / Синій
 Yellows	Жовті
+ZIP for pixel data	ZIP для піксельних даних
 ZigZag…	Зигзаг…
 Zoom In	Збільшити
 Zoom Out	Зменшити
@@ -1621,3 +1661,17 @@ vector mask thumbnail — click to edit the vector mask	мініатюра ве�
 {path} is a {space} profile; an RGB document takes an RGB profile	{path} — профіль {space}; документу RGB потрібен профіль RGB
 {path} is {len} bytes, larger than any colour profile	{path} займає {len} байтів — більше за будь-який колірний профіль
 {reason}; this one is {space}	{reason}; у цього — {space}
+a	a
+b	b
+Open a document to see its memory	Відкрийте документ, щоб побачити його пам'ять
+Image data	Дані зображення
+{undo} undo / {redo} redo steps	{undo} скасувань / {redo} повторів
+Holds copied pixels	Містить скопійовані пікселі
+{size} ({tiles} tiles)	{size} ({tiles} плиток)
+Empty	Порожньо
+Purge Clipboard	Очистити буфер обміну
+Purge Histories	Очистити історії
+Purge All	Очистити все
+Make	Створити
+There is no path; draw one or select it in the Paths panel	Немає контуру; намалюйте його або виберіть на панелі «Контури»
+Reverse pages	Зворотний порядок сторінок

@@ -1,0 +1,1677 @@
+# Raster Studio interface strings, hu. One row per line: the English source, a TAB,
+# the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
+# Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
+@name	Magyar
+Artboards	Rajztáblák
+No Slices	Nincsenek szeletek
+All Slices	Minden szelet
+User Slices	Felhasználói szeletek
+Put the file into ZIP	Fájl ZIP-be tétele
+Nothing under the pointer for this row	A mutató alatt nincs semmi ehhez a sorhoz
+Make Work Path	Munkaútvonal létrehozása
+Remove Anchor Point	Horgonypont eltávolítása
+Remove Path	Útvonal eltávolítása
+Make Selection	Kijelölés létrehozása
+Divide…	Felosztás…
+Right-click on an anchor point of the path	Kattintson a jobb gombbal az útvonal egy horgonypontjára
+Right-click inside a path	Kattintson a jobb gombbal egy útvonalon belül
+Select or draw a path first	Előbb jelöljön ki vagy rajzoljon egy útvonalat
+Right-click on a text layer	Kattintson a jobb gombbal egy szövegrétegre
+Right-click inside a slice	Kattintson a jobb gombbal egy szeleten belül
+Divide Slices	Szeletek felosztása
+N equal parts	N egyenlő rész
+N pixels per part	N képpont részenként
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	A jobb gombbal kattintott szeletet, vagy ha nem volt ilyen, a vásznat szeletekből álló rácsra osztja.
+Tick Horizontally or Vertically	Jelölje be a Vízszintesen vagy a Függőlegesen lehetőséget
+These settings make no cut: raise N or pick a smaller pixel count	Ezek a beállítások nem vágnak semmit: növelje az N értékét, vagy válasszon kevesebb képpontot
+ fps	 fps
+ frames	 képkocka
+ ms	 ms
+ px	 px
+0 bytes	0 bájt
+16 Bits/Channel	16 bit/csatorna
+16 bit	16 bit
+32 Bits/Channel	32 bit/csatorna
+3D	3D
+50% Grey	50%-os szürke
+50% Threshold	50%-os küszöb
+8 Bits/Channel	8 bit/csatorna
+8 bit	8 bit
+90° Clockwise	90° az óramutató járásával egyezően
+90° Counter Clockwise	90° az óramutató járásával ellentétesen
+A CSV row has the wrong number of fields, at line	Egy CSV-sorban hibás a mezők száma, a következő sorban:
+A blank canvas at any size	Üres vászon tetszőleges méretben
+A colour channel cannot be deleted	Színcsatorna nem törölhető
+A layered raster editor	Rétegekkel dolgozó raszteres képszerkesztő
+A palette holds 2 to 256 colours	Egy paletta 2–256 színt tartalmaz
+A saved selection already has that name	Már van ilyen nevű mentett kijelölés
+A saved selection: click to open Select > Load Selection, then choose it by name there	Mentett kijelölés: kattintson a Kijelölés > Kijelölés betöltése megnyitásához, majd ott válassza ki név szerint
+A slice needs a name	A szeletnek nevet kell adni
+AV1 (smaller, newer players)	AV1 (kisebb, újabb lejátszók)
+About Raster Studio	A Raster Studio névjegye
+Absolute Colorimetric	Abszolút kolorimetrikus
+Action sets	Műveletkészletek
+Actions	Műveletek
+Adaptive (median cut)	Adaptív (medián vágás)
+Add "copy" to copied layers	„másolat” hozzáadása a másolt rétegekhez
+Add Artboard Above	Rajztábla hozzáadása fölé
+Add Artboard Below	Rajztábla hozzáadása alá
+Add Artboard Left	Rajztábla hozzáadása balra
+Add Artboard Right	Rajztábla hozzáadása jobbra
+Add Filter Mask	Szűrőmaszk hozzáadása
+Add Media	Média hozzáadása
+Add Noise…	Zaj hozzáadása…
+Add a layer mask	Rétegmaszk hozzáadása
+Add a smart filter mask	Intelligens szűrőmaszk hozzáadása
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Kép- vagy videofájl elhelyezése (Fájl > Beágyazott elhelyezés); a videóból videoréteg lesz a lejátszófejnél
+Add an adjustment layer	Korrekciós réteg hozzáadása
+Add another instance of this effect	Az effektus újabb példányának hozzáadása
+Add current colour	Aktuális szín hozzáadása
+Add export	Exportálás hozzáadása
+Add frame	Képkocka hozzáadása
+Add or remove room around the image. Pixels are not resampled.	Hely hozzáadása vagy eltávolítása a kép körül. A képpontok nem kerülnek újramintavételezésre.
+Add shortcut	Billentyűparancs hozzáadása
+Add to Selection	Hozzáadás a kijelöléshez
+Adds one guide at a document coordinate, in pixels.	Egy segédvonalat ad hozzá a dokumentum egy koordinátájánál, képpontban.
+Adjustment	Korrekció
+Adjustments	Színkorrekciók
+Advanced	Speciális
+Again	Újra
+Again with Copy	Ismét másolattal
+Aliased (pencil)	Élsimítás nélkül (ceruza)
+Align	Igazítás
+Align the bottom edge to the canvas	Alsó él igazítása a vászonhoz
+Align the left edge to the canvas	Bal él igazítása a vászonhoz
+Align the right edge to the canvas	Jobb él igazítása a vászonhoz
+Align the top edge to the canvas	Felső él igazítása a vászonhoz
+Align with layer	Réteghez igazítás
+All	Összes
+All Caps	Csupa nagybetű
+All Caps shapes every lowercase letter as its capital; Small Caps shapes it as a capital at 70 % size. The stored text keeps the case you typed.	A Csupa nagybetű minden kisbetűt nagybetűként formáz; a Kiskapitális nagybetűként, 70%-os méretben formázza. A tárolt szöveg megtartja a begépelt kis- és nagybetűket.
+All Layers	Összes réteg
+Alpha	Alfa
+Already used by	Már használja:
+Alt Tag	Alt címke
+Amount	Összeg
+An export needs at least one output	Az exportáláshoz legalább egy kimenet kell
+An image or project from this computer	Kép vagy projekt erről a számítógépről
+Angle	Szög
+Angle (degrees)	Szög (fok)
+Angle jitter	Szögingadozás
+Animation	Animáció
+Another slice already has this name	Egy másik szeletnek már ez a neve
+Appearance	Megjelenés
+Applied	Alkalmazva
+Apply	Alkalmaz
+Apply Guides	Segédvonalak alkalmazása
+Apply Image	Kép alkalmazása
+Apply Image…	Kép alkalmazása…
+Apply Mask	Maszk alkalmazása
+Apply Style	Stílus alkalmazása
+Apply Style 1	1. stílus alkalmazása
+Apply Style Preset…	Stílus-előbeállítás alkalmazása…
+Apply the next comp	A következő kompozíció alkalmazása
+Apply the previous comp	Az előző kompozíció alkalmazása
+Apply this mask	A maszk alkalmazása
+Approximate. The composited result is what the canvas shows.	Közelítő érték. Az összesített eredmény az, amit a vászon mutat.
+Arbitrary…	Tetszőleges…
+Arc	Ívelés
+Arc Lower	Ívelés lejjebb
+Arc Upper	Ívelés feljebb
+Arch	Ív
+Arrange	Rendezés
+Artboard	Rajztábla
+Artboard from Layers	Rajztábla rétegekből
+Artboards in one document	Rajztáblák egy dokumentumban
+Artboards to Files…	Rajztáblák fájlokba…
+Assign Profile	Profil hozzárendelése
+Assigned {name}: the pixel numbers are unchanged, so the colours look different	{name} hozzárendelve: a képpontértékek nem változtak, ezért a színek másképp néznek ki
+Author	Szerző
+Auto Color	Automatikus szín
+Auto Contrast	Automatikus kontraszt
+Auto Tone	Automatikus színárnyalat
+Auto leading	Automatikus sorköz
+Auto-Align Layers…	Rétegek automatikus igazítása…
+Auto-Blend Layers…	Rétegek automatikus keverése…
+Automate	Automatizálás
+Autosaves of never-saved documents go here; empty uses the default	A soha nem mentett dokumentumok automatikus mentései ide kerülnek; üresen az alapértelmezett helyet használja
+Average	Átlag
+BMP…	BMP…
+Back to the colour this opened on	Vissza ahhoz a színhez, amellyel ez megnyílt
+Background — double-click for the picker	Háttér — dupla kattintás a színválasztóhoz
+Based On	Alapja
+Baseline shift	Alapvonal-eltolás
+Baseline to baseline. Auto leading follows the type size.	Alapvonaltól alapvonalig. Az automatikus sorköz a betűmérethez igazodik.
+Batch	Kötegelt feldolgozás
+Batch…	Kötegelt feldolgozás…
+Bend	Hajlás
+Bevel	Tompa szél
+Bevel & Emboss	Tompa szél és domborítás
+Bevel & Emboss…	Tompa szél és domborítás…
+Bind a text replacement variable to a text layer, or a visibility variable to any layer.	Szövegcsere-változó kötése egy szövegréteghez, vagy láthatósági változó kötése bármely réteghez.
+Bitmap	Bittérkép
+Bitmap…	Bittérkép…
+Black	Fekete
+Black & White	Fekete-fehér
+Black & White…	Fekete-fehér…
+Black to Transparent	Feketéből átlátszóba
+Black to White	Feketéből fehérbe
+Black to white through the inks	Feketéből fehérbe a festékeken át
+Blacks	Feketék
+Blend If	Keverés, ha
+Blend Mode: Color	Keverési mód: Szín
+Blend Mode: Color Burn	Keverési mód: Színégetés
+Blend Mode: Color Dodge	Keverési mód: Színfakítás
+Blend Mode: Darken	Keverési mód: Sötétítés
+Blend Mode: Difference	Keverési mód: Különbség
+Blend Mode: Dissolve	Keverési mód: Oldás
+Blend Mode: Exclusion	Keverési mód: Kizárás
+Blend Mode: Hard Light	Keverési mód: Kemény fény
+Blend Mode: Hard Mix	Keverési mód: Kemény keverés
+Blend Mode: Hue	Keverési mód: Színárnyalat
+Blend Mode: Lighten	Keverési mód: Világosítás
+Blend Mode: Linear Burn	Keverési mód: Lineáris égetés
+Blend Mode: Linear Dodge (Add)	Keverési mód: Lineáris fakítás (hozzáadás)
+Blend Mode: Linear Light	Keverési mód: Lineáris fény
+Blend Mode: Luminosity	Keverési mód: Fényerő
+Blend Mode: Multiply	Keverési mód: Szorzás
+Blend Mode: Normal	Keverési mód: Normál
+Blend Mode: Overlay	Keverési mód: Átfedés
+Blend Mode: Pin Light	Keverési mód: Pontszerű fény
+Blend Mode: Saturation	Keverési mód: Telítettség
+Blend Mode: Screen	Keverési mód: Szita
+Blend Mode: Soft Light	Keverési mód: Lágy fény
+Blend Mode: Vivid Light	Keverési mód: Élénk fény
+Blending	Keverés
+Blending Options	Összhatás beállítások
+Blending Options…	Összhatás beállítások…
+Blending options	Keverési beállítások
+Blends a source document, layer or channel into the active layer as one step.	Egy forrásdokumentumot, réteget vagy csatornát kever az aktív rétegbe egyetlen lépésben.
+Blends one channel of each of two sources into a new channel, a selection or a new document.	Két forrás egy-egy csatornáját keveri össze új csatornába, kijelölésbe vagy új dokumentumba.
+Blue	Kék
+Blues	Kékek
+Blur	Életlenítési
+Blur Gallery	Elmosásgaléria
+Blur More	Több életlenítés
+Bold	Félkövér
+Border Selection	Szegélykijelölés
+Border…	Szegély…
+Both axes	Mindkét tengely
+Bottom	Alsó
+Bottom Edges	Alsó élek
+Bottom Left	Bal alsó
+Bottom Right	Jobb alsó
+Bottom Right Pixel Color	A jobb alsó képpont színe
+Bottom left	Bal alsó
+Bottom right	Jobb alsó
+Box Blur…	Doboz életlenítése…
+Box height	Doboz magassága
+Brightness	Fényerő
+Brightness jitter	Fényerő-ingadozás
+Brightness/Contrast	Fényerő/kontraszt
+Brightness/Contrast…	Fényerő/kontraszt…
+Bring Forward	Előtérbe hozás
+Bring to Front	Előrehozás
+Brush Editor	Ecsetszerkesztő
+Brush: Background	Ecset: háttér
+Brush: Foreground	Ecset: előtér
+Brushes	Ecsetek
+Bulge	Kidomborítás
+Butt	Tompa
+CMYK Color	CMYK szín
+Calculations	Számítások
+Calculations…	Számítások…
+Camera Raw…	Camera Raw…
+Canvas Size	Vászon méret
+Canvas Size…	Vászon méret…
+Canvas extension	Vászonbővítés
+Caps	Vonalvégek
+Carries the XMP; the source's EXIF goes into JPEG only	Tartalmazza az XMP-t; a forrás EXIF adatai csak JPEG-be kerülnek
+Cell size (pixels)	Cellaméret (képpont)
+Center	Közép
+Center horizontally on the canvas	Vízszintes középre igazítás a vásznon
+Center vertically on the canvas	Függőleges középre igazítás a vásznon
+Centimeters	Centiméter
+Centre	Közép
+Centre the view on this note	A nézet középre igazítása erre a jegyzetre
+Change Bit Depth	Bitmélység módosítása
+Change Colour Mode	Színmód módosítása
+Change Layer Properties	Rétegtulajdonságok módosítása
+Change how many pixels the document has, or how large it prints.	Módosítsa, hány képpontja van a dokumentumnak, vagy mekkora méretben nyomtatódik.
+Channel	Csatorna
+Channel Mixer	Csatornakeverő
+Channel Mixer…	Csatornakeverő…
+Channel thumbnail	Csatorna miniatűrje
+Channels	Csatorna
+Character	Karakter
+Character Style	Karakterstílus
+Character Styles	Karakterstílusok
+Checkerboard	Sakktábla
+Choose 2 to 256 colours	Válasszon 2–256 színt
+Choose a colour profile	Válasszon színprofilt
+Choose a destination folder	Válasszon célmappát
+Choose a source folder	Válasszon forrásmappát
+Choose at least one page to open	Válasszon legalább egy megnyitandó oldalt
+Choose at least one side to trim	Válasszon legalább egy levágandó oldalt
+Choose the Action to play	Válassza ki a lejátszandó műveletet
+Choose the open grayscale document each channel of the new RGB document comes from.	Válassza ki azt a megnyitott szürkeárnyalatos dokumentumot, amelyből az új RGB-dokumentum egyes csatornái származnak.
+Choose the pages to open, their resolution and how they open.	Válassza ki a megnyitandó oldalakat, azok felbontását és megnyitási módját.
+Choose the source and the destination folders.	Válassza ki a forrás- és a célmappát.
+Choose…	Kiválasztás…
+Clear	Törlés
+Clear All	Összes törlése
+Clear Guides	Segédvonalak törlése
+Clear History	Előzmények törlése
+Clear Layer Style	Rétegstílus törlése
+Clear Slices	Szeletek törlése
+Clear Strokes	Ecsetvonások törlése
+Clear existing guides	Meglévő segédvonalak törlése
+Clear the {noun} from the active text layer	{noun} eltávolítása az aktív szövegrétegből
+Cleared {n} slice(s)	{n} szelet törölve
+Click an item in the panel first	Előbb kattintson egy elemre a panelen
+Click anywhere to sample a colour	Kattintson bárhová egy szín mintavételezéséhez
+Click anywhere to sample a colour, or press Escape.	Kattintson bárhová egy szín mintavételezéséhez, vagy nyomja meg az Esc billentyűt.
+Click the graph to add a point, drag a point to bend the curve, drag it off the graph to remove it	Kattintson a grafikonra pont hozzáadásához, húzzon egy pontot a görbe hajlításához, húzza ki a grafikonról az eltávolításához
+Click the preview to sample a colour from it	Kattintson az előnézetre, hogy színt vegyen belőle
+Click the preview to sample the colour to replace	Kattintson az előnézetre a cserélendő szín mintavételezéséhez
+Click the ramp to edit its stops.	Kattintson a színátmenetre az ütközőinek szerkesztéséhez.
+Clip to layer below	Vágás az alatta lévő rétegre
+Clipboard	Vágólap
+Clipping	Vágómaszk
+Close	Bezárás
+Close All	Összes bezárása
+Close Alpha Channel	Alfa-csatorna bezárása
+Close Others	Többi bezárása
+Close panel	Panel bezárása
+Clouds	Felhők
+Codec	Kodek
+Color	Szín
+Color Balance	Színegyensúly
+Color Balance…	Színegyensúly…
+Color Burn	Színégetés
+Color Dodge	Színfakítás
+Color Dynamics	Szín dinamika
+Color Halftone…	Színes raszterrács…
+Color Intensity	Színintenzitás
+Color Label	Színcímke
+Color Lookup	Színkeresés
+Color Lookup Tables…	Színkereső táblázatok…
+Color Lookup…	Színkeresés…
+Color Overlay	Színátfedés
+Color Overlay…	Színátfedés…
+Color Picker	Színválasztó
+Color Range	Színtartomány
+Color Range…	Színtartomány…
+Color fringe cleanup: pulls the boundary pixels' color toward the nearby interior ink — a separate edit from mask refinement.	Színszegély-tisztítás: a szegélyképpontok színét a közeli belső szín felé húzza — külön szerkesztés, nem maszkfinomítás.
+Color to Alpha…	Szín alfába…
+Colors	Színek
+Colour	Szín
+Colour varies once per stroke.	A szín ecsetvonásonként egyszer változik.
+Colours	Színek
+Colours must be 1 to 64, the tolerance above 0 and the corner length at least 1	A színek száma 1–64 legyen, a tűrés 0 feletti, a sarokhossz legalább 1
+Columns	Oszlopok
+Columns and rows with gutters between them, inside optional margins, in pixels.	Oszlopok és sorok, köztük térközzel, opcionális margókon belül, képpontban.
+Combine Shapes	Alakzatok egyesítése
+Commit (Enter)	Jóváhagyás (Enter)
+Commit Contents	Tartalom jóváhagyása
+Composite	Összetett
+Condensed	Keskeny
+Cone	Kúp
+Constant	Állandó
+Constrain proportions	Arányok megtartása
+Content-Aware	Tartalomérzékeny
+Content-Aware Scale	Tartalomérzékeny méretezés
+Contour	Kontúr
+Contract Selection	Kijelölés szűkítése
+Contract by	Szűkítés mértéke
+Contract…	Összehúzás…
+Contrast	Kontraszt
+Conversion Options	Konvertálási beállítások
+Convert Formats	Formátumok konvertálása
+Convert Formats…	Formátumok konvertálása…
+Convert for Smart Filters	Konvertálás intelligens szűrőkhöz
+Convert to Layers	Konvertálás rétegekké
+Convert to Linked…	Konvertálás csatolttá…
+Convert to Paragraph Text	Átalakítás bekezdésszöveggé parancsra
+Convert to Point Text	Átalakítás pontszöveggé vagy
+Convert to Profile	Konvertálás profilba
+Convert to Profile works on 8- and 16-bit documents	A Konvertálás profilba 8 és 16 bites dokumentumokon működik
+Convert to Profile…	Konvertálás profilba…
+Convert to Shape	Alakzattá alakítás
+Convert to Smart Object	Okos objektummá alakítás
+Converted to {name} ({intent}): the numbers changed so the colours look the same	Konvertálva ide: {name} ({intent}): az értékek megváltoztak, hogy a színek ugyanúgy nézzenek ki
+Cool	Hideg
+Copper	Réz
+Copy	Másolás
+Copy Layer Style	Rétegstílus másolása
+Copy Merged	Másolás egyesítve
+Copyright Notice	Szerzői jogi közlemény
+Corner length	Sarokhossz
+Corner radius	Sarokkerekítés sugara
+Corner radius applies to rectangles; this path has no corners to round	A sarokkerekítés téglalapokra vonatkozik; ennek a görbének nincsenek kerekíthető sarkai
+Corners	Sarkok
+Count jitter	Darabszám-ingadozás
+Create Clipping Mask	Vágómaszk létrehozása
+Create Layer	Réteg létrehozása
+Create Layers	Rétegek létrehozása
+Crop	Kivágás
+Crop and Straighten Photos	Fotók körbevágása és kiegyenesítése
+Crops the canvas to the content, judged by the basis below.	A vásznat a tartalomhoz vágja, az alábbi alap szerint megítélve.
+Crystallize…	Kristályosítás…
+Current Layer	Aktuális réteg
+Current Path	Aktuális görbe
+Curve tolerance	Görbetűrés
+Curves	Görbék
+Curves…	Görbék…
+Custom	Egyedi
+Custom Brush	Egyéni ecset
+Custom: with the Move tool, drag the 16 mesh handles on the canvas	Egyéni: az Áthelyezés eszközzel húzza a vásznon a háló 16 fogópontját
+Custom…	Egyedi…
+Cut	Vágás
+Cyan	Cián
+Cyan / Red	Ciánkék / vörös
+Cyans	Ciánkékek
+DDS…	DDS…
+DXF…	DXF…
+Dark	Sötét
+Dark Blue	Sötétkék
+Dark Grey	Sötétszürke
+Darken	Sötétítés
+Darker Color	Sötétebb szín
+Dash	Szaggatott
+Data Set	Adatkészlet
+Data Sets	Adatkészletek
+Data Sets…	Adatkészletek…
+Default	Alapértelmezett
+Default colours  (D)	Alapértelmezett színek  (D)
+Default colours (D)	Alapértelmezett színek (D)
+Define	Meghatározás
+Define Brush Preset…	Ecset-előbeállítás meghatározása…
+Define Custom Shape…	Egyéni alakzat meghatározása…
+Define New	Megadása
+Define Pattern…	Minta meghatározása…
+Define…	Meghatározás…
+Delete	Törlés
+Delete Filter Mask	Szűrőmaszk törlése
+Delete Layer	Réteg törlése
+Delete Mask	Maszk törlése
+Delete Vector Mask	Vektormaszk törlése
+Delete action	Művelet törlése
+Delete channel	Csatorna törlése
+Delete frame	Képkocka törlése
+Delete path	Görbe törlése
+Delete selected layers	Kijelölt rétegek törlése
+Delete set and its actions	Készlet és műveleteinek törlése
+Delete stop	Ütköző törlése
+Delete the applied comp	Az alkalmazott kompozíció törlése
+Delete the selected keyframe	A kijelölt kulcskocka törlése
+Delete the selected tool preset	A kijelölt eszköz-előbeállítás törlése
+Delete the selected {noun}	A kijelölt {noun} törlése
+Delete the smart filter mask	Az intelligens szűrőmaszk törlése
+Delete this note	A jegyzet törlése
+Delete this smart filter	Az intelligens szűrő törlése
+Delete this spot channel	A direkt színes csatorna törlése
+Density	Sűrűség
+Dents…	Horpadások…
+Desaturate	Telítettség csökkentése
+Description	Leírás
+Deselect	Kijelölés megszüntetése
+Deselect Layers	Rétegek kijelölésének megszüntetése
+Despeckle	Rácstalanítás
+Destination	Rendeltetési hely
+Destination Space	Célszíntér
+Detail	Részletesség
+Detail scales	Részletességi skálák
+Diamond	Gyémánt
+Difference	Különbség
+Difference Clouds	Negatív felhők
+Diffuse…	Szétszórás…
+Diffusion	Diffúzió
+Diffusion Dither	Diffúziós raszterezés
+Disable / Enable Filter Mask	Szűrőmaszk ki- / bekapcsolása
+Disable / Enable Mask	Maszk ki- / bekapcsolása
+Disable / Enable Vector Mask	Vektormaszk ki- / bekapcsolása
+Disable Mask	Maszk kikapcsolása
+Disable Vector Mask	Vektormaszk letiltása
+Displace…	Fénytörés…
+Dissolve	Szórt
+Distance	Távolság
+Distort	Torzítási
+Distribute	Elosztás
+Dither	Árnyalás
+Dither…	Árnyalás…
+Divide	Felosztás
+Dock this panel here	A panel dokkolása ide
+Document	Dokumentum
+Document Bounds	Dokumentumszegélyek
+Document Info	Dokumentuminformáció
+Document Title	Dokumentum címe
+Document size	Dokumentumméret
+Double-click to edit in Layer Style; drag to the trash to delete	Dupla kattintás a Rétegstílusban való szerkesztéshez; húzza a kukába a törléshez
+Double-click to edit this filter's settings	Dupla kattintás a szűrő beállításainak szerkesztéséhez
+Double-click to rename	Dupla kattintás az átnevezéshez
+Drag a line with the Ruler first	Előbb húzzon egy vonalat a Vonalzóval
+Drag to zoom the view	Húzással nagyíthatja a nézetet
+Drop Shadow	Árnyék
+Drop Shadow…	Árnyék…
+Duotone	Duplex
+Duotone Options	Duplex beállításai
+Duotone…	Duplex…
+Duplicate	Másolat
+Duplicate Layer	Réteg duplikálása
+Duplicate Layer…	Réteg duplikálása…
+Duplicate frame	Képkocka kettőzése
+Dust & Scratches…	Por és karcok…
+EMF…	EMF…
+EXIF and XMP writing is not implemented — only ICC is embedded	Az EXIF és XMP írása nincs megvalósítva — csak az ICC kerül beágyazásra
+EXR…	EXR…
+Ease In	Lassú kezdés
+Ease Out	Lassú befejezés
+Edge Glow	Izzó élek
+Edge refinement: feather, shift, smooth, and contrast over the mask's existing coverage — not subject recognition.	Élfinomítás: lágyítás, eltolás, simítás és kontraszt a maszk meglévő fedésén — nem alanyfelismerés.
+Edges	Élek
+Edit	Szerkesztés
+Edit Adjustment	Korrekció szerkesztése
+Edit Adjustment…	Korrekció szerkesztése…
+Edit Alpha Channel	Alfa-csatorna szerkesztése
+Edit Contents…	Tartalom szerkesztése…
+Edit Document Records	Dokumentumrekordok szerkesztése
+Edit Fill	Kitöltés szerkesztése
+Edit Filter Mask	Szűrőmaszk szerkesztése
+Edit Generator	Generátor szerkesztése
+Edit Group	Csoport szerkesztése
+Edit Guides	Segédvonalak szerkesztése
+Edit Raster	Raszter szerkesztése
+Edit Saved Selection	Mentett kijelölés szerkesztése
+Edit Shape	Alakzat szerkesztése
+Edit Slices	Szeletek szerkesztése
+Edit Smart object	Intelligens objektum szerkesztése
+Edit Text	Szöveg szerkesztése
+Edit Timeline	Idővonal szerkesztése
+Edit brush…	Ecset szerkesztése…
+Edit fill	Kitöltés szerkesztése
+Edit gradient stops — click to open the editor	Színátmenet-ütközők szerkesztése — kattintson a szerkesztő megnyitásához
+Edit in Quick Mask Mode	Szerkesztés gyorsmaszk módban
+Edit this ramp	A színátmenet szerkesztése
+Effects	Effektek
+Effects apply to the whole layer and undo as one step.	Az effektusok az egész rétegre vonatkoznak, és egy lépésben vonhatók vissza.
+Embed EXIF and XMP	EXIF és XMP beágyazása
+Embed Linked	Csatolt beágyazása
+Embed colour profile	Színprofil beágyazása
+Embedded source	Beágyazott forrás
+Emboss…	Dombor…
+Enable / disable the smart filter mask	Az intelligens szűrőmaszk be- / kikapcsolása
+Enable Mask	Maszk bekapcsolása
+Enable Vector Mask	Vektormaszk engedélyezése
+Enable at least one export	Kapcsoljon be legalább egy exportálást
+Enabled	Bekapcsolva
+Enlarge smaller images	Kisebb képek nagyítása
+Enter a colour like #3366CC	Adjon meg egy színt, például #3366CC
+Entropy	Entrópia
+Equalize	Kiegyenlítés
+Essentials	Alapok
+Every enabled row is written when you export.	Exportáláskor minden bekapcsolt sor kiírásra kerül.
+Every image in the source folder is fitted into the box and written to the destination folder in its own format.	A forrásmappa minden képe a dobozba illesztve, saját formátumában kerül a célmappába.
+Every parameter is at its neutral value — there is nothing to clean	Minden paraméter semleges értéken áll — nincs mit tisztítani
+Every parameter is at its neutral value — there is nothing to refine	Minden paraméter semleges értéken áll — nincs mit finomítani
+Every variable needs a name	Minden változónak nevet kell adni
+Exact	Pontos
+Exclude Overlapping Shapes	Átfedő alakzatok kizárása
+Exclusion	Kizárás
+Expand Selection	Kijelölés bővítése
+Expand by	Bővítés mértéke
+Expand the dock	A dokk kibontása
+Expanded	Széles
+Expand…	Kiterjesztés…
+Export	Exportálás
+Export As	Exportálás másként
+Export Color Lookup	Színkeresés exportálása
+Export Contents…	Tartalom exportálása…
+Export Diagnostics…	Diagnosztika exportálása…
+Export Layers…	Rétegek exportálása…
+Export PDF	PDF exportálása
+Export as .ABR…	Exportálás .ABR formátumba…
+Export as .ACO…	Exportálás .ACO formátumba…
+Export as .ASL…	Exportálás .ASL formátumba…
+Export set as .atn	Készlet exportálása .atn formátumba
+Export…	Exportálás…
+Exposure	Exponálás
+Exposure…	Exponálás…
+Extra Bold	Extra félkövér
+Extra Condensed	Extra keskeny
+Extra Expanded	Extra széles
+Extra Light	Extra vékony
+Extras	Extrák
+Extrude…	Kiemelés…
+Eyedropper	Pipetta
+Face	Betűváltozat
+Facet	Szellemkép
+Fade	Halványítás
+Fade…	Halványítás…
+Family	Család
+Feather	Madártoll
+Feather Selection	Kijelölés lágyítása
+Feather radius	Lágyítási sugár
+Feather…	Madártoll…
+Fibers…	Rostok…
+Field Blur…	Mezőelmosás…
+File	Fájl
+File Info	Fájl információk
+File Info…	Fájl információk…
+File name	Fájlnév
+Files that fail are listed in batch-errors.txt in the destination.	A sikertelen fájlok listája a cél batch-errors.txt fájljában található.
+Fill	Kitöltés
+Fill Filter Mask	Szűrőmaszk kitöltése
+Fill Layer	Kitöltőréteg
+Fill Mask	Maszk kitöltése
+Fill Screen	Képernyő kitöltése
+Fill in File Info, or open a file that has EXIF, to embed metadata	Töltse ki a fájlinformációt, vagy nyisson meg egy EXIF-adatokat tartalmazó fájlt a metaadatok beágyazásához
+Fill path with the foreground colour, on a new shape layer	Görbe kitöltése az előtérszínnel, új alakzatrétegen
+Fill type	Kitöltés típusa
+Fills the active selection with the chosen contents.	Az aktív kijelölést a választott tartalommal tölti ki.
+Fill…	Kitöltés…
+Filter	Szűrő
+Filter Gallery	Szűrőgaléria
+Filter Gallery…	Szűrőgaléria…
+Find Edges	Szegélyek megkeresése
+First line	Első sor
+Fish	Hal
+Fisheye	Halszem
+Fit The Area	Területhez Illesztés
+Fit on Screen	Igazítás a képernyőhöz
+Fit the whole image in the window	Az egész kép igazítása az ablakhoz
+Fixed height	Rögzített magasság
+Flag	Jelzö
+Flame…	Láng…
+Flat Angled 40	Lapos, ferde 40
+Flatten Image	Rétegek összeolvasztása
+Flip Canvas Horizontal	Vászon tükrözése vízszintesen
+Flip Canvas Vertical	Vászon tükrözése függőlegesen
+Flip Horizontal	Tükrözés vízszintesen
+Flip Vertical	Tükrözés függőlegesen
+Flip View Horizontal	Nézet tükrözése vízszintesen
+Flip View Vertical	Nézet tükrözése függőlegesen
+Flow jitter	Áramlásingadozás
+Folders	Mappák
+Font: 	Betűtípus: 
+Foreground strokes mark what to keep, background strokes what to drop; Preview shows the cut.	Az előtérvonások jelölik, mi marad, a háttérvonások, mi kerül el; az Előnézet mutatja a vágást.
+Foreground — double-click for the picker	Előtér — dupla kattintás a színválasztóhoz
+Foreground/background jitter	Előtér/háttér ingadozás
+Format	Formázás
+Fourier	Fourier
+Fourier Transform	Fourier-transzformáció
+Fragment	Töredék
+Frame	Keret
+Frames	Képkockák
+Free Transform	Szabad átalakítás
+Free Transform a Copy	Másolat szabad alakítása
+From Transparency	Átlátszóságból
+Fullscreen	Teljes képernyő
+Fuzziness	Tűrés
+GIF…	GIF…
+Gamma	Gamma
+Gamut Warning	Színtartomány-figyelmeztetés
+Gaussian	Gauss
+Gaussian Blur…	Gauss-életlenítés…
+Generate Mockups	Makettek előállítása
+Generate Mockups…	Makettek előállítása…
+Give the brush a name	Adjon nevet az ecsetnek
+Give the export a file name	Adjon fájlnevet az exportálásnak
+Glass Menus	Üvegmenük
+Global light	Globális fény
+Glyphs	Karaktertábla
+Gradient	Színátmenet
+Gradient Editor	Színátmenet szerkesztő
+Gradient Map	Színátmenettérkép
+Gradient Map…	Színátmenettérkép…
+Gradient Overlay	Színátmenet-átfedés
+Gradient Overlay…	Színátmenet-átfedés…
+Gradient…	Színátmenet…
+Gray	Szürke
+Grayscale	Szürkeárnyalatos
+Green	Zöld
+Greens	Zöldek
+Grid	Rács
+Grid points	Rácspontok
+Group	Csoport
+Group Layers	Rétegek csoportosítása
+Grow	Növelés
+Guide Guy	Guide Guy
+Guides	Segédvonalak
+Gutter	Térköz
+H	M
+H.264 (plays everywhere)	H.264 (mindenhol lejátszható)
+HDR Toning	HDR-tónusozás
+HDR Toning…	HDR-tónusozás…
+HSB/HSL…	HSB/HSL…
+Halftone Screen	Féltónusos raszter
+Hard Light	Kemény fény
+Hard Mix	Kemény keverés
+Hard Round 24	Kemény kerek 24
+Hard Round 4	Kemény kerek 4
+Hard edges, no blending. Pixel art only — it aliases on downscale.	Kemény élek, keverés nélkül. Csak pixelgrafikához — kicsinyítéskor recés lesz.
+Harder Brush	Keményebb ecset
+Height	Magasság
+Height to 110%	Magasság 110%-ra
+Height to 125%	Magasság 125%-ra
+Height to 80%	Magasság 80%-ra
+Height to 90%	Magasság 90%-ra
+Help	Súgó
+Hide All	Összes elrejtése
+Hide Layers	Rétegek elrejtése
+Hide Selection	Kijelölés elrejtése
+Hide the source layer	A forrásréteg elrejtése
+High Contrast	Nagy kontraszt
+High Pass…	Élkiemelés…
+Highlights	Csúcsfény
+Histogram	Hisztogram
+Histories	Előzmények
+History	Előzmény
+Hold	Tartás
+Horizontal Centers	Vízszintes középpontok
+Horizontal Distortion	Vízszintes csavarás
+Horizontal center guide	Vízszintes közép segédvonal
+Horizontal scale, in percent: widens or narrows the glyphs and their spacing	Vízszintes méretezés százalékban: szélesíti vagy keskenyíti a karakterjeleket és a köztük lévő távolságot
+Horizontally	Vízszintes
+Hue	Színezet
+Hue jitter	Színárnyalat-ingadozás
+Hue/Saturation	Színezettség/Telítettség
+Hue/Saturation…	Színezettség/Telítettség…
+ICC profile	ICC-profil
+ICO…	ICO…
+Image	Kép
+Image Options	Képbeállítások
+Image Rotation	Kép elforgatása
+Image Size	Képméret
+Image Size…	Képméret…
+Image size	Képméret
+Import CSV…	CSV importálása…
+Import PDF	PDF importálása
+Import a CSV of data sets first	Előbb importáljon egy adatkészleteket tartalmazó CSV-t
+Import a CSV: the first row names the variables, every further row is one data set.	CSV importálása: az első sor nevezi meg a változókat, minden további sor egy adatkészlet.
+In use	Használatban
+Inches	Hüvelyk
+Indexed Color	Indexelt szín
+Indexed Color…	Indexelt szín…
+Inflate	Felfújás
+Info	Információ
+Ink	Festék
+Ink Color	Festékszín
+Ink printed at 0, 25, 50, 75 and 100% tint	Festék 0, 25, 50, 75 és 100%-os tónussal nyomtatva
+Inner Glow	Belső ragyogás
+Inner Glow…	Belső ragyogás…
+Inner Radius	Belső sugár
+Inner Shadow	Belső árnyék
+Inner Shadow…	Belső árnyék…
+Inside	Belül
+Intent	Leképezési mód
+Intersect Shape Areas	Alakzatterületek metszete
+Intersect with Selection	Metszet a kijelöléssel
+Inverse	Inverzálás
+Inverse Fourier Transform	Inverz Fourier-transzformáció
+Invert	Invertálás
+Invert coverage	Fedés megfordítása
+Invert has no parameters	A Negatívnak nincsenek paraméterei
+Iris Blur…	Íriszelmosás…
+Italic	Dőlt
+JPEG carries the XMP and the source's EXIF	A JPEG tartalmazza az XMP-t és a forrás EXIF adatait
+JPG…	JPG…
+Justify	Sorkizárt
+Kaleidoscope…	Kaleidoszkóp…
+Keep as it was	Maradjon úgy, ahogy volt
+Kept when a comp is first applied	Megmarad, amikor egy kompozíciót először alkalmaz
+Kerning	Alávágás
+Keyboard Shortcut Sheet…	Billentyűparancs-összesítő…
+Keyboard Shortcuts…	Billentyűparancsok…
+Keywords	Kulcsszavak
+Kind	Fajta
+Kurtosis	Csúcsosság
+Lab Color	Lab szín
+Landscape	Fekvő
+Language	Nyelv
+Large	Nagy
+Last Document State	Utolsó dokumentumállapot
+Last Filter	Utolsó szűrő
+Last line	Utolsó sor
+Layer	Réteg
+Layer Comps	Rétegszedők
+Layer Edges	Rétegélek
+Layer Mask	Rétegmaszk
+Layer Properties	Rétegtulajdonságok
+Layer Style	Rétegstílus
+Layer knocks out drop shadow	A réteg kivágja a vetett árnyékot
+Layer via Copy	Réteg másolással
+Layer via Cut	Réteg kivágással
+Layers	Rétegek
+Layers panel options	Rétegek panel beállításai
+Left	Bal
+Left Edges	Bal élek
+Left indent	Bal behúzás
+Length	Hossz
+Lens Blur…	Lencsefolt…
+Lens Correction…	Lencsekorrekció…
+Lens Flare…	Lencsefényfolt…
+Level	Szint
+Levels	Szintbeállítás
+Levels…	Szintbeállítás…
+Light	Vékony
+Light Grey	Világosszürke
+Lighten	Világosítás
+Lighter Color	Világosabb szín
+Lighting Effects…	Fényhatások…
+Lightness	Könnyűség
+Line	Vonal
+Linear	Egyenes irányú
+Linear Burn	Lineáris égetés
+Linear Dodge (Add)	Lineáris fakítás (hozzáadás)
+Linear Light	Lineáris világosítás
+Link / Unlink Mask	Maszk csatolása / leválasztása
+Link Layers	Rétegek csatolása
+Link selected layers	Kijelölt rétegek csatolása
+Link with layer	Csatolás a réteghez
+Linked	Csatolt
+Linked file	Csatolt fájl
+Liquify…	Cseppfolyósítás…
+Live Shape	Élő alakzatot
+Live preview	Élő előnézet
+Live preview is off.	Az élő előnézet ki van kapcsolva.
+Load	Betöltés
+Load .atn	.atn betöltése
+Load .cube file…	.cube fájl betöltése…
+Load Selection	Kijelölés betöltése
+Load Selection…	Kijelölés betöltése…
+Load actions	Műveletek betöltése
+Load channel as selection	Csatorna betöltése kijelölésként
+Load path as a selection	Görbe betöltése kijelölésként
+Loaded file	Betöltött fájl
+Lock	Rögzítés
+Lock All	Összes zárolása
+Lock Guides	Segédvonalak rögzítése
+Lock Image Pixels	Képpontok zárolása
+Lock Position	Pozíció zárolása
+Lock Transparent Pixels	Átlátszó képpontok zárolása
+Lock all	Összes zárolása
+Lock pixels	Képpontok zárolása
+Lock position	Pozíció zárolása
+Lock transparent pixels	Átlátszó képpontok zárolása
+Long-tap as a right click	Hosszú koppintás jobb kattintásként
+Lookup table	Keresőtáblázat
+Luminance	Luminancia
+Luminance of the preview source; the markers are the black and white points.	Az előnézeti forrás luminanciája; a jelölők a fekete- és a fehérpont.
+Luminosity	Fényintenzitás
+MP4…	MP4…
+Magenta	Bíbor
+Magenta / Green	Bíbor / zöld
+Magentas	Bíborok
+Magic Cut	Mágikus kijelölés
+Magic Cut…	Mágikus kijelölés…
+Make Frames	Képkockák létrehozása
+Make a selection first	Előbb hozzon létre egy kijelölést
+Make work path from selection	Munkagörbe létrehozása kijelölésből
+Manual	Kézi
+Maps every colour onto one palette. The document keeps RGBA pixels; GIF and PNG export write this palette.	Minden színt egy palettára képez le. A dokumentum megtartja az RGBA képpontokat; a GIF és PNG exportálás ezt a palettát írja ki.
+Maps the active layer onto a palette as one undo step; the document stays RGB.	Az aktív réteget egyetlen visszavonható lépésben képezi le egy palettára; a dokumentum RGB marad.
+Margins	Margók
+Mark this state so you can come back to it	Az állapot megjelölése, hogy visszatérhessen hozzá
+Mask	Maszk
+Mask Properties	Maszktulajdonságok
+Mask source	Maszk forrása
+Match Color	Azonos színű
+Match Color…	Azonos színű…
+Matting	Szegélyezés
+Maximum	Maximális
+Maximum…	Maximális…
+Mean	Középérték
+Median	Medián
+Median…	Medián…
+Medium	Közepes
+Memory	Memória
+Menu Bar and Canvas	Menüsor és vászon
+Merge	Egyesítés
+Merge Channels	Csatornák egyesítése
+Merge Channels…	Csatornák egyesítése…
+Merge Down	Egyesítés lefele
+Merge Layers	Rétegek egyesítése
+Merge Visible	Láthatók egyesítése
+Merged	Egyesített
+Method	Módszer
+Metrics	Metrikus
+Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.	A Metrikus a betűtípus saját páralávágását használja; a 0 kikapcsolja az alávágást; a Kézi egyetlen értéket (1/1000 em) tesz a szöveg jelenlegi állapotában minden karakterpár közé, a később begépelt karakterek alávágás nélkül kezdődnek; legalább két karakter kell hozzá, ezért rövidebb szövegnél és a Szöveg eszköz alapértékeinél nem érhető el. A szedőmotornak nincs optikai alávágása, ezért ez a mód nem érhető el.
+Mezzotint…	Borzolás…
+Midtones	Középtónusok
+Millimeters	Milliméter
+Min diameter	Min. átmérő
+Min roundness	Min. kerekség
+Min size	Min. méret
+Minimal	Minimális
+Minimum	Minimális
+Minimum size only applies when pressure controls size.	A minimális méret csak akkor érvényes, ha a nyomás vezérli a méretet.
+Minimum…	Minimális…
+Miter	Hegyes
+Mode	Mód
+Modify	Módosítás
+Monochrome	Monokróm
+Monotone	Monoton
+More readouts	További adatok
+More tabs	További lapok
+Mosaic…	Mozaik…
+Motion Blur…	Bemozdulás…
+Move Layer	Réteg áthelyezése
+Move a control first: these settings would change nothing	Előbb mozdítson el egy vezérlőt: ezek a beállítások semmit sem változtatnának
+Move this panel	A panel áthelyezése
+Move this panel within its dock	A panel áthelyezése a dokkján belül
+Move to	Áthelyezés ide
+Move with the layer	Mozgatás a réteggel
+Multiply	Szendvicspozitív
+Name	Név
+Name Change	Névváltoztatás
+Name the channel first.	Előbb nevezze el a csatornát.
+Navigator	Navigátor
+Nearest Neighbour	Legközelebbi szomszéd
+Neutralize	Semlegesítés
+Neutrals	Semleges tónusok
+New	Új
+New Adjustment Layer	Új szabályozható réteg
+New Channel	Új csatorna
+New Document	Új dokumentum
+New Fill Layer	Új kitöltő réteg
+New Folder	Új mappa
+New Guide	Új segédvonal
+New Guide Layout	Új segédvonal-elrendezés
+New Guide Layout…	Új segédvonal-elrendezés…
+New Guide…	Új segédvonal…
+New Layer	Új réteg
+New Layer Based Slice	Új rétegalapú szelet
+New Selection	Új kijelölés
+New Smart Object via Copy	Új intelligens objektum másolással
+New Snapshot	Új pillanatkép
+New Spot Channel	Új direkt színes csatorna
+New Spot Channel…	Új direkt színes csatorna…
+New Style Preset	Új stílus-előbeállítás
+New Video Group	Új videocsoport
+New channel	Új csatorna
+New folder	Új mappa
+New group	Új csoport
+New layer	Új réteg
+New layer comp	Új rétegkompozíció
+New note at the centre of the view	Új jegyzet a nézet közepén
+New path (saves the Work Path when it is selected)	Új görbe (menti a munkagörbét, ha ki van jelölve)
+New set	Új készlet
+New size	Új méret
+New style from the active layer	Új stílus az aktív rétegből
+New tool preset from the active tool	Új eszköz-előbeállítás az aktív eszközből
+New {noun} from the active text layer	Új {noun} az aktív szövegrétegből
+New…	Új…
+Next Blend Mode	Következő keverési mód
+No Color	Nincs szín
+No character styles yet. New records the active text layer's font, size and look.	Még nincsenek karakterstílusok. Az Új rögzíti az aktív szövegréteg betűtípusát, méretét és megjelenését.
+No command loads a channel as the selection in this build; the Select menu's Load Selection restores a saved selection instead	Ebben a változatban egyetlen parancs sem tölt be csatornát kijelölésként; a Kijelölés menü Kijelölés betöltése parancsa ehelyett egy mentett kijelölést állít vissza
+No commands to bind	Nincsenek hozzárendelhető parancsok
+No document	Nincs dokumentum
+No document is open	Nincs megnyitott dokumentum
+No export selected	Nincs kijelölt exportálás
+No faces listed for this family name	Ehhez a családnévhez nincsenek betűváltozatok felsorolva
+No frames yet. Add frame makes an _a_ layer: each one is a frame, bottom first.	Még nincsenek képkockák. A Képkocka hozzáadása egy _a_ réteget hoz létre: mindegyik egy képkocka, alulról kezdve.
+No guide crosses the canvas	Egyetlen segédvonal sem keresztezi a vásznat
+No installed family matches	Nincs egyező telepített család
+No layer comps yet. New Layer Comp records every layer's visibility, position and appearance.	Még nincsenek rétegkompozíciók. Az Új rétegkompozíció rögzíti minden réteg láthatóságát, pozícióját és megjelenését.
+No layers yet. Add one with the + button below.	Még nincsenek rétegek. Adjon hozzá egyet a lenti + gombbal.
+No layers yet: each top-level layer gets a bar on the timeline.	Még nincsenek rétegek: minden legfelső szintű réteg egy sávot kap az idővonalon.
+No notes yet. Click the canvas with the Note tool (I), or New Note pins one at the centre of the view; notes are saved with the document and never exported.	Még nincsenek jegyzetek. Kattintson a vászonra a Jegyzet eszközzel (I), vagy az Új jegyzet a nézet közepére tűz egyet; a jegyzetek a dokumentummal együtt mentődnek, és soha nem kerülnek exportálásra.
+No open document is the same size as this one	Egyik megnyitott dokumentum sem ugyanakkora, mint ez
+No paragraph styles yet. New records the active text layer's alignment, indents and spacing.	Még nincsenek bekezdésstílusok. Az Új rögzíti az aktív szövegréteg igazítását, behúzásait és térközeit.
+No pattern chosen — the overlay paints nothing.	Nincs kiválasztott minta — az átfedés nem fest semmit.
+No patterns are defined yet	Még nincsenek meghatározott minták
+No profile file was chosen	Nem választott profilfájlt
+No recent files yet	Még nincsenek legutóbbi fájlok
+No selection has been saved	Nincs mentett kijelölés
+No source recorded for this object	Ehhez az objektumhoz nincs rögzített forrás
+No stop selected	Nincs kijelölt ütköző
+No style presets yet. Define one with Layer > Layer Style > Define Style Preset, or add a Photoshop library with File > Open (.asl).	Még nincsenek stílus-előbeállítások. Határozzon meg egyet a Réteg > Rétegstílus > Stílus-előbeállítás meghatározása paranccsal, vagy adjon hozzá egy Photoshop-könyvtárat a Fájl > Megnyitás (.asl) paranccsal.
+No styles yet. The + button saves the active layer's style; File > Open loads an .asl style library.	Még nincsenek stílusok. A + gomb menti az aktív réteg stílusát; a Fájl > Megnyitás betölt egy .asl stíluskönyvtárat.
+No such command	Nincs ilyen parancs
+No tool presets yet. New Tool Preset saves the active tool with its current options.	Még nincsenek eszköz-előbeállítások. Az Új eszköz-előbeállítás menti az aktív eszközt a jelenlegi beállításaival.
+Noise	Zaj
+None	Egyik sem
+Normal	Normál
+Normal Map…	Normáltérkép…
+Not a hex colour	Nem hexadecimális szín
+Not installed — shaping with	Nincs telepítve — szedés ezzel:
+Not saved yet	Még nincs mentve
+Notes	Jegyzetek
+Nothing has changed	Semmi sem változott
+Nothing in this submenu is available right now	Ebben az almenüben jelenleg semmi sem érhető el
+Nothing is left to learn the background from: paint over it with the background brush.	Nem maradt semmi, amiből a hátteret meg lehetne tanulni: fessen át rajta a háttérecsettel.
+Nothing to measure yet — paint or place something on this layer first	Még nincs mit mérni — előbb fessen vagy helyezzen el valamit ezen a rétegen
+Nothing to preview.	Nincs mit előnézni.
+OK	Oké
+Oblique	Ferde
+Off: the wheel pans the view and Ctrl+wheel zooms	Ki: a görgő a nézetet mozgatja, a Ctrl+görgő nagyít
+Offset…	Eltolás…
+Oil Paint…	Olajfestmény…
+One page holding the flattened image; no vector content.	Egyetlen oldal az egyesített képpel; vektoros tartalom nélkül.
+Onion skin	Hagymahéj
+Only English is available in this build	Ebben a változatban csak az angol érhető el
+Only a mask channel can be loaded as a selection here	Itt csak maszkcsatorna tölthető be kijelölésként
+Only web-safe colours	Csak webbiztos színek
+Opacity	Opacitás
+Opacity 10%	Átlátszatlanság 10%
+Opacity 100%	Átlátszatlanság 100%
+Opacity 20%	Átlátszatlanság 20%
+Opacity 30%	Átlátszatlanság 30%
+Opacity 40%	Átlátszatlanság 40%
+Opacity 50%	Átlátszatlanság 50%
+Opacity 60%	Átlátszatlanság 60%
+Opacity 70%	Átlátszatlanság 70%
+Opacity 80%	Átlátszatlanság 80%
+Opacity 90%	Átlátszatlanság 90%
+Opacity jitter	Átlátszatlanság-ingadozás
+Opacity key	Átlátszatlansági kulcs
+Opacity must be between 0% and 100%	Az átlátszatlanságnak 0% és 100% között kell lennie
+Opacity scales the layer and its effects; Fill scales the layer's own pixels only.	Az átlátszatlanság a réteget és effektusait méretezi; a Kitöltés csak a réteg saját képpontjait.
+Opacity stops sit above the bar, colour stops below it.	Az átlátszatlansági ütközők a sáv felett, a színütközők alatta vannak.
+Open	Megnyitás
+Open .ABR…	.ABR megnyitása…
+Open .ACO…	.ACO megnyitása…
+Open .ASL…	.ASL megnyitása…
+Open Recent	Legutóbbiak megnyitása
+Open a document first	Előbb nyisson meg egy dokumentumot
+Open a document to animate it.	Nyisson meg egy dokumentumot az animálásához.
+Open a document to apply styles to its layers.	Nyisson meg egy dokumentumot, hogy stílusokat alkalmazzon a rétegeire.
+Open a document to insert glyphs into its text.	Nyisson meg egy dokumentumot, hogy karakterjeleket szúrjon be a szövegébe.
+Open a document to keep text styles in it.	Nyisson meg egy dokumentumot, hogy szövegstílusokat tároljon benne.
+Open a document to lay guides out on it.	Nyisson meg egy dokumentumot, hogy segédvonalakat helyezzen el rajta.
+Open a document to pin notes on it.	Nyisson meg egy dokumentumot, hogy jegyzeteket tűzzön rá.
+Open a document to record layer comps.	Nyisson meg egy dokumentumot rétegkompozíciók rögzítéséhez.
+Open a document to see its CSS	Nyisson meg egy dokumentumot a CSS-e megtekintéséhez
+Open a document to see its facts.	Nyisson meg egy dokumentumot az adatai megtekintéséhez.
+Open a document to see its histogram	Nyisson meg egy dokumentumot a hisztogramja megtekintéséhez
+Open a document to see its history	Nyisson meg egy dokumentumot az előzményei megtekintéséhez
+Open a document to see its properties	Nyisson meg egy dokumentumot a tulajdonságai megtekintéséhez
+Open another document, or add another pixel layer, to match its colours.	Nyisson meg egy másik dokumentumot, vagy adjon hozzá egy újabb képpontréteget a színek egyeztetéséhez.
+Open as	Megnyitás mint
+Open editor…	Szerkesztő megnyitása…
+Open or close the folder	A mappa kinyitása vagy becsukása
+Open the Adjustments panel	A Korrekciók panel megnyitása
+Open…	Megnyitás…
+Operation	Művelet
+Orange	Narancs
+Other	Egyéb
+Out of gamut	Színtartományon kívül
+Outer Glow	Külső ragyogás
+Outer Glow…	Külső ragyogás…
+Outline the path	A görbe körvonalazása
+Output	Kimenet
+Output channel	Kimeneti csatorna
+Outside	Kívül
+Overlay	Átfedés
+PBM…	PBM…
+PDF Presentation…	PDF-bemutató…
+PDF…	PDF…
+PGM…	PGM…
+PNG…	PNG…
+PPM…	PPM…
+Page	Oldal
+Page {n}	{n}. oldal
+Page {page} opens at {w} x {h} px	A(z) {page}. oldal {w} x {h} px méretben nyílik meg
+Pages	Oldalak
+Paint	Festés
+Paint Filter Mask	Szűrőmaszk festése
+Paint Mask	Maszk festése
+Paint over the part to keep with the foreground brush first.	Előbb fesse át az előtérecsettel a megtartandó részt.
+Paint over what to keep and over what to drop	Fesse át a megtartandót és az eldobandót
+Paint the inside of the path	A görbe belsejének festése
+Painting	Festés
+Paints a band along the active selection's border.	Sávot fest az aktív kijelölés szegélye mentén.
+Pair kerning	Páralávágás
+Palette	Paletta
+Paragraph	Paragrafus
+Paragraph Style	Bekezdésstílus
+Paragraph Styles	Bekezdésstílusok
+Particles…	Részecskék…
+Paste	Beillesztés
+Paste Into	Beillesztés ebbe
+Paste Layer Style	Rétegstílus beillesztése
+Paste Outside	Beillesztés kívülre
+Paste Special	Irányított beillesztés
+Paste in Place	Beillesztés a helyére
+Path	Görbe
+Path Blur…	Görbe menti elmosás…
+Path editing lives in the Paths panel	A görbék szerkesztése a Görbék panelen történik
+Paths	Görbék
+Pattern	Minta
+Pattern Dither	Mintás raszterezés
+Pattern Overlay	Mintaátfedés
+Pattern Overlay…	Mintaátfedés…
+Pattern Preview	Minta előnézet
+Pattern…	Minta…
+Pencil 1px	Ceruza 1 px
+Percent	Százalék
+Perceptual	Perceptuális
+Perspective	Perspektivikus
+Perspective Warp	Perspektivikus torzítás
+Photo Filter	Fotószűrő
+Photo Filter…	Fotószűrő…
+Photography	Fotózás
+Picas	Pica
+Pick a filter; it applies at its default settings.	Válasszon szűrőt; az alapértelmezett beállításaival lesz alkalmazva.
+Pin Light	Tűfény
+Pinch…	Tölcsér…
+Pixel Grid	Képpontrács
+Pixel dimensions	Képpontméretek
+Pixel mask	Képpontmaszk
+Pixel to Pixel	Pixeltől Pixelig
+Pixelate	Képpontosítási
+Pixels	Pixel
+Place Embedded…	Beágyazott elhelyezés…
+Place Linked…	Csatolt elhelyezés…
+Play	Lejátszás
+Play from step	Lejátszás a lépéstől
+Play selection	Kijelölés lejátszása
+Play this step (unchecked steps are passed over)	A lépés lejátszása (a be nem jelölt lépések kimaradnak)
+Plays a recorded Action on every image in the source folder and saves each result to the destination.	Lejátszik egy rögzített műveletet a forrásmappa minden képén, és minden eredményt a célba ment.
+Pointer	Mutató
+Pointillize…	Pointillista…
+Points	Pont
+Polar Coordinates…	Ellentétes koordináták…
+Position	Pozíció
+Position is locked — unlock it in the Layers panel to move or resize	A pozíció zárolva van — oldja fel a Rétegek panelen az áthelyezéshez vagy átméretezéshez
+Position key	Pozíciókulcs
+Posterize	Keményítés
+Posterize…	Keményítés…
+Precise Cursor	Pontos kurzor
+Preferences…	Előnyben részesített…
+Preserve Transparency	Átlátszóság megőrzése
+Preserve luminosity	Fényerő megőrzése
+Preset Manager…	Készletvezérlő…
+Press a key…	Nyomjon meg egy billentyűt…
+Pressure controls flow	A nyomás vezérli az áramlást
+Pressure controls size	A nyomás vezérli a méretet
+Preview	Előnézet
+Preview against	Előnézet ezen:
+Preview is off.	Az előnézet ki van kapcsolva.
+Previewed on the active layer; applied to its pixels as one undoable step.	Előnézet az aktív rétegen; egyetlen visszavonható lépésben kerül a képpontjaira.
+Previous Blend Mode	Előző keverési mód
+Print Size	Nyomtatási méret
+Print as PDF…	Nyomtatás PDF-be…
+Print size	Nyomtatási méret
+Prints the grayscale image through one to four inks, each through its own curve. The inks are applied to the pixels when the mode changes.	A szürkeárnyalatos képet egy–négy festékkel nyomtatja, mindegyiket saját görbéjén át. A festékek a mód váltásakor kerülnek a képpontokra.
+Print…	Nyomtatás…
+Profile	Profil
+Profile from File…	Profil fájlból…
+Profiles are assigned to RGB documents	Profilok RGB-dokumentumokhoz rendelhetők
+Profiles are converted between in RGB documents	Profilok közötti konvertálás RGB-dokumentumokban történik
+Profiles belong to RGB documents; convert to RGB first	A profilok RGB-dokumentumokhoz tartoznak; előbb konvertáljon RGB-be
+Proof Colors	Színpróba
+Properties	Beállítások
+Puppet Warp	Bábu hajlítása
+Purge	Kiürítés
+Purple	Lila
+Quadtone	Négytónusú
+Quality	Minőség
+Quick Export Layer as PNG…	Réteg gyorsexportálása PNG-be…
+Quit	Kilépés
+RGB Color	RGB szín
+Radial Blur…	Sugaras életlenítés…
+Radius	Sugár
+Radius (px)	Sugár (px)
+Range	Hatótávolság
+Raster Studio Help	Raster Studio súgó
+Rasterize	Raszterizálás
+Reassign anyway	Hozzárendelés mégis
+Recent	Legutóbbi
+Record	Rögzítése
+Record Source Size	Forrásméret rögzítése
+Record an Action in the Actions panel first	Előbb rögzítsen egy műveletet a Műveletek panelen
+Record an edit, then replay the whole sequence on any document with at least as many layers.	Rögzítsen egy szerkesztést, majd játssza le az egész sorozatot bármely dokumentumon, amelyben legalább ugyanannyi réteg van.
+Record into set	Rögzítés készletbe
+Recording: every edit is captured until Stop	Rögzítés: minden szerkesztés rögzül a Leállításig
+Red	Piros
+Redefine the selected {noun} from the active text layer, restyling every layer that uses it	A kijelölt {noun} újradefiniálása az aktív szövegrétegből, és minden azt használó réteg átformázása
+Redo	Újra
+Reds	Vörösek
+Reduce Colors	Színek csökkentése
+Reduce Colors changed nothing: the layer already uses only colours of that palette	A Színek csökkentése nem változtatott semmit: a réteg már csak a paletta színeit használja
+Reduce Colors: the layer now uses at most {n} colours	Színek csökkentése: a réteg most legfeljebb {n} színt használ
+Reduce Colors…	Színek csökkentése…
+Reduce Noise…	Zajcsökkentés…
+Reduces the grayscale image to pure black and white. The layers are flattened into one, over white.	A szürkeárnyalatos képet tiszta feketére és fehérre csökkenti. A rétegek egyetlen rétegbe egyesülnek, fehér alapon.
+Reference point: Bottom	Referenciapont: lent
+Reference point: Bottom Left	Referenciapont: bal alsó
+Reference point: Bottom Right	Referenciapont: jobb alsó
+Reference point: Centre	Referenciapont: közép
+Reference point: Left	Referenciapont: bal
+Reference point: Right	Referenciapont: jobb
+Reference point: Top	Referenciapont: fent
+Reference point: Top Left	Referenciapont: bal felső
+Reference point: Top Right	Referenciapont: jobb felső
+Refine	Finomítás
+Refine Edge…	Szegély finomítása…
+Refine Mask	Maszk finomítása
+Refine Mask…	Maszk finomítása…
+Regular	Normál
+Relative	Relatív
+Relative Colorimetric	Relatív kolorimetrikus
+Release Clipping Mask	Vágómaszk feloldása
+Release Notes	Kiadási megjegyzések
+Relink to File…	Újracsatolás fájlhoz…
+Remove Black Matte	Fekete szegély eltávolítása
+Remove Color Fringe	Színszegély eltávolítása
+Remove Color Fringe…	Színszegély eltávolítása…
+Remove Fringe	Szegély eltávolítása
+Remove White Matte	Fehér szegély eltávolítása
+Remove export	Exportálás eltávolítása
+Remove this instance of the effect	Az effektus e példányának eltávolítása
+Remove this shortcut	A billentyűparancs eltávolítása
+Rename Layer	Réteg átnevezése
+Rename Layer…	Réteg átnevezése…
+Rename set	Készlet átnevezése
+Render	Renderelési
+Rendering the preview…	Előnézet renderelése…
+Repeat…	Ismétlés…
+Replace Color	Színcsere
+Replace Color…	Színcsere…
+Replace Contents	Tartalom cseréje
+Replace Contents…	Tartalom cseréje…
+Replace existing guides	Meglévő segédvonalak cseréje
+Replay	Újrajátszás
+Report an Issue	Hiba bejelentése
+Reselect	Újrakijelölés
+Reset	Visszaállítás
+Reset Transform	Alakítás visszaállítása
+Reset View Rotation	Nézetelforgatás visszaállítása
+Reset all shortcuts	Összes billentyűparancs visszaállítása
+Resize Canvas	Vászon átméretezése
+Resize Images	Képek átméretezése
+Resize Images…	Képek átméretezése…
+Resolution	Felbontás
+Resolution must be greater than zero	A felbontásnak nullánál nagyobbnak kell lennie
+Restore Layer	Réteg visszaállítása
+Result	Eredmény
+Return this tool to its defaults	Az eszköz visszaállítása az alapértelmezésekre
+Reveal All	Összes megjelenítése
+Reveal Selection	Kijelölés megjelenítése
+Reverse	Fordított
+Revert	Visszatérés a mentetthez
+Rewrites every pixel layer's numbers so the picture looks the same under the destination profile, as one undo step.	Minden képpontréteg értékeit úgy írja át, hogy a kép a célprofilban ugyanúgy nézzen ki, egyetlen visszavonható lépésként.
+Right	Jobb
+Right (narrow)	Jobb (keskeny)
+Right (wide)	Jobb (széles)
+Right Edges	Jobb élek
+Right indent	Jobb behúzás
+Right-click a swatch to remove it	Kattintson jobb gombbal egy színmintára az eltávolításához
+Ring	Gyűrű
+Ripple…	Fodrozás…
+Rise	Emelés
+Rotate	Forgatás
+Rotate 180°	Elforgatás 180°-kal
+Rotate 90° Clockwise	Elforgatás 90°-kal az óramutató járásával egyezően
+Rotate 90° Counter Clockwise	Elforgatás 90°-kal az óramutató járásával ellentétesen
+Rotate Canvas	Vászon elforgatása
+Rotate the active layer so the measured line is level (Enter)	Az aktív réteg elforgatása, hogy a mért vonal vízszintes legyen (Enter)
+Rotates the canvas and every layer. Right angles are pixel-exact; other angles resample.	Elforgatja a vásznat és minden réteget. A derékszögek képpontpontosak; más szögek újramintavételeznek.
+Rotation key	Elforgatási kulcs
+Round	Kerek
+Round (computed)	Kerek (számított)
+Rounded Steps	Lekerekített lépések
+Roundness jitter	Kerekségingadozás
+Rows	Sorok
+Rulers	Szabályzók
+Run	Futtatás
+SVG…	SVG…
+Same Radii	Azonos sugarú
+Sample a colour from the canvas	Szín mintavételezése a vászonról
+Sample radius	Mintavételi sugár
+Sampled	Mintavételezett
+Sampled colour	Mintavételezett szín
+Sampled tip not loaded; painting round	A mintavételezett hegy nincs betöltve; kerek ecsettel fest
+Satin…	Szatén…
+Saturation	Telítettség
+Saturation jitter	Telítettség-ingadozás
+Save	Mentés
+Save As	Mentés másként
+Save As…	Mentés másként…
+Save Brush	Ecset mentése
+Save Selection	Kijelölés mentése
+Save Selection…	Kijelölés mentése…
+Save actions	Műveletek mentése
+Save as PSD…	Mentés mint PSD…
+Save current brush	Aktuális ecset mentése
+Save selection as channel	Kijelölés mentése csatornaként
+Saves every image in the source folder to the destination in another format, quality or size.	A forrásmappa minden képét más formátumban, minőségben vagy méretben menti a célba.
+Scale	Méretezés
+Scale %	Méretarány %
+Scale Effects	Effektusok méretezése
+Scale Effects…	Effektusok méretezése…
+Scale H	Méretarány V
+Scale V	Méretarány F
+Scale key	Méretezési kulcs
+Scale:	Méretarány:
+Scales every size and distance of the active layer's style as one undo step.	Az aktív réteg stílusának minden méretét és távolságát méretezi egyetlen visszavonható lépésként.
+Scaling by 100% changes nothing	A 100%-os méretezés semmit sem változtat
+Scratch directory	Ideiglenes könyvtár
+Screen	Képernyő
+Screen, print and social presets	Előbeállítások képernyőhöz, nyomtatáshoz és közösségi médiához
+Script…	Szkript…
+Scroll wheel zooms instead of scrolling	A görgő görgetés helyett nagyít
+Search Commands…	Parancsok keresése…
+Search layers	Rétegek keresése
+Search layers by name	Rétegek keresése név szerint
+Select	Kijelölés
+Select All	Összes kijelölése
+Select Bottom Layer	Legalsó réteg kijelölése
+Select Layer Above	A felette lévő réteg kijelölése
+Select Layer Below	Az alatta lévő réteg kijelölése
+Select Linked Layers	Csatolt rétegek kijelölése
+Select None	Kijelölés elvetése
+Select Top Layer	Legfelső réteg kijelölése
+Select a layer first	Előbb jelöljön ki egy réteget
+Select a layer to see its CSS	Jelöljön ki egy réteget a CSS-e megtekintéséhez
+Select a layer to see its properties	Jelöljön ki egy réteget a tulajdonságai megtekintéséhez
+Select a layer: a click on a style applies it to the active layer.	Jelöljön ki egy réteget: egy stílusra kattintva az az aktív rétegre kerül.
+Select a path first	Előbb jelöljön ki egy görbét
+Select a text layer, or type into one: a click inserts the glyph at the caret.	Jelöljön ki egy szövegréteget, vagy gépeljen bele egybe: egy kattintás beszúrja a karakterjelet a kurzorhoz.
+Select a text layer to edit its type	Jelöljön ki egy szövegréteget a szövege szerkesztéséhez
+Select every pixel near one colour	Egy színhez közeli minden képpont kijelölése
+Selection	Kijelölési
+Selection Edges	Kijelölés szélei
+Selection: white is replaced, black is kept.	Kijelölés: a fehér lecserélődik, a fekete megmarad.
+Selective Color	Szín kiválasztás
+Selective Color…	Szín kiválasztás…
+Selects a band of this width along the selection's edge	Ilyen szélességű sávot jelöl ki a kijelölés széle mentén
+Semi Condensed	Félkeskeny
+Semi Expanded	Félszéles
+Semibold	Középkövér
+Send Backward	Hátrébb küldés
+Send to Back	Hátraküldés
+Separate documents	Külön dokumentumok
+Separate keywords with commas or semicolons.	A kulcsszavakat vesszővel vagy pontosvesszővel válassza el.
+Sepia	Szépia
+Set	Készlet
+Set the History Brush to paint from this state (the marked row)	Az Előzmények ecset ebből az állapotból fessen (a megjelölt sor)
+Shadows	Árnyék
+Shadows/Highlights	Árnyékok/csúcsfények
+Shadows/Highlights…	Árnyékok/csúcsfények…
+Shape	Alakzat
+Shape Dynamics	Alakdinamika
+Shape Mosaic…	Alakzatmozaik…
+Shape Properties	Alakzattulajdonságok
+Sharpen	Élesítési
+Sharpen Edges	Szegélyek élesítése
+Sharpen More	Több élesítés
+Sharpest, with a little ringing on hard edges.	A legélesebb, kis túllövéssel a kemény éleken.
+Shear…	Nyírás…
+Shift Edge	Él eltolása
+Show	Megjelenítés
+Show / Hide Layer	Réteg megjelenítése / elrejtése
+Show / hide layer	Réteg megjelenítése / elrejtése
+Show / hide the effects list	Az effektuslista megjelenítése / elrejtése
+Show / hide the layer style	A rétegstílus megjelenítése / elrejtése
+Show / hide this channel	A csatorna megjelenítése / elrejtése
+Show / hide this effect	Az effektus megjelenítése / elrejtése
+Show / hide this path	A görbe megjelenítése / elrejtése
+Show / hide this smart filter	Az intelligens szűrő megjelenítése / elrejtése
+Show Layers	Rétegek megjelenítése
+Show every layer	Minden réteg megjelenítése
+Show or hide the position, size and alignment fields	A pozíció-, méret- és igazításmezők megjelenítése vagy elrejtése
+Show or hide the recorded steps	A rögzített lépések megjelenítése vagy elrejtése
+Show or hide the set's actions	A készlet műveleteinek megjelenítése vagy elrejtése
+Show this alpha channel alone in grayscale and paint into it; click again to store it	Az alfa-csatorna önálló megjelenítése szürkeárnyalatosan, és festés bele; kattintson újra a tárolásához
+Sides	Oldalak
+Similar	Hasonló
+Size	Méret
+Size jitter	Méretingadozás
+Skew	Döntés
+Skewness	Ferdeség
+Slice Options	Szelet beállításai
+Slice Options…	Szelet beállításai…
+Slices	Szeletek
+Slices from Guides	Szeletek segédvonalakból
+Slices…	Szeletek…
+Small	Kicsi
+Small Caps	Kiskapitális
+Smart Blur…	Intelligens életlenítés…
+Smart Filter	Intelligens szűrő
+Smart Filters	Szelektív szűrők
+Smart Guides	Intelligens segédvonalak
+Smart Object	Intelligens objektum
+Smart Sharpen…	Intelligens élesítés…
+Smart filter mask: click to paint on it	Intelligens szűrőmaszk: kattintson a festéshez
+Smooth	Fimomítás
+Smooth Selection	Kijelölés simítása
+Smooth draws grey-scale edges; None draws hard, aliased edges. The glyph scaler has one smooth mode, so Sharp, Crisp and Strong are not offered.	A Sima szürkeárnyalatos éleket rajzol; a Nincs kemény, recés éleket. A karakterjel-méretező egyetlen sima móddal rendelkezik, ezért az Éles, Tiszta és Erős nem érhető el.
+Smooth…	Fimomítás…
+Snap	Igazítás
+Snap To	Igazítás a köv. p.
+Soft Light	Lágy fény
+Soft Round 100	Lágy kerek 100
+Soft Round 24	Lágy kerek 24
+Soft and cheap. Good for a small enlargement.	Lágy és gyors. Kis nagyításhoz jó.
+Softer Brush	Lágyabb ecset
+Solarize	Szolarizáció
+Solid Color…	Egyszínű…
+Solidity	Tömörség
+Source	Forrás
+Source 1	1. forrás
+Source 2	2. forrás
+Source Space	Forrásszíntér
+Spectrum	Spektrum
+Spherize…	Gömb…
+Spin Blur…	Forgó elmosás…
+Splits the active layer into Linear Light detail layers over a residual, finest on top; together they recomposite to the layer.	Az aktív réteget Lineáris fény részletrétegekre bontja egy maradékréteg felett, a legfinomabb felül; együtt visszaadják a réteget.
+Spot Channel	Direkt színes csatorna
+Spot Channel Options…	Direkt színes csatorna beállításai…
+Spot channel: composited over the image as its ink	Direkt színes csatorna: a kép fölé kerül festékként
+Square	Négyzetes
+Squeeze	Összepréselés
+Stack Mode	Halommódot
+Stamp Visible	Láthatók lenyomata
+Standard	Normál
+Standard Deviation	Szórás
+Standard ligatures	Szabványos ligatúrák
+Step Backward	Visszalépés
+Step Forward	Előrelépés
+Stop	Leállítás
+Straighten Layer	Dőlésmentesítés
+Strength	Erő
+Stroke	Körvonal
+Stroke path with the foreground colour at the brush size, on a new shape layer	Görbe körvonalazása az előtérszínnel ecsetméretben, új alakzatrétegen
+Stroke…	Körvonal…
+Style	Stílus
+Styles	Stílusok
+Styles enabled	Stílusok bekapcsolva
+Stylize	Stilizálási
+Sub	Alsó index
+Subject	Alany
+Subtract	Elvétel
+Subtract Front Shape	Elülső alakzat kivonása
+Subtract from Selection	Kivonás a kijelölésből
+Summation	Összegzés
+Sunset	Naplemente
+Super	Felső index
+Superscript raises and shrinks the text; subscript lowers and shrinks it.	A felső index megemeli és kicsinyíti a szöveget; az alsó index lesüllyeszti és kicsinyíti.
+Surface Blur…	Felület életlenítése…
+Swap colours  (X)	Színek felcserélése  (X)
+Swap foreground and background (X)	Előtér és háttér felcserélése (X)
+Swatches	Színtár
+TGA…	TGA…
+TIF…	TIF…
+Templates	Sablonok
+Text	Szöveg
+Text Properties	Szövegtulajdonságok
+Text overflows the box	A szöveg kilóg a dobozból
+Text replacement	Szövegcsere
+Texture Dilation…	Textúra kiterjesztése…
+That channel is no longer in the document	Ez a csatorna már nincs a dokumentumban
+That file could not be used:	Ez a fájl nem használható:
+The CSV ends inside a quoted field	A CSV egy idézőjeles mezőn belül ér véget
+The CSV has a header but no data sets	A CSV-nek van fejléce, de nincsenek adatkészletei
+The CSV is empty	A CSV üres
+The CSV names a variable that is not defined:	A CSV nem definiált változót nevez meg:
+The active layer is not in the document	Az aktív réteg nincs a dokumentumban
+The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	Az aktív intelligens objektum sorban megjeleníti a forrásmappa minden képét; minden eredmény PNG-ként kerül a célmappába.
+The amount must be within	Az értéknek ezen belül kell lennie:
+The angle must be a finite number of degrees	A szögnek véges fokszámnak kell lennie
+The balanced default for photographs.	A kiegyensúlyozott alapértelmezés fényképekhez.
+The canvas grows to fit the rotated image.	A vászon megnő, hogy az elforgatott kép elférjen.
+The canvas must be at least 1 x 1 pixel	A vászonnak legalább 1 x 1 képpontosnak kell lennie
+The cell size must be 2 to 200 pixels	A cellaméretnek 2–200 képpontnak kell lennie
+The cut is empty: paint more of the part to keep.	A vágás üres: fessen többet a megtartandó részből.
+The destination is the profile the document already has	A cél az a profil, amely a dokumentumnak már megvan
+The destination must be another folder than the source.	A célnak más mappának kell lennie, mint a forrás.
+The document has no layers	A dokumentumnak nincsenek rétegei
+The document is already in {name}	A dokumentum már ebben van: {name}
+The document is already tagged with this profile	A dokumentum már ezzel a profillal van címkézve
+The document is already tagged {name}	A dokumentum már így van címkézve: {name}
+The document's own profile: {error}	A dokumentum saját profilja: {error}
+The first {shown} of {n} pages are listed; a longer file opens only those.	{n} oldalból az első {shown} látható; hosszabb fájlból csak ezek nyílnak meg.
+The image has no opaque pixels to count	A képnek nincsenek megszámolható átlátszatlan képpontjai
+The ink is laid over the image; the selection, if there is one, is where it prints.	A festék a kép fölé kerül; a kijelölés, ha van, határozza meg, hol nyomtatódik.
+The last stop has no segment after it.	Az utolsó ütköző után nem következik szakasz.
+The layer has no pixels to cut.	A rétegnek nincsenek kivágható képpontjai.
+The layer's pixels are locked	A réteg képpontjai zárolva vannak
+The list is empty	A lista üres
+The margins and gutters leave no room for a column or a row	A margók és térközök nem hagynak helyet oszlopnak vagy sornak
+The margins and gutters leave no room for a column or a row.	A margók és térközök nem hagynak helyet oszlopnak vagy sornak.
+The name cannot be empty	A név nem lehet üres
+The name has not changed	A név nem változott
+The name is the file File > Export > Slices writes this slice as. The URL and Alt Tag go into the HTML page it writes beside the images.	A név az a fájl, amelyként a Fájl > Exportálás > Szeletek kiírja ezt a szeletet. Az URL és az Alt címke a képek mellé írt HTML-oldalra kerül.
+The new canvas is smaller — content outside it will be clipped.	Az új vászon kisebb — a rajta kívül eső tartalom levágódik.
+The next text layer the Type tool creates starts with this style.	A Szöveg eszköz által létrehozott következő szövegréteg ezzel a stílussal kezdődik.
+The panel is already on this side	A panel már ezen az oldalon van
+The path encloses no pixel of the canvas	A görbe a vászon egyetlen képpontját sem zárja közre
+The position must be a finite number	A pozíciónak véges számnak kell lennie
+The preview runs the real brush engine.	Az előnézet a valódi ecsetmotort futtatja.
+The resolution must be 1 to 2400 ppi	A felbontásnak 1–2400 ppi-nek kell lennie
+The resolution must be {min} to {max} dpi	A felbontásnak {min}–{max} dpi-nek kell lennie
+The rulers and the size readouts use this unit	A vonalzók és a méretkijelzők ezt a mértékegységet használják
+The scale must be between 1% and 1000%	A méretaránynak 1% és 1000% között kell lennie
+The selection is kept with the document under this name	A kijelölés ezen a néven a dokumentummal együtt tárolódik
+The source and destination must be different folders	A forrásnak és a célnak különböző mappáknak kell lenniük
+The steps this snapshot named have been discarded	A pillanatkép által megnevezett lépéseket elvetette a program
+The table needs a name	A táblázatnak nevet kell adni
+The warp has not changed	A torzítás nem változott
+There are no guides to slice along	Nincsenek segédvonalak, amelyek mentén szeletelni lehetne
+There are no slices to clear	Nincsenek törölhető szeletek
+There is no history to clear	Nincsenek törölhető előzmények
+There is no live selection to combine with	Nincs aktív kijelölés, amellyel kombinálni lehetne
+These are matrix-shaper profiles, which carry no perceptual or saturation tables: those two intents convert as Relative Colorimetric.	Ezek mátrix-shaper profilok, amelyekben nincsenek perceptuális vagy telítettségi táblázatok: ez a két leképezési mód Relatív kolorimetrikusként konvertálódik.
+Thin	Hajszálvékony
+Third-party notices	Harmadik felek közleményei
+This Layer	Ez a réteg
+This adjustment has no panel controls	Ennek a korrekciónak nincsenek panelvezérlői
+This adjustment has no settings.	Ennek a korrekciónak nincsenek beállításai.
+This build keeps channels on layers; it has no free-standing alpha channels yet	Ez a változat a csatornákat rétegeken tárolja; önálló alfa-csatornái még nincsenek
+This effect is off. Tick it in the list to edit it.	Ez az effektus ki van kapcsolva. Jelölje be a listában a szerkesztéséhez.
+This format cannot store CMYK, so the document is written as RGB. Choose JPEG or TIFF for CMYK.	Ez a formátum nem tud CMYK-t tárolni, ezért a dokumentum RGB-ként kerül kiírásra. CMYK-hoz válasszon JPEG-et vagy TIFF-et.
+This format could not be previewed.	Ennek a formátumnak nem sikerült előnézetet készíteni.
+This format has no metadata slot: nothing is embedded	Ennek a formátumnak nincs helye metaadatoknak: semmi sem kerül beágyazásra
+This format has no palette, so the indexed colours are written as RGB. Choose PNG or GIF for the palette.	Ennek a formátumnak nincs palettája, ezért az indexelt színek RGB-ként kerülnek kiírásra. A palettához válasszon PNG-t vagy GIF-et.
+This format stores 8 bits per channel	Ez a formátum csatornánként 8 bitet tárol
+This is a Lab document. No format here stores Lab, so it is converted to RGB on export.	Ez egy Lab dokumentum. Az itt elérhető formátumok egyike sem tárol Lab-ot, ezért exportáláskor RGB-be konvertálódik.
+This layer has no mask	Ennek a rétegnek nincs maszkja
+This panel is already at the bottom of its dock	Ez a panel már a dokkja alján van
+This panel is already at the top of its dock	Ez a panel már a dokkja tetején van
+This tool has no options	Ennek az eszköznek nincsenek beállításai
+This tool is already at its defaults	Ez az eszköz már az alapértelmezésein áll
+This window cannot read screen pixels, so the eyedropper is unavailable	Ez az ablak nem tudja olvasni a képernyő képpontjait, ezért a pipetta nem érhető el
+This works on a pixel layer; the active layer is a {kind}	Ez képpontrétegen működik; az aktív réteg típusa: {kind}
+This works on an 8-bit document	Ez 8 bites dokumentumon működik
+This works on an RGB document	Ez RGB-dokumentumon működik
+Threshold	Határérték
+Threshold…	Határérték…
+Thumbnail Size	Miniatűrméret
+Thumbnail size	Miniatűrméret
+Thumbnails by Document	Miniatűrök dokumentum szerint
+Thumbnails by Layer	Miniatűrök réteg szerint
+Tiles/List	Csempék/lista
+Tiles…	Csempék…
+Tilt-Shift…	Tilt-shift…
+Timeline	Idővonal
+Tint	Színezés
+Tint hue	Színezés árnyalata
+Tint saturation	Színezés telítettsége
+To canvas	A vászonhoz
+Toggle Link	Csatolás be/ki
+Tonal width	Tónusszélesség
+Tone	Tónus
+Tone and Detail	Tónus és részletesség
+Tool Presets	Eszközkészletek
+Top	Felső
+Top Edges	Felső élek
+Top Left	Bal felső
+Top Left Pixel Color	A bal felső képpont színe
+Top Right	Jobb felső
+Top left	Bal felső
+Top right	Jobb felső
+Trace Contour…	Kontúrkövetés…
+Traces the active layer's colours into shape layers, one per colour.	Az aktív réteg színeit alakzatrétegekké alakítja, színenként egyet.
+Transform	Transzformálás
+Transform Layer	Réteg alakítása
+Transform Selection	Kijelölés átalakítása
+Transparency	Átlátszóság
+Transparent Pixels	Átlátszó képpontok
+Trim	Körülvágás
+Trim Away	Levágás a szélekről
+Trim…	Körülvágás…
+Tritone	Háromtónusú
+Turn on Resample to change the pixel count.	Kapcsolja be az Újramintavételezést a képpontszám módosításához.
+Twirl…	Örvény…
+Twist	Csavarás
+Two variables share a name	Két változónak azonos a neve
+Type	Típus
+Type a zoom level	Adjon meg egy nagyítási szintet
+Type is edited in Character and Paragraph	A szöveg a Karakter és a Bekezdés panelen szerkeszthető
+Type tool defaults	A Szöveg eszköz alapértékei
+UI scale	Kezelőfelület méretezése
+URL	URL
+US Letter	US Letter
+Ultra Condensed	Ultrakeskeny
+Ultra Expanded	Ultraszéles
+Underlying Layer	Alatta lévő réteg
+Undo	Visszavonás
+Ungroup Layers	Rétegcsoport bontása
+Uniform	Egyen
+Unite Shapes	Alakzatok egyesítése
+Units	Mértékegységek
+Unmake Frames	Képkockák bontása
+Unsaved changes	Nem mentett módosítások
+Unsharp Mask…	Életlen maszk…
+Update the applied comp from the layers	Az alkalmazott kompozíció frissítése a rétegekből
+Use Black Point Compensation	Feketepont-kompenzáció használata
+Use global light	Globális fény használata
+Using:	Használatban:
+Vanishing Point…	Enyészpont…
+Variables	Változók
+Variance	Variancia
+Vector Mask	Vektormaszk
+Vector density	Vektorsűrűség
+Vector enabled	Vektor bekapcsolva
+Vector feather	Vektorlágyítás
+Vector invert	Vektor megfordítása
+Vector mask	Vektormaszk
+Vectorize	Vektorizálás
+Vectorize Bitmap	Bittérképet vektorizálja
+Vectorize Bitmap…	Bittérképet vektorizálja…
+Vertical Centers	Függőleges középpontok
+Vertical Distortion	Függőleges csavarás
+Vertical center guide	Függőleges közép segédvonal
+Vertical scale, in percent: stretches the glyphs about the baseline; leading is unchanged	Függőleges méretezés százalékban: az alapvonal körül nyújtja a karakterjeleket; a sorköz nem változik
+Vertically	Függőleges
+Vibrance	Vibrálás
+Vibrance…	Vibrálás…
+View	Nézet
+Violet	Ibolya
+Visibility	Láthatóság
+Visible adjustment layers	Látható korrekciós rétegek
+Vivid Light	Élénk fény
+W	Sz
+WEBP…	WEBP…
+Waiting for the composite…	Várakozás az összesített képre…
+Warm	Meleg
+Warp	Csavarás
+Warp Style	Vetemítési stílus
+Warp Text	Szöveg vetemítése
+Warp Text…	Szöveg vetemítése…
+Wave	Hullám
+Wavelet Decompose	Hullámfelbontás
+Wavelet Decompose splits into 2 to 7 scales	A hullámfelbontás 2–7 skálára bont
+Wavelet Decompose works on an sRGB document	A hullámfelbontás sRGB-dokumentumon működik
+Wavelet Decompose: the layer has no pixels	Hullámfelbontás: a rétegnek nincsenek képpontjai
+Wavelet Decompose: {n} detail layers over a residual; the source layer is hidden	Hullámfelbontás: {n} részletréteg egy maradékréteg felett; a forrásréteg rejtett
+Wavelet Decompose…	Hullámfelbontás…
+Wave…	Hullám…
+Web (216)	Web (216)
+WebP (lossless)	WebP (veszteségmentes)
+WebP (lossy)	WebP (veszteséges)
+Weight	Vastagság
+White	Fehér
+White to Black	Fehérből feketébe
+Whites	Fehérek
+Width	Szélesség
+Width and height must be at least 1 pixel	A szélességnek és a magasságnak legalább 1 képpontnak kell lennie
+Width must be between 1 and 250 pixels	A szélességnek 1 és 250 képpont között kell lennie
+Width to 110%	Szélesség 110%-ra
+Width to 125%	Szélesség 125%-ra
+Width to 80%	Szélesség 80%-ra
+Width to 90%	Szélesség 90%-ra
+Window	Ablak
+Wind…	Szél…
+With Handles	Fogópontokkal
+Work Path	Munkagörbe
+Workspace	Munkaterület
+Wrap to box	Tördelés a dobozba
+Writes the visible adjustment layers, applied to an identity lattice, as a 3D LUT (.cube).	Kiírja a látható korrekciós rétegeket egy identitásrácsra alkalmazva, 3D LUT-ként (.cube).
+Written as CMYK: a naive ink model, not an ICC press profile.	CMYK-ként kiírva: egyszerű festékmodell, nem ICC nyomdai profil.
+Written as XMP into PNG, JPEG and TIFF files by Export As.	Az Exportálás másként XMP-ként írja PNG, JPEG és TIFF fájlokba.
+Written with the document's palette.	A dokumentum palettájával kiírva.
+Yellow	Sárga
+Yellow / Blue	Sárga / kék
+Yellows	Sárgák
+ZigZag…	Cikcakk…
+Zoom In	Nagyítás
+Zoom Out	Kicsinyítés
+Zoom in	Nagyítás
+Zoom out	Kicsinyítés
+Zoom to Selection	Nagyítás a kijelölésre
+a layer could not be rewritten	egy réteget nem sikerült átírni
+before / after	előtte / utána
+changed	módosítva
+content thumbnail — click to edit the layer's pixels	tartalom miniatűrje — kattintson a réteg képpontjainak szerkesztéséhez
+dpi	dpi
+edits are aimed at this mask — right-click for view and mask options	a szerkesztések erre a maszkra irányulnak — jobb kattintás a nézet- és maszkbeállításokért
+lines past the box	sor a dobozon kívül
+mask off	maszk ki
+mask thumbnail — click to edit the layer's mask	maszk miniatűrje — kattintson a réteg maszkjának szerkesztéséhez
+minutes (0 is off)	perc (0 = ki)
+no drop	ide nem ejthető
+px	px
+records here	ide rögzít
+skipped on play:	lejátszáskor kihagyva:
+the layers could not be added	a rétegeket nem sikerült hozzáadni
+the profile cannot be transformed ({error})	a profil nem alakítható át ({error})
+to	–
+vector mask thumbnail — click to edit the vector mask	vektormaszk miniatűrje — kattintson a vektormaszk szerkesztéséhez
+{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time	{format}: az idővonal, {frames} képkocka {fps} fps sebességgel, {length} ms hosszan; minden képkocka a saját időpontjában mutatja a rétegeket
+{label} is not answered by this route	{label} ezen az úton nem kap választ
+{label} was refused: {reason}	{label} elutasítva: {reason}
+{name} Residual	{name} maradék
+{name} Scale {k}	{name} {k}. skála
+{name}: {n} pages	{name}: {n} oldal
+{n} slices from the guides ({cols} x {rows}); they replace the slices there were	{n} szelet a segédvonalakból ({cols} x {rows}); ezek lecserélik a korábbi szeleteket
+{path} is a {space} profile; an RGB document takes an RGB profile	A(z) {path} {space}-profil; egy RGB-dokumentum RGB-profilt fogad
+{path} is {len} bytes, larger than any colour profile	A(z) {path} {len} bájt, nagyobb bármely színprofilnál
+{reason}; this one is {space}	{reason}; ez {space}
+There is no path; draw one or select it in the Paths panel	Nincs útvonal; rajzoljon egyet, vagy jelölje ki az Útvonalak panelen
+a	a
+b	b
+16 Bits	16 bit
+8 Bits	8 bit
+AVIF…	AVIF…
+Blank preview image	Üres előnézeti kép
+Byte Order	Bájtsorrend
+Depth	Mélység
+Duplicate Into…	Kettőzés ide…
+Guides from Layer	Útmutatók a rétegről
+Minify the file	A fájl tömörítése
+RAW…	RAW…
+Save PSD/PSB	PSD/PSB mentése
+Save PSD/PSB…	PSD/PSB mentése…
+Cancel (Esc)	Mégse (Esc)
+All Documents	Összes dokumentum
+Select Source	Forrás kijelölése
+Alt	Alt
+Turn into JPG	Átalakítás JPG-vé
+ZIP for pixel data	ZIP a képpontadatokhoz
+Open a document to see its memory	Nyisson meg egy dokumentumot a memóriahasználata megtekintéséhez
+Image data	Képadatok
+{undo} undo / {redo} redo steps	{undo} visszavonási / {redo} újra lépés
+Holds copied pixels	Másolt képpontokat tartalmaz
+{size} ({tiles} tiles)	{size} ({tiles} csempe)
+Empty	Üres
+Purge Clipboard	Vágólap kiürítése
+Purge Histories	Előzmények kiürítése
+Purge All	Minden kiürítése
+Make	Létrehozás
+Reverse pages	Oldalak megfordítása

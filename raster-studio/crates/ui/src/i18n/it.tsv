@@ -2,6 +2,41 @@
 # the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
 # Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
 @name	Italiano
+Artboards	Tavole da disegno
+No Slices	Nessuna sezione
+All Slices	Tutte le sezioni
+User Slices	Sezioni utente
+Put the file into ZIP	Metti il file in un ZIP
+16 Bits	16 bit
+8 Bits	8 bit
+AVIF…	AVIF…
+Blank preview image	Immagine di anteprima vuota
+Byte Order	Ordine dei byte
+Depth	Profondità
+Duplicate Into…	Duplica in…
+Guides from Layer	Guide dal livello
+Minify the file	Riduci il file
+Nothing under the pointer for this row	Niente sotto il puntatore per questa voce
+Make Work Path	Crea tracciato di lavoro
+RAW…	RAW…
+Remove Anchor Point	Rimuovi punto di ancoraggio
+Remove Path	Rimuovi tracciato
+Make Selection	Crea selezione
+Divide…	Dividi…
+Right-click on an anchor point of the path	Fai clic destro su un punto di ancoraggio del tracciato
+Right-click inside a path	Fai clic destro all’interno di un tracciato
+Save PSD/PSB	Salva PSD/PSB
+Save PSD/PSB…	Salva PSD/PSB…
+Select or draw a path first	Seleziona o disegna prima un tracciato
+Right-click on a text layer	Fai clic destro su un livello di testo
+Right-click inside a slice	Fai clic destro all’interno di una sezione
+Divide Slices	Dividi sezioni
+N equal parts	N parti uguali
+N pixels per part	N pixel per parte
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Taglia la sezione su cui hai fatto clic destro, o la tela se non ce n’era nessuna, in una griglia di sezioni.
+Tick Horizontally or Vertically	Seleziona Orizzontalmente o Verticalmente
+These settings make no cut: raise N or pick a smaller pixel count	Queste impostazioni non producono tagli: aumenta N o scegli meno pixel
  fps	 fps
  frames	 fotogrammi
  ms	 ms
@@ -291,6 +326,10 @@ Columns	Colonne
 Columns and rows with gutters between them, inside optional margins, in pixels.	Colonne e righe con canaline tra loro, entro margini facoltativi, in pixel.
 Combine Shapes	Combina forme
 Commit (Enter)	Conferma (Invio)
+Cancel (Esc)	Annulla (Esc)
+All Documents	Tutti i documenti
+Select Source	Seleziona origine
+Alt	Alt
 Commit Contents	Conferma contenuto
 Composite	Composito
 Condensed	Stretto
@@ -857,7 +896,6 @@ New Folder	Nuova cartella
 New Guide	Nuova guida
 New Guide Layout	Nuovo layout guide
 New Guide Layout…	Nuovo layout guide…
-New Guides from Shape	Nuove guide da forma
 New Guide…	Nuova guida…
 New Layer	Nuovo livello
 New Layer Based Slice	Nuova sezione basata sul livello
@@ -1494,6 +1532,7 @@ Trim	Rifila
 Trim Away	Rimuovi
 Trim…	Rifila…
 Tritone	Tricromia
+Turn into JPG	Converti in JPG
 Turn on Resample to change the pixel count.	Attiva Ricampiona per cambiare il numero di pixel.
 Twirl…	Mulinello…
 Twist	Torsione
@@ -1587,6 +1626,7 @@ Written with the document's palette.	Scritto con la palette del documento.
 Yellow	Giallo
 Yellow / Blue	Giallo / Blu
 Yellows	Gialli
+ZIP for pixel data	ZIP per i dati dei pixel
 ZigZag…	Zig zag…
 Zoom In	Zoom avanti
 Zoom Out	Zoom indietro
@@ -1621,3 +1661,17 @@ vector mask thumbnail — click to edit the vector mask	miniatura maschera vetto
 {path} is a {space} profile; an RGB document takes an RGB profile	{path} è un profilo {space}; un documento RGB richiede un profilo RGB
 {path} is {len} bytes, larger than any colour profile	{path} è di {len} byte, più grande di qualsiasi profilo colore
 {reason}; this one is {space}	{reason}; questo è {space}
+a	a
+b	b
+Open a document to see its memory	Apri un documento per vederne la memoria
+Image data	Dati immagine
+{undo} undo / {redo} redo steps	{undo} annulla / {redo} ripeti
+Holds copied pixels	Contiene pixel copiati
+{size} ({tiles} tiles)	{size} ({tiles} riquadri)
+Empty	Vuoto
+Purge Clipboard	Svuota appunti
+Purge Histories	Svuota storie
+Purge All	Svuota tutto
+Make	Crea
+There is no path; draw one or select it in the Paths panel	Nessun tracciato; disegnane uno o selezionalo nel pannello Tracciati
+Reverse pages	Inverti pagine

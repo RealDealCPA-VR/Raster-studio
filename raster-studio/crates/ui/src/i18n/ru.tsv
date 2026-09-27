@@ -2,6 +2,41 @@
 # the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
 # Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
 @name	Русский
+Artboards	Монтажные области
+No Slices	Без фрагментов
+All Slices	Все фрагменты
+User Slices	Пользовательские фрагменты
+Put the file into ZIP	Поместить файл в ZIP
+16 Bits	16 бит
+8 Bits	8 бит
+AVIF…	AVIF…
+Blank preview image	Пустое изображение предпросмотра
+Byte Order	Порядок байтов
+Depth	Глубина
+Duplicate Into…	Дублировать в…
+Guides from Layer	Направляющие из слоя
+Minify the file	Уменьшить файл
+Nothing under the pointer for this row	Под указателем нет ничего для этого пункта
+Make Work Path	Создать рабочий контур
+RAW…	RAW…
+Remove Anchor Point	Удалить опорную точку
+Remove Path	Удалить контур
+Make Selection	Создать выделение
+Divide…	Разделить…
+Right-click on an anchor point of the path	Щёлкните правой кнопкой по опорной точке контура
+Right-click inside a path	Щёлкните правой кнопкой внутри контура
+Save PSD/PSB	Сохранить PSD/PSB
+Save PSD/PSB…	Сохранить PSD/PSB…
+Select or draw a path first	Сначала выберите или нарисуйте контур
+Right-click on a text layer	Щёлкните правой кнопкой по текстовому слою
+Right-click inside a slice	Щёлкните правой кнопкой внутри фрагмента
+Divide Slices	Разделить фрагменты
+N equal parts	N равных частей
+N pixels per part	N пикселей на часть
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Разрезает фрагмент, по которому вы щёлкнули правой кнопкой (или холст, если его не было), на сетку фрагментов.
+Tick Horizontally or Vertically	Отметьте «По горизонтали» или «По вертикали»
+These settings make no cut: raise N or pick a smaller pixel count	Эти настройки ничего не разрезают: увеличьте N или выберите меньше пикселей
  fps	 кадр/с
  frames	 кадров
  ms	 мс
@@ -291,6 +326,10 @@ Columns	Столбцы
 Columns and rows with gutters between them, inside optional margins, in pixels.	Столбцы и строки с промежутками между ними, внутри необязательных полей, в пикселях.
 Combine Shapes	Объединить фигуры
 Commit (Enter)	Применить (Enter)
+Cancel (Esc)	Отмена (Esc)
+All Documents	Все документы
+Select Source	Выбрать источник
+Alt	Alt
 Commit Contents	Применить содержимое
 Composite	Совмещённый
 Condensed	Узкий
@@ -857,7 +896,6 @@ New Folder	Новая папка
 New Guide	Новая направляющая
 New Guide Layout	Новый макет направляющих
 New Guide Layout…	Новый макет направляющих…
-New Guides from Shape	Новые направляющие из фигуры
 New Guide…	Новая направляющая…
 New Layer	Новый слой
 New Layer Based Slice	Новый фрагмент из слоя
@@ -1494,6 +1532,7 @@ Trim	Тримминг
 Trim Away	Обрезать
 Trim…	Тримминг…
 Tritone	Триотон
+Turn into JPG	Преобразовать в JPG
 Turn on Resample to change the pixel count.	Включите «Интерполяцию», чтобы изменить число пикселов.
 Twirl…	Скручивание…
 Twist	Скрутка
@@ -1587,6 +1626,7 @@ Written with the document's palette.	Записано с палитрой док
 Yellow	Жёлтый
 Yellow / Blue	Жёлтый / Синий
 Yellows	Жёлтые
+ZIP for pixel data	ZIP для пиксельных данных
 ZigZag…	Зигзаг…
 Zoom In	Увеличить
 Zoom Out	Уменьшить
@@ -1621,3 +1661,17 @@ vector mask thumbnail — click to edit the vector mask	миниатюра ве�
 {path} is a {space} profile; an RGB document takes an RGB profile	{path} — профиль {space}; документу RGB нужен профиль RGB
 {path} is {len} bytes, larger than any colour profile	{path} занимает {len} байт — больше любого цветового профиля
 {reason}; this one is {space}	{reason}; у этого — {space}
+a	a
+b	b
+Open a document to see its memory	Откройте документ, чтобы увидеть его память
+Image data	Данные изображения
+{undo} undo / {redo} redo steps	{undo} отмен / {redo} повторов
+Holds copied pixels	Содержит скопированные пиксели
+{size} ({tiles} tiles)	{size} ({tiles} плиток)
+Empty	Пусто
+Purge Clipboard	Очистить буфер обмена
+Purge Histories	Очистить истории
+Purge All	Очистить всё
+Make	Создать
+There is no path; draw one or select it in the Paths panel	Нет контура; нарисуйте его или выберите на панели «Контуры»
+Reverse pages	Обратный порядок страниц

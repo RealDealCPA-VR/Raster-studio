@@ -239,6 +239,59 @@ pub struct MarqueeTool {
     /// W4-A: the canvas at pointer-down, for the single-row/column band.
     canvas: Option<raster::PixelRect>,
     op: BooleanOp,
+    /// W18-F: Photopea's Alt-from-centre ([`MarqueeTool::centred`]).
+    alt: AltFromCentre,
+}
+
+/// W18-F: Photopea's Alt draws a marquee (and a box shape) out from its
+/// centre, but an Alt held at the press means Subtract when there is a
+/// selection to subtract from. So Alt centres the box while it is held if
+/// nothing was selected at the press, or once it has been pressed afresh
+/// during the drag (Photopea's `iy` key tracker: released-then-pressed).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AltFromCentre {
+    /// Alt on the last sample.
+    held: bool,
+    /// Alt was pressed during the drag (it was up at some sample after the
+    /// press, then down).
+    fresh: bool,
+    /// The last sample had Alt up since the press.
+    was_up: bool,
+    /// Alt counts from the press (nothing was selected then, for a
+    /// marquee; Shift held with it, for a shape).
+    from_press: bool,
+}
+
+impl AltFromCentre {
+    /// The press: `from_press` says whether an Alt held now already
+    /// centres the box.
+    pub fn press(alt: bool, from_press: bool) -> Self {
+        Self {
+            held: alt,
+            fresh: false,
+            was_up: !alt,
+            from_press,
+        }
+    }
+
+    /// A later sample with Alt `alt`.
+    pub fn sample(&mut self, alt: bool) {
+        if alt && self.was_up {
+            self.fresh = true;
+        }
+        self.was_up = !alt;
+        self.held = alt;
+    }
+
+    /// Whether Alt was down on the last sample.
+    pub fn held(&self) -> bool {
+        self.held
+    }
+
+    /// Whether the box is centred now.
+    pub fn centred(&self) -> bool {
+        self.held && (self.fresh || self.from_press)
+    }
 }
 
 impl MarqueeTool {
@@ -255,7 +308,14 @@ impl MarqueeTool {
             shift: false,
             canvas: None,
             op: BooleanOp::Replace,
+            alt: AltFromCentre::default(),
         }
+    }
+
+    /// W18-F: whether the box is drawn out from the press: the From Centre
+    /// option, or Alt as Photopea reads it ([`AltFromCentre`]).
+    pub fn centred(&self) -> bool {
+        self.from_center || self.alt.centred()
     }
 
     /// W4-A: the rubber band the release would select, `[min, max]` in
@@ -324,7 +384,7 @@ impl MarqueeTool {
             // W9-L: the size is the size; from the centre it is split about
             // the press rather than doubled.
             MarqueeStyle::FixedSize { width, height } => {
-                let size = if self.from_center {
+                let size = if self.centred() {
                     Vec2::new(width, height) * 0.5
                 } else {
                     Vec2::new(width, height)
@@ -332,7 +392,7 @@ impl MarqueeTool {
                 Vec2::new(size.x * side(raw.x), size.y * side(raw.y))
             }
         };
-        if self.from_center {
+        if self.centred() {
             (a - d, a + d)
         } else {
             (a, a + d)
@@ -380,6 +440,13 @@ impl Tool for MarqueeTool {
         // Captured now: releasing shift halfway through a drag must not change
         // whether this gesture adds or replaces.
         self.op = gesture_op(self.options.mode, event.modifiers);
+        // W18-F: with nothing selected an Alt press centres the box
+        // (Photopea) rather than subtracting from nothing.
+        let nothing_selected = ctx.selection.bounds().is_none();
+        if nothing_selected && event.modifiers.alt && !event.modifiers.shift {
+            self.op = self.options.mode;
+        }
+        self.alt = AltFromCentre::press(event.modifiers.alt, nothing_selected);
         self.anchor = Some(event.pos);
         self.current = Some(event.pos);
         self.shift = false;
@@ -395,6 +462,7 @@ impl Tool for MarqueeTool {
         if self.anchor.is_some() {
             self.current = Some(event.pos);
             self.shift = event.modifiers.shift;
+            self.alt.sample(event.modifiers.alt);
         }
         Ok(())
     }
@@ -417,6 +485,7 @@ impl Tool for MarqueeTool {
             return Ok(());
         };
         self.current = None;
+        self.alt.sample(event.modifiers.alt);
         crate::error::finite_pt("marquee corner", event.pos)?;
         let mask = match self.shape {
             MarqueeShape::SingleRow => {
@@ -1374,7 +1443,13 @@ mod option_tests {
                 "choice {index}"
             );
         }
-        // Mode Add, alt held: the modifier wins (subtract).
+        // Mode Add, alt held over a selection: the modifier wins (subtract).
+        // W18-F: with nothing selected Alt draws from the centre instead
+        // (`w18f_alt_from_centre_tests`), so there is a selection here.
+        ctx.selection = Selection::Rect {
+            min: glam::IVec2::new(0, 0),
+            max: glam::IVec2::new(8, 8),
+        };
         tool.set_setting("mode", ToolSetting::Choice(1)).unwrap();
         assert_eq!(
             drag(
@@ -2161,5 +2236,58 @@ mod w16a_tests {
             BooleanOp::Add
         );
         assert_eq!(mode_of_settings(&[]), BooleanOp::Replace);
+    }
+}
+
+/// W18-F: Photopea's Alt-from-centre on the marquee: with nothing selected
+/// an Alt press centres the box (and does not subtract from nothing); with a
+/// selection an Alt press subtracts, and Alt centres only once pressed again
+/// during the drag.
+#[cfg(test)]
+mod w18f_alt_from_centre_tests {
+    use super::*;
+    use crate::tiles::MemoryTiles;
+    use crate::tool::PointerEvent;
+
+    fn band(tool: &MarqueeTool) -> [Vec2; 2] {
+        match tool.live_geometry() {
+            Some(crate::tool::SessionGeometry::Marquee { rect, .. }) => rect,
+            other => panic!("no band: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn alt_centres_the_marquee_as_photopea_reads_it() {
+        let mut tiles = MemoryTiles::new();
+        let mut ctx = ToolContext::new(&mut tiles, raster::PixelRect::new(0, 0, 96, 96));
+        let alt = Modifiers::alt();
+        // Nothing selected: Alt at the press centres the box.
+        let mut tool = MarqueeTool::new(MarqueeShape::Rect);
+        let at = |x, y, m| PointerEvent::at(x, y).with_modifiers(m);
+        tool.on_pointer_down(&mut ctx, at(20.0, 20.0, alt)).unwrap();
+        tool.on_pointer_move(&mut ctx, at(30.0, 25.0, alt)).unwrap();
+        assert_eq!(band(&tool), [Vec2::new(10.0, 15.0), Vec2::new(30.0, 25.0)]);
+        tool.on_pointer_up(&mut ctx, at(30.0, 25.0, alt)).unwrap();
+        let edits = ctx.drain_selection();
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].op, BooleanOp::Replace, "nothing to subtract from");
+
+        // With a selection: Alt at the press subtracts and does not centre...
+        ctx.selection = Selection::Rect {
+            min: glam::IVec2::new(0, 0),
+            max: glam::IVec2::new(50, 50),
+        };
+        let mut tool = MarqueeTool::new(MarqueeShape::Rect);
+        tool.on_pointer_down(&mut ctx, at(20.0, 20.0, alt)).unwrap();
+        tool.on_pointer_move(&mut ctx, at(30.0, 25.0, alt)).unwrap();
+        assert_eq!(band(&tool), [Vec2::new(20.0, 20.0), Vec2::new(30.0, 25.0)]);
+        // ...until Alt is let go and pressed again during the drag.
+        tool.on_pointer_move(&mut ctx, at(30.0, 25.0, Modifiers::NONE))
+            .unwrap();
+        assert_eq!(band(&tool), [Vec2::new(20.0, 20.0), Vec2::new(30.0, 25.0)]);
+        tool.on_pointer_move(&mut ctx, at(30.0, 25.0, alt)).unwrap();
+        assert_eq!(band(&tool), [Vec2::new(10.0, 15.0), Vec2::new(30.0, 25.0)]);
+        tool.on_pointer_up(&mut ctx, at(30.0, 25.0, alt)).unwrap();
+        assert_eq!(ctx.selection_edits()[0].op, BooleanOp::Subtract);
     }
 }

@@ -145,6 +145,8 @@
 /// W11-A: adjustment-layer payloads (`levl`, `curv`, `hue2`, ...) to and
 /// from `layer_model::AdjustmentKind`.
 pub mod adjustments;
+/// W18-B: Photoshop artboards (`artb` / `artd` / `abdd`), read and written.
+pub mod artboard;
 pub mod blend;
 pub mod bytes;
 pub mod codec;
@@ -158,6 +160,8 @@ pub mod error;
 pub mod fill;
 pub mod flatten;
 pub mod header;
+/// W18-B: layer comps (image resource 1065 and each layer's `cmls`).
+pub mod layer_comps;
 pub mod limits;
 // W16-G: live-shape originations (`vogk`) beyond the sharp rectangle.
 pub mod live_origin;

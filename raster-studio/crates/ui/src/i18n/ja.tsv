@@ -2,6 +2,41 @@
 # the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
 # Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
 @name	日本語
+Artboards	アートボード
+No Slices	スライスなし
+All Slices	すべてのスライス
+User Slices	ユーザースライス
+Put the file into ZIP	ファイルを ZIP に入れる
+16 Bits	16 ビット
+8 Bits	8 ビット
+AVIF…	AVIF…
+Blank preview image	空白のプレビュー画像
+Byte Order	バイト順
+Depth	深度
+Duplicate Into…	複製先…
+Guides from Layer	レイヤーからガイド
+Minify the file	ファイルを縮小
+Nothing under the pointer for this row	この項目の対象がポインターの下にありません
+Make Work Path	作業用パスを作成
+RAW…	RAW…
+Remove Anchor Point	アンカーポイントを削除
+Remove Path	パスを削除
+Make Selection	選択範囲を作成
+Divide…	分割…
+Right-click on an anchor point of the path	パスのアンカーポイントを右クリックしてください
+Right-click inside a path	パスの内側を右クリックしてください
+Save PSD/PSB	PSD/PSB を保存
+Save PSD/PSB…	PSD/PSB を保存…
+Select or draw a path first	先にパスを選択または描画してください
+Right-click on a text layer	テキストレイヤーを右クリックしてください
+Right-click inside a slice	スライスの内側を右クリックしてください
+Divide Slices	スライスを分割
+N equal parts	N 等分
+N pixels per part	1 部分あたり N ピクセル
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	右クリックしたスライス（なければカンバス全体）をスライスのグリッドに分割します。
+Tick Horizontally or Vertically	水平方向または垂直方向をオンにしてください
+These settings make no cut: raise N or pick a smaller pixel count	この設定では分割されません。N を増やすか、ピクセル数を小さくしてください
  fps	 fps
  frames	 フレーム
  ms	 ms
@@ -291,6 +326,10 @@ Columns	列
 Columns and rows with gutters between them, inside optional margins, in pixels.	間隔をあけた列と行（ピクセル単位、任意のマージン内）。
 Combine Shapes	シェイプを結合
 Commit (Enter)	確定（Enter）
+Cancel (Esc)	キャンセル (Esc)
+All Documents	すべてのドキュメント
+Select Source	ソースを選択
+Alt	Alt
 Commit Contents	内容を確定
 Composite	合成
 Condensed	コンデンス
@@ -857,7 +896,6 @@ New Folder	新規フォルダー
 New Guide	新規ガイド
 New Guide Layout	新規ガイドレイアウト
 New Guide Layout…	新規ガイドレイアウト…
-New Guides from Shape	シェイプから新規ガイド
 New Guide…	新規ガイド…
 New Layer	新規レイヤー
 New Layer Based Slice	レイヤーから新規スライス
@@ -1494,6 +1532,7 @@ Trim	トリミング
 Trim Away	トリミングする部分
 Trim…	トリミング…
 Tritone	トライトーン
+Turn into JPG	JPGに変換
 Turn on Resample to change the pixel count.	ピクセル数を変えるには「再サンプル」をオンにしてください。
 Twirl…	渦巻き…
 Twist	ねじれ
@@ -1587,6 +1626,7 @@ Written with the document's palette.	ドキュメントのパレットで書き�
 Yellow	イエロー
 Yellow / Blue	イエロー / ブルー
 Yellows	イエロー系
+ZIP for pixel data	ピクセルデータに ZIP
 ZigZag…	ジグザグ…
 Zoom In	ズームイン
 Zoom Out	ズームアウト
@@ -1621,3 +1661,17 @@ vector mask thumbnail — click to edit the vector mask	ベクトルマスクの
 {path} is a {space} profile; an RGB document takes an RGB profile	{path} は {space} プロファイルです。RGB ドキュメントには RGB プロファイルが必要です
 {path} is {len} bytes, larger than any colour profile	{path} は {len} バイトで、どのカラープロファイルよりも大きいです
 {reason}; this one is {space}	{reason}。このドキュメントは {space} です
+a	a
+b	b
+Open a document to see its memory	ドキュメントを開くとメモリが表示されます
+Image data	画像データ
+{undo} undo / {redo} redo steps	取り消し {undo} / やり直し {redo}
+Holds copied pixels	コピーしたピクセルを保持
+{size} ({tiles} tiles)	{size}（{tiles} タイル）
+Empty	空
+Purge Clipboard	クリップボードを消去
+Purge Histories	ヒストリーを消去
+Purge All	すべてを消去
+Make	作成
+There is no path; draw one or select it in the Paths panel	パスがありません。パスを描くか、パスパネルで選択してください
+Reverse pages	ページを逆順にする

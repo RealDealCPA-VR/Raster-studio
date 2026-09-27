@@ -1919,6 +1919,11 @@ impl Chrome {
         if type_mask_layer.is_none() {
             self.type_mask_overlay = None;
         }
+        // W18-E: the active shape layer's path outline and the path tools'
+        // selection, shown while View > Show > Paths (and Extras) is on.
+        if self.workspace.view_flags.shows(ui::ViewFlag::Paths) {
+            crate::paths_w18::paint_paths(ctx, editor);
+        }
         if transform.is_none() && self.live_session.is_none() && samplers.is_empty() {
             return;
         }
@@ -2674,6 +2679,9 @@ impl Chrome {
         if self.workspace.palette.take_screen_mode_cycle() {
             out.actions.push(Action::CycleScreenMode);
         }
+        // W18-E: the Pen bar's Make Selection / Shape, the same kind of
+        // request, answered with the Paths panel's current path.
+        crate::paths_w18::answer_pen_make(editor, &self.workspace, out);
         // Which drag an edit belongs to is the *window's* knowledge: a slider
         // emits the value it now holds and has no idea whether the button is
         // still down. Stamped here so `Editor::apply_kind_edit` can fold one
@@ -10068,6 +10076,11 @@ mod tests {
 
         // Click the second row: the dialog opens on "Keep", not "Newest".
         let _ = window.click_text(&mut ed, "Keep");
+        // W18-I: a plain click on a saved selection's name asks once egui's
+        // double-click window has passed (a double-click renames it).
+        for _ in 0..30 {
+            window.frame(&mut ed);
+        }
         let dialog = window
             .chrome
             .dialogs

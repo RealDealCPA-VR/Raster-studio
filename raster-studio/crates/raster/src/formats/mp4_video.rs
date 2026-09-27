@@ -17,7 +17,9 @@
 //!   AVIF reader already runs, 8-bit 4:2:0 only.
 //!
 //! Any other codec (HEVC `hvc1` / `hev1`, VP9 `vp09`, MPEG-4 Part 2 `mp4v`,
-//! ...) is refused by name, as are Matroska / WebM and AVI containers.
+//! ...) is refused by name, as are AVI containers. W18-H: a Matroska /
+//! WebM file's AV1 or H.264 track is demuxed by [`mkv`] and decoded here the
+//! same way (VP8 / VP9 refused by name).
 //!
 //! # Where it runs
 //!
@@ -329,7 +331,12 @@ pub fn decode_window_in_this_process(
     first: usize,
     count: usize,
 ) -> Result<VideoWindow, CodecError> {
-    let track = track(bytes)?;
+    // W18-H: Matroska / WebM is demuxed apart; the rest is this route's.
+    let track = if mkv::looks_like_matroska(bytes) {
+        mkv::track(bytes)?
+    } else {
+        track(bytes)?
+    };
     let total = track.samples.len();
     if total == 0 {
         return Err(malformed("the video holds no picture"));
@@ -606,6 +613,9 @@ fn decode_av1(
     }
     Err(malformed("the AV1 stream did not finish decoding"))
 }
+
+#[path = "mkv_video_w18.rs"]
+pub mod mkv;
 
 #[cfg(test)]
 mod tests {

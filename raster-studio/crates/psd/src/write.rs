@@ -36,6 +36,10 @@ use crate::model::{
 use crate::read::{GROUP_DIVIDER_NAME, PSB_LONG_KEYS};
 use crate::resource::{resolution_info, write_resources, ID_RESOLUTION_INFO};
 
+/// W18-G: Save PSD/PSB's "Put the file into ZIP" (`psd::write::zip_container`).
+#[path = "zip_w18.rs"]
+pub mod zip_container;
+
 /// The largest layer count the `i16` in the layer-info section can carry.
 const MAX_RECORDS: usize = i16::MAX as usize;
 
@@ -76,12 +80,14 @@ fn check_header(header: PsdHeader) -> PsdResult<()> {
     }
     // W16-B: the colour modes past RGB and Greyscale, each with what it needs.
     match header.color_mode {
-        ColorMode::Bitmap => {
-            return Err(PsdError::InvalidDocument(
-                "a Bitmap document is held at 8 bits here and is written as Greyscale; this \
-                 writer does not pack 1-bit samples"
-                    .into(),
-            ))
+        // W18-H: a Bitmap document is held expanded (one 8-bit plane of `0`
+        // black / `255` white) and packed to 1 bit a pixel as it is written.
+        ColorMode::Bitmap if header.channels != 1 || header.depth != Depth::Eight => {
+            return Err(PsdError::InvalidDocument(format!(
+                "a Bitmap document is one channel held at 8 bits, not {} channel(s) at {} bits",
+                header.channels,
+                header.depth.bits()
+            )))
         }
         ColorMode::Indexed if header.depth != Depth::Eight => {
             return Err(PsdError::InvalidDocument(format!(
@@ -205,10 +211,24 @@ fn write_impl(file: &PsdFile, opts: &WriteOptions, psb: bool) -> PsdResult<Vec<u
     write_resources(&resources, &mut sink);
     sink.end_len_even(slot);
 
-    write_layer_and_mask(file, opts, &mut sink, psb)?;
+    // W18-H: a Bitmap document is one flat 1-bit image: Photoshop keeps no
+    // layer section in it, so the section is written empty.
+    let bitmap = header.color_mode == ColorMode::Bitmap;
+    if bitmap {
+        if !file.layers.is_empty() {
+            return Err(PsdError::InvalidDocument(
+                "a Bitmap document is one flat image: merge the layers first".into(),
+            ));
+        }
+        put_len(&mut sink, 0, psb);
+    } else {
+        write_layer_and_mask(file, opts, &mut sink, psb)?;
+    }
 
     // Merged composite.
     let merged = match &file.merged {
+        // W18-G: Save PSD/PSB's "Blank preview image".
+        _ if opts.blank_preview => paper_composite(header, opts.max_flatten_bytes)?,
         Some(m) => m.clone(),
         // A header alone decides how big this canvas is, and a header can come
         // from a thirty-eight byte file. `flatten_with` refuses before it
@@ -224,6 +244,28 @@ fn write_impl(file: &PsdFile, opts: &WriteOptions, psb: bool) -> PsdResult<Vec<u
             merged.channels.len(),
             header.channels
         )));
+    }
+    if bitmap {
+        // W18-H: rows packed 8 pixels a byte (a set bit is black), encoded as
+        // 8-bit rows `ceil(width / 8)` wide.
+        let n = header.width as usize * header.height as usize;
+        let mut packed = Vec::with_capacity(merged.channels.len());
+        for plane in &merged.channels {
+            if plane.len() != n {
+                return Err(PsdError::InvalidDocument(format!(
+                    "the Bitmap composite holds {} samples, not {n}",
+                    plane.len()
+                )));
+            }
+            packed.push(crate::colour_modes::pack_bitmap(
+                plane,
+                header.width,
+                header.height,
+            ));
+        }
+        let shape = ChannelShape::new(header.width.div_ceil(8), header.height, Depth::Eight);
+        encode_merged_as(&packed, opts.merged_compression, shape, &mut sink, psb)?;
+        return Ok(sink.into_inner());
     }
     let shape = ChannelShape::new(header.width, header.height, header.depth);
     encode_merged_as(

@@ -35,6 +35,8 @@ pub mod css;
 // W13-N: Window > Styles, Document Info, Guide Guy.
 pub mod doc_info;
 pub mod guide_guy;
+// W18-I: Window > Memory.
+pub mod memory;
 pub mod styles;
 // W16-E: the preset, History and Channels panel menus.
 pub mod panel_menus_w16;

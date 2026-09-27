@@ -1,0 +1,1677 @@
+# Raster Studio interface strings, sl. One row per line: the English source, a TAB,
+# the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
+# Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
+@name	Slovenščina
+ fps	 fps
+ frames	 sličic
+ ms	 ms
+ px	 px
+0 bytes	0 bajtov
+16 Bits/Channel	16 bitov/kanal
+16 bit	16 bitov
+32 Bits/Channel	32 bitov/kanal
+3D	3D
+50% Grey	50 % sive
+50% Threshold	50-odstotni prag
+8 Bits/Channel	8 bitov/kanal
+8 bit	8 bitov
+90° Clockwise	90° v smeri urnega kazalca
+90° Counter Clockwise	90° v nasprotni smeri urnega kazalca
+A CSV row has the wrong number of fields, at line	Vrstica CSV ima napačno število polj, v vrstici
+A blank canvas at any size	Prazno platno poljubne velikosti
+A colour channel cannot be deleted	Barvnega kanala ni mogoče izbrisati
+A layered raster editor	Rastrski urejevalnik s plastmi
+A palette holds 2 to 256 colours	Paleta vsebuje od 2 do 256 barv
+A saved selection already has that name	Shranjena izbira s tem imenom že obstaja
+A saved selection: click to open Select > Load Selection, then choose it by name there	Shranjena izbira: kliknite, da odprete Izbira > Naloži izbiro, nato jo tam izberite po imenu
+A slice needs a name	Rezina potrebuje ime
+AV1 (smaller, newer players)	AV1 (manjši, novejši predvajalniki)
+About Raster Studio	O programu Raster Studio
+Absolute Colorimetric	Absolutno kolorimetrično
+Action sets	Nabori dejanj
+Actions	Dejanja
+Adaptive (median cut)	Prilagodljivo (mediana rezanja)
+Add "copy" to copied layers	Kopiranim plastem dodaj »kopija«
+Add Artboard Above	Dodaj risalno ploščo zgoraj
+Add Artboard Below	Dodaj risalno ploščo spodaj
+Add Artboard Left	Dodaj risalno ploščo levo
+Add Artboard Right	Dodaj risalno ploščo desno
+Add Filter Mask	Dodaj krinko sita
+Add Media	Dodaj medij
+Add Noise…	Dodaj šum…
+Add a layer mask	Dodaj masko plasti
+Add a smart filter mask	Dodaj masko pametnega filtra
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Postavi slikovno ali video datoteko (Datoteka > Postavi vdelano); video postane video plast na predvajalni glavi
+Add an adjustment layer	Dodaj prilagoditveno plast
+Add another instance of this effect	Dodaj še en primerek tega učinka
+Add current colour	Dodaj trenutno barvo
+Add export	Dodaj izvoz
+Add frame	Dodaj sličico
+Add or remove room around the image. Pixels are not resampled.	Dodajte ali odstranite prostor okoli slike. Slikovne pike se ne prevzorčijo.
+Add shortcut	Dodaj bližnjico
+Add to Selection	Dodaj k izbiri
+Adds one guide at a document coordinate, in pixels.	Doda eno vodilo na koordinati dokumenta, v slikovnih pikah.
+Adjustment	Prilagoditev
+Adjustments	Prilagoditve
+Advanced	Napredno
+Again	Ponovno
+Again with Copy	Znova s kopijo
+Aliased (pencil)	Nazobčano (svinčnik)
+Align	Poravnaj
+Align the bottom edge to the canvas	Poravnaj spodnji rob s platnom
+Align the left edge to the canvas	Poravnaj levi rob s platnom
+Align the right edge to the canvas	Poravnaj desni rob s platnom
+Align the top edge to the canvas	Poravnaj zgornji rob s platnom
+Align with layer	Poravnaj s plastjo
+All	Vse
+All Caps	Vse velike črke
+All Caps shapes every lowercase letter as its capital; Small Caps shapes it as a capital at 70 % size. The stored text keeps the case you typed.	Vse velike črke oblikujejo vsako malo črko kot veliko; Pomanjšane velike črke jo oblikujejo kot veliko črko pri 70 % velikosti. Shranjeno besedilo ohrani velike in male črke, kot ste jih vtipkali.
+All Layers	Vse plasti
+Alpha	Alfa
+Already used by	Že uporablja
+Alt Tag	Oznaka Alt
+Amount	Jakost
+An export needs at least one output	Izvoz potrebuje vsaj en izhod
+An image or project from this computer	Slika ali projekt s tega računalnika
+Angle	Naklon
+Angle (degrees)	Kot (stopinje)
+Angle jitter	Nihanje kota
+Animation	Animacija
+Another slice already has this name	Druga rezina že ima to ime
+Appearance	Videz
+Applied	Uporabljeno
+Apply	Uporabi
+Apply Guides	Uporabi vodila
+Apply Image	Uporabi sliko
+Apply Image…	Uporabi sliko…
+Apply Mask	Uporabi masko
+Apply Style	Uporabi slog
+Apply Style 1	Uporabi slog 1
+Apply Style Preset…	Uporabi prednastavitev sloga…
+Apply the next comp	Uporabi naslednjo kompozicijo
+Apply the previous comp	Uporabi prejšnjo kompozicijo
+Apply this mask	Uporabi to masko
+Approximate. The composited result is what the canvas shows.	Približno. Sestavljeni rezultat je tisto, kar prikazuje platno.
+Arbitrary…	Poljubno…
+Arc	Lok
+Arc Lower	Lok spodaj
+Arc Upper	Lok zgoraj
+Arch	Obok
+Arrange	Razporedi
+Artboard	Risalna deska
+Artboard from Layers	Risalna deska iz Plasti
+Artboards in one document	Risalne plošče v enem dokumentu
+Artboards to Files…	Risalne plošče v datoteke…
+Assign Profile	Dodeli profil
+Assigned {name}: the pixel numbers are unchanged, so the colours look different	Dodeljen {name}: vrednosti slikovnih pik se ne spremenijo, zato barve izgledajo drugače
+Author	Avtor
+Auto Color	Samodejna barva
+Auto Contrast	Samodejni kontrast
+Auto Tone	Samodejni odtenek
+Auto leading	Samodejni razmik vrstic
+Auto-Align Layers…	Samodejno poravnaj plasti…
+Auto-Blend Layers…	Samodejno zlij plasti…
+Automate	Avtomatiziraj
+Autosaves of never-saved documents go here; empty uses the default	Sem gredo samodejno shranjene kopije nikoli shranjenih dokumentov; prazno uporabi privzeto
+Average	Povprečje
+BMP…	BMP…
+Back to the colour this opened on	Nazaj na barvo, s katero se je to odprlo
+Background — double-click for the picker	Ozadje — dvokliknite za izbirnik
+Based On	Na podlagi
+Baseline shift	Premik črkovne črte
+Baseline to baseline. Auto leading follows the type size.	Od osnovnice do osnovnice. Samodejni razmik vrstic sledi velikosti pisave.
+Batch	Paketna obdelava
+Batch…	Paketna obdelava…
+Bend	Ukrivi
+Bevel	Poševni rob
+Bevel & Emboss	Poševni rob in reliefno
+Bevel & Emboss…	Poševni rob in reliefno…
+Bind a text replacement variable to a text layer, or a visibility variable to any layer.	Povežite spremenljivko zamenjave besedila z besedilno plastjo ali spremenljivko vidnosti s katero koli plastjo.
+Bitmap	Bitna slika
+Bitmap…	Bitna slika…
+Black	Črna
+Black & White	Črno & Belo
+Black & White…	Črno & Belo…
+Black to Transparent	Črna v prosojno
+Black to White	Črna v belo
+Black to white through the inks	Črna v belo prek črnil
+Blacks	Črne
+Blend If	Mešajte, ko
+Blend Mode: Color	Način zlivanja: Barva
+Blend Mode: Color Burn	Način zlivanja: Zažiganje barve
+Blend Mode: Color Dodge	Način zlivanja: Posvetlitev barve
+Blend Mode: Darken	Način zlivanja: Potemni
+Blend Mode: Difference	Način zlivanja: Razlika
+Blend Mode: Dissolve	Način zlivanja: Raztopi
+Blend Mode: Exclusion	Način zlivanja: Izključitev
+Blend Mode: Hard Light	Način zlivanja: Močna svetloba
+Blend Mode: Hard Mix	Način zlivanja: Trdo mešanje
+Blend Mode: Hue	Način zlivanja: Odtenek
+Blend Mode: Lighten	Način zlivanja: Posvetli
+Blend Mode: Linear Burn	Način zlivanja: Linearno zažiganje
+Blend Mode: Linear Dodge (Add)	Način zlivanja: Linearna posvetlitev (seštej)
+Blend Mode: Linear Light	Način zlivanja: Linearna svetloba
+Blend Mode: Luminosity	Način zlivanja: Svetilnost
+Blend Mode: Multiply	Način zlivanja: Množenje
+Blend Mode: Normal	Način zlivanja: Navadno
+Blend Mode: Overlay	Način zlivanja: Prekrivanje
+Blend Mode: Pin Light	Način zlivanja: Točkovna svetloba
+Blend Mode: Saturation	Način zlivanja: Nasičenost
+Blend Mode: Screen	Način zlivanja: Zaslon
+Blend Mode: Soft Light	Način zlivanja: Mehka svetloba
+Blend Mode: Vivid Light	Način zlivanja: Živa svetloba
+Blending	Zlivanje
+Blending Options	Možnosti mešanja
+Blending Options…	Možnosti mešanja…
+Blending options	Možnosti zlivanja
+Blends a source document, layer or channel into the active layer as one step.	Zlije izvorni dokument, plast ali kanal v dejavno plast v enem koraku.
+Blends one channel of each of two sources into a new channel, a selection or a new document.	Zlije po en kanal iz dveh virov v nov kanal, izbiro ali nov dokument.
+Blue	Modra
+Blues	Modre
+Blur	Zameglitev
+Blur Gallery	Galerija zameglitev
+Blur More	Močna zameglitev
+Bold	Krepko
+Border Selection	Izbira obrobe
+Border…	Obroba…
+Both axes	Obe osi
+Bottom	Spodaj
+Bottom Edges	Spodnji robovi
+Bottom Left	Spodaj levo
+Bottom Right	Spodaj desno
+Bottom Right Pixel Color	Barva spodnje desne slikovne pike
+Bottom left	Spodaj levo
+Bottom right	Spodaj desno
+Box Blur…	Kvadratna zameglitev…
+Box height	Višina okvirja
+Brightness	Svetlost
+Brightness jitter	Nihanje svetlosti
+Brightness/Contrast	Svetlost/Kontrast
+Brightness/Contrast…	Svetlost/Kontrast…
+Bring Forward	Naprej
+Bring to Front	V ospredje
+Brush Editor	Urejevalnik čopičev
+Brush: Background	Čopič: ozadje
+Brush: Foreground	Čopič: ospredje
+Brushes	Čopiči
+Bulge	Izboklina
+Butt	Ravno
+CMYK Color	Barve CMYK
+Calculations	Izračuni
+Calculations…	Izračuni…
+Camera Raw…	Camera Raw…
+Canvas Size	Velikost platna
+Canvas Size…	Velikost platna…
+Canvas extension	Razširitev platna
+Caps	Zaključki
+Carries the XMP; the source's EXIF goes into JPEG only	Nosi XMP; EXIF vira gre samo v JPEG
+Cell size (pixels)	Velikost celice (slikovne pike)
+Center	Sredina
+Center horizontally on the canvas	Vodoravno sredini na platnu
+Center vertically on the canvas	Navpično sredini na platnu
+Centimeters	Centimetrov
+Centre	Sredina
+Centre the view on this note	Sredini pogled na to opombo
+Change Bit Depth	Spremeni bitno globino
+Change Colour Mode	Spremeni barvni način
+Change Layer Properties	Spremeni lastnosti plasti
+Change how many pixels the document has, or how large it prints.	Spremenite, koliko slikovnih pik ima dokument ali kako velik je natisnjen.
+Channel	Kanal
+Channel Mixer	Kanalski mešalnik
+Channel Mixer…	Kanalski mešalnik…
+Channel thumbnail	Sličica kanala
+Channels	Kanali
+Character	Znak
+Character Style	Slog znakov
+Character Styles	Slogi znakov
+Checkerboard	Šahovnica
+Choose 2 to 256 colours	Izberite od 2 do 256 barv
+Choose a colour profile	Izberite barvni profil
+Choose a destination folder	Izberite ciljno mapo
+Choose a source folder	Izberite izvorno mapo
+Choose at least one page to open	Izberite vsaj eno stran za odpiranje
+Choose at least one side to trim	Izberite vsaj eno stran za obrezovanje
+Choose the Action to play	Izberite dejanje za predvajanje
+Choose the open grayscale document each channel of the new RGB document comes from.	Izberite odprt sivinski dokument, iz katerega pride vsak kanal novega dokumenta RGB.
+Choose the pages to open, their resolution and how they open.	Izberite strani za odpiranje, njihovo ločljivost in način odpiranja.
+Choose the source and the destination folders.	Izberite izvorno in ciljno mapo.
+Choose…	Izberi…
+Clear	Počisti
+Clear All	Počisti vse
+Clear Guides	Odstrani vodila
+Clear History	Počisti zgodovino
+Clear Layer Style	Počisti slog plasti
+Clear Slices	Počisti izreze
+Clear Strokes	Počisti poteze
+Clear existing guides	Počisti obstoječa vodila
+Clear the {noun} from the active text layer	Odstrani {noun} z dejavne besedilne plasti
+Cleared {n} slice(s)	Počiščenih rezin: {n}
+Click an item in the panel first	Najprej kliknite element na plošči
+Click anywhere to sample a colour	Kliknite kjer koli, da vzorčite barvo
+Click anywhere to sample a colour, or press Escape.	Kliknite kjer koli, da vzorčite barvo, ali pritisnite Escape.
+Click the graph to add a point, drag a point to bend the curve, drag it off the graph to remove it	Kliknite graf, da dodate točko, povlecite točko, da upognete krivuljo, povlecite jo z grafa, da jo odstranite
+Click the preview to sample a colour from it	Kliknite predogled, da iz njega vzorčite barvo
+Click the preview to sample the colour to replace	Kliknite predogled, da vzorčite barvo za zamenjavo
+Click the ramp to edit its stops.	Kliknite prelivno lestvico, da uredite njene točke.
+Clip to layer below	Obreži na spodnjo plast
+Clipboard	Odložišče
+Clipping	Obrezovanje
+Close	Zapri
+Close All	Zapri vse
+Close Alpha Channel	Zapri kanal alfa
+Close Others	Zapri ostale
+Close panel	Zapri ploščo
+Clouds	Oblaki
+Codec	Kodek
+Color	Barva
+Color Balance	Uravnoteženost barv
+Color Balance…	Uravnoteženost barv…
+Color Burn	Vžgi barvo
+Color Dodge	Izogni se barvam
+Color Dynamics	Dinamika barve
+Color Halftone…	Barvni raster…
+Color Intensity	Jakost barve
+Color Label	Barvna oznaka
+Color Lookup	Barvni pregled
+Color Lookup Tables…	Tabele iskanja barv…
+Color Lookup…	Barvni pregled…
+Color Overlay	Prekrij z barvo
+Color Overlay…	Prekrij z barvo…
+Color Picker	Izbor barve
+Color Range	Razpon Barv
+Color Range…	Razpon Barv…
+Color fringe cleanup: pulls the boundary pixels' color toward the nearby interior ink — a separate edit from mask refinement.	Čiščenje barvnega obrobka: približa barvo robnih slikovnih pik bližnjemu notranjemu črnilu — ločeno urejanje od izboljšanja maske.
+Color to Alpha…	Barva v prozornost…
+Colors	Barve
+Colour	Barva
+Colour varies once per stroke.	Barva se spremeni enkrat na potezo.
+Colours	Barve
+Colours must be 1 to 64, the tolerance above 0 and the corner length at least 1	Barve morajo biti od 1 do 64, toleranca nad 0 in dolžina vogala vsaj 1
+Columns	Stolpci
+Columns and rows with gutters between them, inside optional margins, in pixels.	Stolpci in vrstice z razmiki med njimi, znotraj neobveznih robov, v slikovnih pikah.
+Combine Shapes	Združi oblike
+Commit (Enter)	Potrdi (Enter)
+Commit Contents	Potrdi vsebino
+Composite	Sestavljeno
+Condensed	Zožano
+Cone	Stožec
+Constant	Konstantno
+Constrain proportions	Ohrani razmerja
+Content-Aware	Glede na vsebino
+Content-Aware Scale	Vsebinosvestno prevelikostenje
+Contour	Obris
+Contract Selection	Skrči izbiro
+Contract by	Skrči za
+Contract…	Stisni…
+Contrast	Kontrast
+Conversion Options	Možnosti pretvorbe
+Convert Formats	Pretvori formate
+Convert Formats…	Pretvori formate…
+Convert for Smart Filters	Pretvori za pametne filtre
+Convert to Layers	Pretvori v plasti
+Convert to Linked…	Pretvori v povezano…
+Convert to Paragraph Text	Pretvori v jedrno besedilo
+Convert to Point Text	Pretvori v naslovni napis
+Convert to Profile	Pretvori v profil
+Convert to Profile works on 8- and 16-bit documents	Pretvori v profil deluje na 8- in 16-bitnih dokumentih
+Convert to Profile…	Pretvori v profil…
+Convert to Shape	Pretvori v obliko
+Convert to Smart Object	Pretvori v Pametni predmet
+Converted to {name} ({intent}): the numbers changed so the colours look the same	Pretvorjeno v {name} ({intent}): vrednosti so se spremenile, da barve izgledajo enako
+Cool	Hladno
+Copper	Baker
+Copy	Kopiraj
+Copy Layer Style	Kopiraj slog plasti
+Copy Merged	Kopiraj vse
+Copyright Notice	Obvestilo o avtorskih pravicah
+Corner length	Dolžina vogala
+Corner radius	Polmer vogala
+Corner radius applies to rectangles; this path has no corners to round	Polmer vogala velja za pravokotnike; ta pot nima vogalov za zaobljanje
+Corners	Vogali
+Count jitter	Nihanje števila
+Create Clipping Mask	Ustvari obrezovalno masko
+Create Layer	Ustvari plast
+Create Layers	Ustvari plasti
+Crop	Obreži
+Crop and Straighten Photos	Obreži in poravnaj fotografije
+Crops the canvas to the content, judged by the basis below.	Obreže platno na vsebino, presojeno po spodnji osnovi.
+Crystallize…	Kristaliziraj…
+Current Layer	Trenutna plast
+Current Path	Trenutna pot
+Curve tolerance	Toleranca krivulje
+Curves	Krivulje
+Curves…	Krivulje…
+Custom	Po meri
+Custom Brush	Čopič po meri
+Custom: with the Move tool, drag the 16 mesh handles on the canvas	Po meri: z orodjem Premakni povlecite 16 ročic mreže na platnu
+Custom…	Po meri…
+Cut	Izreži
+Cyan	Sinja
+Cyan / Red	Cian / rdeča
+Cyans	Ciani
+DDS…	DDS…
+DXF…	DXF…
+Dark	Temno
+Dark Blue	Temno modra
+Dark Grey	Temno siva
+Darken	Potemni
+Darker Color	Temnejša barva
+Dash	Črtkano
+Data Set	Nabor podatkov
+Data Sets	Nabori podatkov
+Data Sets…	Nabori podatkov…
+Default	Privzeto
+Default colours  (D)	Privzete barve  (D)
+Default colours (D)	Privzete barve (D)
+Define	Določi
+Define Brush Preset…	Določi prednastavitev čopiča…
+Define Custom Shape…	Določi obliko po meri…
+Define New	Opredeli novo
+Define Pattern…	Določi vzorec…
+Define…	Določi…
+Delete	Izbriši
+Delete Filter Mask	Izbriši krinko sita
+Delete Layer	Izbriši plast
+Delete Mask	Izbriši masko
+Delete Vector Mask	Izbriši vektorsko krinko
+Delete action	Izbriši dejanje
+Delete channel	Izbriši kanal
+Delete frame	Izbriši sličico
+Delete path	Izbriši pot
+Delete selected layers	Izbriši izbrane plasti
+Delete set and its actions	Izbriši nabor in njegova dejanja
+Delete stop	Izbriši točko
+Delete the applied comp	Izbriši uporabljeno kompozicijo
+Delete the selected keyframe	Izbriši izbrano ključno sličico
+Delete the selected tool preset	Izbriši izbrano prednastavitev orodja
+Delete the selected {noun}	Izbriši izbrani {noun}
+Delete the smart filter mask	Izbriši masko pametnega filtra
+Delete this note	Izbriši to opombo
+Delete this smart filter	Izbriši ta pametni filter
+Delete this spot channel	Izbriši ta kanal dodatne barve
+Density	Gostota
+Dents…	Vdolbine…
+Desaturate	Razbarvaj
+Description	Opis
+Deselect	Odznači
+Deselect Layers	Prekliči izbiro plasti
+Despeckle	Odstrani prah
+Destination	Cilj
+Destination Space	Ciljni prostor
+Detail	Podrobnost
+Detail scales	Lestvice podrobnosti
+Diamond	Diamant
+Difference	Razlika
+Difference Clouds	Drugačni oblaki
+Diffuse…	Razprši…
+Diffusion	Razprševanje
+Diffusion Dither	Razpršeno mešanje barv
+Disable / Enable Filter Mask	Onemogoči / omogoči masko filtra
+Disable / Enable Mask	Onemogoči / omogoči masko
+Disable / Enable Vector Mask	Onemogoči / omogoči vektorsko masko
+Disable Mask	Onemogoči masko
+Disable Vector Mask	Onemogoči vektorsko krinko
+Displace…	Razporedi…
+Dissolve	Raztopi
+Distance	Razdalja
+Distort	Popači
+Distribute	Porazdeli
+Dither	Mešanje barv
+Dither…	Mešanje barv…
+Divide	Deli
+Dock this panel here	Zasidraj to ploščo sem
+Document	Dokument
+Document Bounds	Meje dokumenta
+Document Info	Podatki o dokumentu
+Document Title	Naslov dokumenta
+Document size	Velikost dokumenta
+Double-click to edit in Layer Style; drag to the trash to delete	Dvokliknite za urejanje v Slogu plasti; povlecite v koš za brisanje
+Double-click to edit this filter's settings	Dvokliknite za urejanje nastavitev tega filtra
+Double-click to rename	Dvokliknite za preimenovanje
+Drag a line with the Ruler first	Najprej povlecite črto z Ravnilom
+Drag to zoom the view	Povlecite za povečavo pogleda
+Drop Shadow	Senca
+Drop Shadow…	Senca…
+Duotone	Dvobarvno
+Duotone Options	Možnosti dvobarvnega
+Duotone…	Dvobarvno…
+Duplicate	Podvoji
+Duplicate Layer	Podvoji plast
+Duplicate Layer…	Podvoji plast…
+Duplicate frame	Podvoji sličico
+Dust & Scratches…	Prah in Praske…
+EMF…	EMF…
+EXIF and XMP writing is not implemented — only ICC is embedded	Zapisovanje EXIF in XMP ni izvedeno — vdela se samo ICC
+EXR…	EXR…
+Ease In	Postopni začetek
+Ease Out	Postopni konec
+Edge Glow	Žarenje robov
+Edge refinement: feather, shift, smooth, and contrast over the mask's existing coverage — not subject recognition.	Izboljšanje robov: mehčanje, premik, glajenje in kontrast čez obstoječe pokritje maske — ne prepoznavanje predmetov.
+Edges	Robovi
+Edit	Uredi
+Edit Adjustment	Uredi prilagoditev
+Edit Adjustment…	Uredi prilagoditev…
+Edit Alpha Channel	Uredi kanal alfa
+Edit Contents…	Uredi vsebino…
+Edit Document Records	Uredi zapise dokumenta
+Edit Fill	Uredi polnilo
+Edit Filter Mask	Uredi masko filtra
+Edit Generator	Uredi generator
+Edit Group	Uredi skupino
+Edit Guides	Uredi vodila
+Edit Raster	Uredi raster
+Edit Saved Selection	Uredi shranjeno izbiro
+Edit Shape	Uredi obliko
+Edit Slices	Uredi rezine
+Edit Smart object	Uredi pametni predmet
+Edit Text	Uredi besedilo
+Edit Timeline	Uredi časovnico
+Edit brush…	Uredi čopič…
+Edit fill	Uredi polnilo
+Edit gradient stops — click to open the editor	Uredi točke preliva — kliknite, da odprete urejevalnik
+Edit in Quick Mask Mode	Uredi v načinu hitre maske
+Edit this ramp	Uredi to prelivno lestvico
+Effects	Učinki
+Effects apply to the whole layer and undo as one step.	Učinki veljajo za celotno plast in se razveljavijo v enem koraku.
+Embed EXIF and XMP	Vdelaj EXIF in XMP
+Embed Linked	Vdelaj povezano
+Embed colour profile	Vdelaj barvni profil
+Embedded source	Vdelan vir
+Emboss…	Izboči…
+Enable / disable the smart filter mask	Omogoči / onemogoči masko pametnega filtra
+Enable Mask	Omogoči masko
+Enable Vector Mask	Omogoči vektorsko krinko
+Enable at least one export	Omogočite vsaj en izvoz
+Enabled	Omogočeno
+Enlarge smaller images	Povečaj manjše slike
+Enter a colour like #3366CC	Vnesite barvo, kot je #3366CC
+Entropy	Entropija
+Equalize	Izenači
+Essentials	Osnove
+Every enabled row is written when you export.	Vsaka omogočena vrstica se zapiše ob izvozu.
+Every image in the source folder is fitted into the box and written to the destination folder in its own format.	Vsaka slika iz izvorne mape se prilagodi okvirju in zapiše v ciljno mapo v svojem formatu.
+Every parameter is at its neutral value — there is nothing to clean	Vsi parametri so na nevtralni vrednosti — ni česa počistiti
+Every parameter is at its neutral value — there is nothing to refine	Vsi parametri so na nevtralni vrednosti — ni česa izboljšati
+Every variable needs a name	Vsaka spremenljivka potrebuje ime
+Exact	Natančno
+Exclude Overlapping Shapes	Izključi prekrivajoče se oblike
+Exclusion	Izključitev
+Expand Selection	Razširi izbiro
+Expand by	Razširi za
+Expand the dock	Razširi sidrišče
+Expanded	Razširjeno
+Expand…	Razširi…
+Export	Izvozi
+Export As	Izvozi kot
+Export Color Lookup	Izvozi iskanje barv
+Export Contents…	Izvozi vsebino…
+Export Diagnostics…	Izvozi diagnostiko…
+Export Layers…	Izvozi plasti…
+Export PDF	Izvozi PDF
+Export as .ABR…	Izvozi kot .ABR…
+Export as .ACO…	Izvozi kot .ACO…
+Export as .ASL…	Izvozi kot .ASL…
+Export set as .atn	Izvozi nabor kot .atn
+Export…	Izvozi…
+Exposure	Osvetljenost
+Exposure…	Osvetljenost…
+Extra Bold	Izjemno krepko
+Extra Condensed	Izjemno zožano
+Extra Expanded	Izjemno razširjeno
+Extra Light	Izjemno tanko
+Extras	Dodatke
+Extrude…	Iztisni…
+Eyedropper	Kapalka
+Face	Rez
+Facet	Pikice
+Fade	Zbledi
+Fade…	Zbledi…
+Family	Družina
+Feather	Operjanje
+Feather Selection	Omehčaj izbiro
+Feather radius	Polmer mehčanja
+Feather…	Operjanje…
+Fibers…	Vlakna…
+Field Blur…	Zameglitev polja…
+File	Datoteka
+File Info	O datoteki
+File Info…	O datoteki…
+File name	Ime datoteke
+Files that fail are listed in batch-errors.txt in the destination.	Datoteke, ki ne uspejo, so navedene v batch-errors.txt v cilju.
+Fill	Zapolni
+Fill Filter Mask	Zapolni masko filtra
+Fill Layer	Plast polnila
+Fill Mask	Zapolni masko
+Fill Screen	Zapolni zaslon
+Fill in File Info, or open a file that has EXIF, to embed metadata	Izpolnite Podatke o datoteki ali odprite datoteko z EXIF, da vdelate metapodatke
+Fill path with the foreground colour, on a new shape layer	Zapolni pot z barvo ospredja, na novi plasti oblike
+Fill type	Vrsta polnila
+Fills the active selection with the chosen contents.	Zapolni dejavno izbiro z izbrano vsebino.
+Fill…	Zapolni…
+Filter	Sito
+Filter Gallery	Izložba sit
+Filter Gallery…	Izložba sit…
+Find Edges	Najdi robove
+First line	Prva vrstica
+Fish	Riba
+Fisheye	Ribje oko
+Fit The Area	Zapolni prostor
+Fit on Screen	Prilagodi zaslonu
+Fit the whole image in the window	Prilagodi celotno sliko oknu
+Fixed height	Stalna višina
+Flag	Zastavica
+Flame…	Plamen…
+Flat Angled 40	Ploščat poševen 40
+Flatten Image	Združi vse plasti
+Flip Canvas Horizontal	Zrcali platno vodoravno
+Flip Canvas Vertical	Zrcali platno navpično
+Flip Horizontal	Zrcali vodoravno
+Flip Vertical	Zrcali navpično
+Flip View Horizontal	Zrcali pogled vodoravno
+Flip View Vertical	Zrcali pogled navpično
+Flow jitter	Nihanje pretoka
+Folders	Mape
+Font: 	Pisava: 
+Foreground strokes mark what to keep, background strokes what to drop; Preview shows the cut.	Poteze ospredja označujejo, kaj obdržati, poteze ozadja, kaj zavreči; Predogled prikaže izrez.
+Foreground — double-click for the picker	Ospredje — dvokliknite za izbirnik
+Foreground/background jitter	Nihanje ospredja/ozadja
+Format	Zapis
+Fourier	Fourier
+Fourier Transform	Fourierjeva transformacija
+Fragment	Razkoščkaj
+Frame	Sličica
+Frames	Sličice
+Free Transform	Prosto preblikovanje
+Free Transform a Copy	Prosto preoblikovanje kopije
+From Transparency	Iz prozornosti
+Fullscreen	Celozaslonsko
+Fuzziness	Nejasnost
+GIF…	GIF…
+Gamma	Gama
+Gamut Warning	Opozorilo o barvnem obsegu
+Gaussian	Gaussova
+Gaussian Blur…	Nastavljiva zameglitev…
+Generate Mockups	Ustvari makete
+Generate Mockups…	Ustvari makete…
+Give the brush a name	Poimenujte čopič
+Give the export a file name	Določite ime datoteke izvoza
+Glass Menus	Stekleni meniji
+Global light	Globalna svetloba
+Glyphs	Pismenke
+Gradient	Preliv
+Gradient Editor	Urejevalnik prelivov
+Gradient Map	Prelivanje
+Gradient Map…	Prelivanje…
+Gradient Overlay	Prekrij s prelivom
+Gradient Overlay…	Prekrij s prelivom…
+Gradient…	Preliv…
+Gray	Siva
+Grayscale	Sivine
+Green	Zelena
+Greens	Zelene
+Grid	Mreža
+Grid points	Točke mreže
+Group	Skupina
+Group Layers	Združi plasti
+Grow	Razširi podobno
+Guide Guy	Guide Guy
+Guides	Vodila
+Gutter	Razmik
+H	V
+H.264 (plays everywhere)	H.264 (predvaja se povsod)
+HDR Toning	Toniranje HDR
+HDR Toning…	Toniranje HDR…
+HSB/HSL…	HSB/HSL…
+Halftone Screen	Rastrski zaslon
+Hard Light	Trda svetloba
+Hard Mix	Trda mešanica
+Hard Round 24	Trd okrogel 24
+Hard Round 4	Trd okrogel 4
+Hard edges, no blending. Pixel art only — it aliases on downscale.	Trdi robovi, brez zlivanja. Samo za pikselno umetnost — pri pomanjšanju je nazobčano.
+Harder Brush	Trši čopič
+Height	Višina
+Height to 110%	Višina na 110 %
+Height to 125%	Višina na 125 %
+Height to 80%	Višina na 80 %
+Height to 90%	Višina na 90 %
+Help	Pomoč
+Hide All	Skrij vse
+Hide Layers	Skrij plasti
+Hide Selection	Skrij izbor
+Hide the source layer	Skrij izvorno plast
+High Contrast	Visok kontrast
+High Pass…	Prepusti visoke frekvence…
+Highlights	Svetli toni
+Histogram	Histogram
+Histories	Zgodovine
+History	Zgodovina
+Hold	Zadrži
+Horizontal Centers	Vodoravna središča
+Horizontal Distortion	Vodoravno popačenje
+Horizontal center guide	Vodoravno sredinsko vodilo
+Horizontal scale, in percent: widens or narrows the glyphs and their spacing	Vodoravno merilo, v odstotkih: razširi ali zoži glife in njihov razmik
+Horizontally	Vodoravno
+Hue	Odtenek
+Hue jitter	Nihanje odtenka
+Hue/Saturation	Odtenek/Zasičenost
+Hue/Saturation…	Odtenek/Zasičenost…
+ICC profile	Profil ICC
+ICO…	ICO…
+Image	Slika
+Image Options	Možnosti slike
+Image Rotation	Sukanje slike
+Image Size	Velikost slike
+Image Size…	Velikost slike…
+Image size	Velikost slike
+Import CSV…	Uvozi CSV…
+Import PDF	Uvozi PDF
+Import a CSV of data sets first	Najprej uvozite CSV z nabori podatkov
+Import a CSV: the first row names the variables, every further row is one data set.	Uvozite CSV: prva vrstica poimenuje spremenljivke, vsaka nadaljnja vrstica je en nabor podatkov.
+In use	V uporabi
+Inches	Palci
+Indexed Color	Indeksirane barve
+Indexed Color…	Indeksirane barve…
+Inflate	Napihni
+Info	Informacije
+Ink	Črnilo
+Ink Color	Barva črnila
+Ink printed at 0, 25, 50, 75 and 100% tint	Črnilo, natisnjeno pri 0, 25, 50, 75 in 100 % tona
+Inner Glow	Notranji sij
+Inner Glow…	Notranji sij…
+Inner Radius	Notranji polmer
+Inner Shadow	Notranja senca
+Inner Shadow…	Notranja senca…
+Inside	Znotraj
+Intent	Namen
+Intersect Shape Areas	Presek območij oblik
+Intersect with Selection	Presek z izbiro
+Inverse	Prebrni
+Inverse Fourier Transform	Inverzna Fourierjeva transformacija
+Invert	Preobrni
+Invert coverage	Obrni pokritje
+Invert has no parameters	Negativ nima parametrov
+Iris Blur…	Zameglitev z zaslonko…
+Italic	Ležeče
+JPEG carries the XMP and the source's EXIF	JPEG nosi XMP in EXIF vira
+JPG…	JPG…
+Justify	Obojestransko poravnaj
+Kaleidoscope…	Kalejdoskop…
+Keep as it was	Ohrani, kot je bilo
+Kept when a comp is first applied	Ohrani se, ko se kompozicija prvič uporabi
+Kerning	Spodsekavanje
+Keyboard Shortcut Sheet…	Seznam bližnjic na tipkovnici…
+Keyboard Shortcuts…	Bližnjične tipke…
+Keywords	Ključne besede
+Kind	Vrsta
+Kurtosis	Sploščenost
+Lab Color	Barve Lab
+Landscape	Ležeče
+Language	Jezik
+Large	Veliko
+Last Document State	Zadnje stanje dokumenta
+Last Filter	Zadnje sito
+Last line	Zadnja vrstica
+Layer	Plast
+Layer Comps	Kompozicije plasti
+Layer Edges	Robovi plasti
+Layer Mask	Maska plasti
+Layer Properties	Lastnosti plasti
+Layer Style	Slog plasti
+Layer knocks out drop shadow	Plast izloči senco
+Layer via Copy	Plast s kopiranjem
+Layer via Cut	Plast z izrezom
+Layers	Plasti
+Layers panel options	Možnosti plošče Plasti
+Left	Levo
+Left Edges	Levi robovi
+Left indent	Levi zamik
+Length	Dolžina
+Lens Blur…	Zameglitev leče…
+Lens Correction…	Popravek leče…
+Lens Flare…	Odsev leče…
+Level	Raven
+Levels	Ravni
+Levels…	Ravni…
+Light	Svetlo
+Light Grey	Svetlo siva
+Lighten	Posvetli
+Lighter Color	Svetlejša barva
+Lighting Effects…	Svetlobni učinki…
+Lightness	Svetlost
+Line	Črta
+Linear	Premo
+Linear Burn	Vžgi linearno
+Linear Dodge (Add)	Linearna posvetlitev (seštej)
+Linear Light	Linearna svetloba
+Link / Unlink Mask	Poveži / razveži masko
+Link Layers	Poveži plasti
+Link selected layers	Poveži izbrane plasti
+Link with layer	Poveži s plastjo
+Linked	Povezano
+Linked file	Povezana datoteka
+Liquify…	Utekočini…
+Live Shape	Dejavna oblika
+Live preview	Predogled v živo
+Live preview is off.	Predogled v živo je izklopljen.
+Load	Naloži
+Load .atn	Naloži .atn
+Load .cube file…	Naloži datoteko .cube…
+Load Selection	Naloži izbiro
+Load Selection…	Naloži izbiro…
+Load actions	Naloži dejanja
+Load channel as selection	Naloži kanal kot izbiro
+Load path as a selection	Naloži pot kot izbiro
+Loaded file	Naložena datoteka
+Lock	Zaklep
+Lock All	Zakleni vse
+Lock Guides	Zakleni vodila
+Lock Image Pixels	Zakleni slikovne pike slike
+Lock Position	Zakleni položaj
+Lock Transparent Pixels	Zakleni prosojne slikovne pike
+Lock all	Zakleni vse
+Lock pixels	Zakleni slikovne pike
+Lock position	Zakleni položaj
+Lock transparent pixels	Zakleni prosojne slikovne pike
+Long-tap as a right click	Dolg dotik kot desni klik
+Lookup table	Iskalna tabela
+Luminance	Svetilnost
+Luminance of the preview source; the markers are the black and white points.	Svetilnost vira predogleda; oznake so črna in bela točka.
+Luminosity	Svetlost
+MP4…	MP4…
+Magenta	Škrlatna
+Magenta / Green	Magenta / zelena
+Magentas	Magente
+Magic Cut	Čudežni izrez
+Magic Cut…	Čudežni izrez…
+Make Frames	Ustvari sličice
+Make a selection first	Najprej naredite izbiro
+Make work path from selection	Ustvari delovno pot iz izbire
+Manual	Ročno
+Maps every colour onto one palette. The document keeps RGBA pixels; GIF and PNG export write this palette.	Preslika vsako barvo na eno paleto. Dokument obdrži slikovne pike RGBA; izvoz GIF in PNG zapiše to paleto.
+Maps the active layer onto a palette as one undo step; the document stays RGB.	Preslika dejavno plast na paleto v enem koraku razveljavitve; dokument ostane RGB.
+Margins	Robovi
+Mark this state so you can come back to it	Označi to stanje, da se lahko vrnete k njemu
+Mask	Krinka
+Mask Properties	Lastnosti maske
+Mask source	Vir maske
+Match Color	Ujemi barvo
+Match Color…	Ujemi barvo…
+Matting	Odstranjevanje obrobe
+Maximum	Največ
+Maximum…	Največ…
+Mean	Srednja vrednost
+Median	Mediana
+Median…	Mediana…
+Medium	Srednje
+Memory	Pomnilnik
+Menu Bar and Canvas	Menijska vrstica in platno
+Merge	Združi
+Merge Channels	Združi kanale
+Merge Channels…	Združi kanale…
+Merge Down	Združi s spodjo
+Merge Layers	Združi izbrane
+Merge Visible	Združi vidne
+Merged	Združeno
+Method	Način
+Metrics	Metrika
+Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.	Metrika uporablja spodsekavanje parov same pisave; 0 izklopi spodsekavanje; Ročno postavi eno vrednost (1/1000 em) med vsak par besedila, kot je zdaj, znaki, vtipkani pozneje, pa začnejo brez spodsekavanja; potrebuje vsaj dva znaka, zato ga krajše besedilo in privzete nastavitve orodja Besedilo ne ponujajo. Oblikovalnik nima optičnega spodsekavanja, zato ta način ni na voljo.
+Mezzotint…	Jedkanje…
+Midtones	Srednji toni
+Millimeters	Milimetrov
+Min diameter	Najmanjši premer
+Min roundness	Najmanjša okroglost
+Min size	Najmanjša velikost
+Minimal	Minimalno
+Minimum	Najmanj
+Minimum size only applies when pressure controls size.	Najmanjša velikost velja le, ko pritisk nadzira velikost.
+Minimum…	Najmanj…
+Miter	Poševni stik
+Mode	Način
+Modify	Spremeni
+Monochrome	Enobarvno
+Monotone	Enotonsko
+More readouts	Več odčitkov
+More tabs	Več zavihkov
+Mosaic…	Mozaik…
+Motion Blur…	Zameglitev premikanja…
+Move Layer	Premakni plast
+Move a control first: these settings would change nothing	Najprej premaknite kontrolnik: te nastavitve ne bi ničesar spremenile
+Move this panel	Premakni to ploščo
+Move this panel within its dock	Premakni to ploščo znotraj njenega sidrišča
+Move to	Premakni v
+Move with the layer	Premikaj s plastjo
+Multiply	Zmnoži
+Name	Ime
+Name Change	Sprememba imena
+Name the channel first.	Najprej poimenujte kanal.
+Navigator	Krmar
+Nearest Neighbour	Najbližji sosed
+Neutralize	Nevtraliziraj
+Neutrals	Nevtralne
+New	Novo
+New Adjustment Layer	Nova prilagoditvena plast
+New Channel	Nov kanal
+New Document	Nov dokument
+New Fill Layer	Nova zapolnitvena plast
+New Folder	Nova mapa
+New Guide	Novo vodilo
+New Guide Layout	Nova postavitev vodil
+New Guide Layout…	Nova postavitev vodil…
+New Guide…	Novo vodilo…
+New Layer	Nova plast
+New Layer Based Slice	Nova rezina na podlagi plasti
+New Selection	Nova izbira
+New Smart Object via Copy	Nov pametni predmet s kopiranjem
+New Snapshot	Nov posnetek
+New Spot Channel	Nov kanal dodatne barve
+New Spot Channel…	Nov kanal dodatne barve…
+New Style Preset	Nova prednastavitev sloga
+New Video Group	Nova video skupina
+New channel	Nov kanal
+New folder	Nova mapa
+New group	Nova skupina
+New layer	Nova plast
+New layer comp	Nova kompozicija plasti
+New note at the centre of the view	Nova opomba na sredini pogleda
+New path (saves the Work Path when it is selected)	Nova pot (shrani delovno pot, ko je izbrana)
+New set	Nov nabor
+New size	Nova velikost
+New style from the active layer	Nov slog iz dejavne plasti
+New tool preset from the active tool	Nova prednastavitev orodja iz dejavnega orodja
+New {noun} from the active text layer	Nov {noun} iz dejavne besedilne plasti
+New…	Novo…
+Next Blend Mode	Naslednji način zlivanja
+No Color	Brez barve
+No character styles yet. New records the active text layer's font, size and look.	Slogov znakov še ni. Novo zabeleži pisavo, velikost in videz dejavne besedilne plasti.
+No command loads a channel as the selection in this build; the Select menu's Load Selection restores a saved selection instead	Noben ukaz v tej različici ne naloži kanala kot izbire; Naloži izbiro v meniju Izbira namesto tega obnovi shranjeno izbiro
+No commands to bind	Ni ukazov za povezovanje
+No document	Ni dokumenta
+No document is open	Noben dokument ni odprt
+No export selected	Noben izvoz ni izbran
+No faces listed for this family name	Za to ime družine ni navedenih rezov
+No frames yet. Add frame makes an _a_ layer: each one is a frame, bottom first.	Sličic še ni. Dodaj sličico ustvari plast _a_: vsaka je ena sličica, od spodaj navzgor.
+No guide crosses the canvas	Nobeno vodilo ne prečka platna
+No installed family matches	Nobena nameščena družina se ne ujema
+No layer comps yet. New Layer Comp records every layer's visibility, position and appearance.	Kompozicij plasti še ni. Nova kompozicija plasti zabeleži vidnost, položaj in videz vsake plasti.
+No layers yet. Add one with the + button below.	Plasti še ni. Dodajte eno z gumbom + spodaj.
+No layers yet: each top-level layer gets a bar on the timeline.	Plasti še ni: vsaka plast najvišje ravni dobi vrstico na časovnici.
+No notes yet. Click the canvas with the Note tool (I), or New Note pins one at the centre of the view; notes are saved with the document and never exported.	Opomb še ni. Kliknite platno z orodjem Opomba (I) ali Nova opomba pripne eno na sredino pogleda; opombe se shranijo z dokumentom in se nikoli ne izvozijo.
+No open document is the same size as this one	Noben odprt dokument ni enake velikosti kot ta
+No paragraph styles yet. New records the active text layer's alignment, indents and spacing.	Slogov odstavkov še ni. Novo zabeleži poravnavo, zamike in razmike dejavne besedilne plasti.
+No pattern chosen — the overlay paints nothing.	Vzorec ni izbran — prekrivanje ne nariše ničesar.
+No patterns are defined yet	Vzorci še niso določeni
+No profile file was chosen	Datoteka profila ni bila izbrana
+No recent files yet	Nedavnih datotek še ni
+No selection has been saved	Nobena izbira ni bila shranjena
+No source recorded for this object	Za ta predmet ni zabeleženega vira
+No stop selected	Nobena točka ni izbrana
+No style presets yet. Define one with Layer > Layer Style > Define Style Preset, or add a Photoshop library with File > Open (.asl).	Prednastavitev slogov še ni. Določite eno z Plast > Slog plasti > Določi prednastavitev sloga ali dodajte knjižnico Photoshop z Datoteka > Odpri (.asl).
+No styles yet. The + button saves the active layer's style; File > Open loads an .asl style library.	Slogov še ni. Gumb + shrani slog dejavne plasti; Datoteka > Odpri naloži knjižnico slogov .asl.
+No such command	Takšnega ukaza ni
+No tool presets yet. New Tool Preset saves the active tool with its current options.	Prednastavitev orodij še ni. Nova prednastavitev orodja shrani dejavno orodje s trenutnimi možnostmi.
+Noise	Šum
+None	Brez
+Normal	Običajno
+Normal Map…	Naslikava normal…
+Not a hex colour	Ni šestnajstiška barva
+Not installed — shaping with	Ni nameščeno — oblikuje se z
+Not saved yet	Še ni shranjeno
+Notes	Pripisi
+Nothing has changed	Nič se ni spremenilo
+Nothing in this submenu is available right now	Nič v tem podmeniju trenutno ni na voljo
+Nothing is left to learn the background from: paint over it with the background brush.	Ni ostalo ničesar, iz česar bi se naučilo ozadje: prebarvajte ga s čopičem ozadja.
+Nothing to measure yet — paint or place something on this layer first	Še ni česa meriti — najprej narišite ali postavite nekaj na to plast
+Nothing to preview.	Ni česa predogledati.
+OK	V redu
+Oblique	Poševno
+Off: the wheel pans the view and Ctrl+wheel zooms	Izklopljeno: kolešček premika pogled, Ctrl+kolešček povečuje
+Offset…	Odmakni…
+Oil Paint…	Oljna slika…
+One page holding the flattened image; no vector content.	Ena stran s sploščeno sliko; brez vektorske vsebine.
+Onion skin	Čebulna lupina
+Only English is available in this build	V tej različici je na voljo samo angleščina
+Only a mask channel can be loaded as a selection here	Tu je mogoče kot izbiro naložiti samo kanal maske
+Only web-safe colours	Samo spletno varne barve
+Opacity	Neprosojnost
+Opacity 10%	Prekrivnost 10 %
+Opacity 100%	Prekrivnost 100 %
+Opacity 20%	Prekrivnost 20 %
+Opacity 30%	Prekrivnost 30 %
+Opacity 40%	Prekrivnost 40 %
+Opacity 50%	Prekrivnost 50 %
+Opacity 60%	Prekrivnost 60 %
+Opacity 70%	Prekrivnost 70 %
+Opacity 80%	Prekrivnost 80 %
+Opacity 90%	Prekrivnost 90 %
+Opacity jitter	Nihanje prekrivnosti
+Opacity key	Ključ prekrivnosti
+Opacity must be between 0% and 100%	Prekrivnost mora biti med 0 % in 100 %
+Opacity scales the layer and its effects; Fill scales the layer's own pixels only.	Prekrivnost spreminja plast in njene učinke; Polnilo spreminja samo lastne slikovne pike plasti.
+Opacity stops sit above the bar, colour stops below it.	Točke prekrivnosti so nad trakom, barvne točke pod njim.
+Open	Odpri
+Open .ABR…	Odpri .ABR…
+Open .ACO…	Odpri .ACO…
+Open .ASL…	Odpri .ASL…
+Open Recent	Odpri nedavno
+Open a document first	Najprej odprite dokument
+Open a document to animate it.	Odprite dokument, da ga animirate.
+Open a document to apply styles to its layers.	Odprite dokument, da uporabite sloge na njegovih plasteh.
+Open a document to insert glyphs into its text.	Odprite dokument, da vstavite glife v njegovo besedilo.
+Open a document to keep text styles in it.	Odprite dokument, da v njem hranite besedilne sloge.
+Open a document to lay guides out on it.	Odprite dokument, da nanj razporedite vodila.
+Open a document to pin notes on it.	Odprite dokument, da nanj pripnete opombe.
+Open a document to record layer comps.	Odprite dokument, da beležite kompozicije plasti.
+Open a document to see its CSS	Odprite dokument, da vidite njegov CSS
+Open a document to see its facts.	Odprite dokument, da vidite njegove podatke.
+Open a document to see its histogram	Odprite dokument, da vidite njegov histogram
+Open a document to see its history	Odprite dokument, da vidite njegovo zgodovino
+Open a document to see its properties	Odprite dokument, da vidite njegove lastnosti
+Open another document, or add another pixel layer, to match its colours.	Odprite drug dokument ali dodajte še eno slikovno plast, da uskladite njene barve.
+Open as	Odpri kot
+Open editor…	Odpri urejevalnik…
+Open or close the folder	Odpri ali zapri mapo
+Open the Adjustments panel	Odpri ploščo Prilagoditve
+Open…	Odpri…
+Operation	Operacija
+Orange	Oranžna
+Other	Drugo
+Out of gamut	Izven barvnega obsega
+Outer Glow	Zunanji sij
+Outer Glow…	Zunanji sij…
+Outline the path	Obriši pot
+Output	Izhod
+Output channel	Izhodni kanal
+Outside	Zunaj
+Overlay	Prekrij
+PBM…	PBM…
+PDF Presentation…	Predstavitev PDF…
+PDF…	PDF…
+PGM…	PGM…
+PNG…	PNG…
+PPM…	PPM…
+Page	Stran
+Page {n}	Stran {n}
+Page {page} opens at {w} x {h} px	Stran {page} se odpre pri {w} x {h} px
+Pages	Strani
+Paint	Slikanje
+Paint Filter Mask	Riši po maski filtra
+Paint Mask	Riši po maski
+Paint over the part to keep with the foreground brush first.	Najprej s čopičem ospredja prebarvajte del, ki ga želite obdržati.
+Paint over what to keep and over what to drop	Prebarvajte, kaj obdržati in kaj zavreči
+Paint the inside of the path	Pobarvaj notranjost poti
+Painting	Slikanje
+Paints a band along the active selection's border.	Nariše pas vzdolž obrobe dejavne izbire.
+Pair kerning	Spodsekavanje parov
+Palette	Paleta
+Paragraph	Odstavek
+Paragraph Style	Slog odstavka
+Paragraph Styles	Slogi odstavkov
+Particles…	Delci…
+Paste	Prilepi
+Paste Into	Prilepi v
+Paste Layer Style	Prilepi slog plasti
+Paste Outside	Prilepi zunaj
+Paste Special	Posebno lepljenje
+Paste in Place	Prilepi na mesto
+Path	Pot
+Path Blur…	Zameglitev po poti…
+Path editing lives in the Paths panel	Urejanje poti je na plošči Poti
+Paths	Krivulje
+Pattern	Vzorec
+Pattern Dither	Mešanje barv z vzorcem
+Pattern Overlay	Prekrij z vzorcem
+Pattern Overlay…	Prekrij z vzorcem…
+Pattern Preview	Predogled vzorca
+Pattern…	Vzorec…
+Pencil 1px	Svinčnik 1px
+Percent	Odstotkov
+Perceptual	Zaznavno
+Perspective	Perspektiva
+Perspective Warp	Perspektivno krivljenje
+Photo Filter	Foto sito
+Photo Filter…	Foto sito…
+Photography	Fotografija
+Picas	Pice
+Pick a filter; it applies at its default settings.	Izberite filter; uporabi se s privzetimi nastavitvami.
+Pin Light	Točkasta svetloba
+Pinch…	Vščip…
+Pixel Grid	Točkovna Mreža
+Pixel dimensions	Mere v slikovnih pikah
+Pixel mask	Maska slikovnih pik
+Pixel to Pixel	Slikovna pika v slikovno piko
+Pixelate	Pikčasto
+Pixels	Slikovne pike
+Place Embedded…	Postavi vdelano…
+Place Linked…	Postavi povezano…
+Play	Predvajaj
+Play from step	Predvajaj od koraka
+Play selection	Predvajaj izbiro
+Play this step (unchecked steps are passed over)	Predvajaj ta korak (neoznačeni koraki se preskočijo)
+Plays a recorded Action on every image in the source folder and saves each result to the destination.	Predvaja posneto dejanje na vsaki sliki iz izvorne mape in vsak rezultat shrani v cilj.
+Pointer	Kazalec
+Pointillize…	Pointilizem…
+Points	Točke
+Polar Coordinates…	Polarne koordinate…
+Position	Položaj
+Position is locked — unlock it in the Layers panel to move or resize	Položaj je zaklenjen — odklenite ga na plošči Plasti, da premikate ali spreminjate velikost
+Position key	Ključ položaja
+Posterize	Posterizirati
+Posterize…	Posterizirati…
+Precise Cursor	Natančen kazalec
+Preferences…	Prednastavitve…
+Preserve Transparency	Ohrani prozornost
+Preserve luminosity	Ohrani svetilnost
+Preset Manager…	Upravljalnik prednastavitev…
+Press a key…	Pritisnite tipko…
+Pressure controls flow	Pritisk nadzira pretok
+Pressure controls size	Pritisk nadzira velikost
+Preview	Predogled
+Preview against	Predogled na podlagi
+Preview is off.	Predogled je izklopljen.
+Previewed on the active layer; applied to its pixels as one undoable step.	Predogled na dejavni plasti; uporabljeno na njenih slikovnih pikah v enem koraku, ki ga je mogoče razveljaviti.
+Previous Blend Mode	Prejšnji način zlivanja
+Print Size	Velikost tiska
+Print as PDF…	Natisni kot PDF…
+Print size	Velikost tiska
+Prints the grayscale image through one to four inks, each through its own curve. The inks are applied to the pixels when the mode changes.	Natisne sivinsko sliko prek enega do štirih črnil, vsako prek svoje krivulje. Črnila se uporabijo na slikovnih pikah, ko se način spremeni.
+Print…	Natisni…
+Profile	Profil
+Profile from File…	Profil iz datoteke…
+Profiles are assigned to RGB documents	Profili se dodelijo dokumentom RGB
+Profiles are converted between in RGB documents	Profili se med seboj pretvarjajo v dokumentih RGB
+Profiles belong to RGB documents; convert to RGB first	Profili pripadajo dokumentom RGB; najprej pretvorite v RGB
+Proof Colors	Preizkusne barve
+Properties	Možnosti
+Puppet Warp	Lutkovno krivljenje
+Purge	Počisti pomnilnik
+Purple	Vijolična
+Quadtone	Štiribarvno
+Quality	Kakovost
+Quick Export Layer as PNG…	Hitri izvoz plasti kot PNG…
+Quit	Izhod
+RGB Color	Barve RGB
+Radial Blur…	Krožna zameglitev…
+Radius	Polmer
+Radius (px)	Polmer (px)
+Range	Razpon
+Raster Studio Help	Pomoč za Raster Studio
+Rasterize	Spremeni v točkovno sliko
+Reassign anyway	Vseeno znova dodeli
+Recent	Nedavno
+Record	Snemaj
+Record Source Size	Zabeleži velikost vira
+Record an Action in the Actions panel first	Najprej posnemite dejanje na plošči Dejanja
+Record an edit, then replay the whole sequence on any document with at least as many layers.	Posnemite urejanje, nato celotno zaporedje ponovite na katerem koli dokumentu z vsaj toliko plastmi.
+Record into set	Snemaj v nabor
+Recording: every edit is captured until Stop	Snemanje: vsako urejanje se zajame do Ustavi
+Red	Rdeča
+Redefine the selected {noun} from the active text layer, restyling every layer that uses it	Znova določi izbrani {noun} iz dejavne besedilne plasti in spremeni slog vsake plasti, ki ga uporablja
+Redo	Uveljavi
+Reds	Rdeče
+Reduce Colors	Manj barv
+Reduce Colors changed nothing: the layer already uses only colours of that palette	Zmanjšaj barve ni ničesar spremenilo: plast že uporablja samo barve te palete
+Reduce Colors: the layer now uses at most {n} colours	Zmanjšaj barve: plast zdaj uporablja največ {n} barv
+Reduce Colors…	Manj barv…
+Reduce Noise…	Zmanjšaj šum…
+Reduces the grayscale image to pure black and white. The layers are flattened into one, over white.	Zmanjša sivinsko sliko na čisto črno in belo. Plasti se sploščijo v eno, na belo.
+Reference point: Bottom	Referenčna točka: spodaj
+Reference point: Bottom Left	Referenčna točka: spodaj levo
+Reference point: Bottom Right	Referenčna točka: spodaj desno
+Reference point: Centre	Referenčna točka: sredina
+Reference point: Left	Referenčna točka: levo
+Reference point: Right	Referenčna točka: desno
+Reference point: Top	Referenčna točka: zgoraj
+Reference point: Top Left	Referenčna točka: zgoraj levo
+Reference point: Top Right	Referenčna točka: zgoraj desno
+Refine	Izboljšaj
+Refine Edge…	Izpili rob…
+Refine Mask	Izboljšaj masko
+Refine Mask…	Izboljšaj masko…
+Regular	Navadno
+Relative	Odnosno
+Relative Colorimetric	Relativno kolorimetrično
+Release Clipping Mask	Sprosti obrezovalno masko
+Release Notes	Opombe ob izdaji
+Relink to File…	Znova poveži z datoteko…
+Remove Black Matte	Odstrani črno podlago
+Remove Color Fringe	Odstrani barvni obrobek
+Remove Color Fringe…	Odstrani barvni obrobek…
+Remove Fringe	Odstrani obrobek
+Remove White Matte	Odstrani belo podlago
+Remove export	Odstrani izvoz
+Remove this instance of the effect	Odstrani ta primerek učinka
+Remove this shortcut	Odstrani to bližnjico
+Rename Layer	Preimenuj plast
+Rename Layer…	Preimenuj plast…
+Rename set	Preimenuj nabor
+Render	Upodobi
+Rendering the preview…	Upodabljanje predogleda…
+Repeat…	Ponovi…
+Replace Color	Nadomesti barvo
+Replace Color…	Nadomesti barvo…
+Replace Contents	Zamenjaj vsebino
+Replace Contents…	Zamenjaj vsebino…
+Replace existing guides	Zamenjaj obstoječa vodila
+Replay	Znova predvajaj
+Report an Issue	Prijavi težavo
+Reselect	Znova izberi
+Reset	Ponastavi
+Reset Transform	Ponastavi preoblikovanje
+Reset View Rotation	Ponastavi sukanje pogleda
+Reset all shortcuts	Ponastavi vse bližnjice
+Resize Canvas	Spremeni velikost platna
+Resize Images	Spremeni velikost slik
+Resize Images…	Spremeni velikost slik…
+Resolution	Ločljivost
+Resolution must be greater than zero	Ločljivost mora biti večja od nič
+Restore Layer	Obnovi plast
+Result	Rezultat
+Return this tool to its defaults	Vrni to orodje na privzete nastavitve
+Reveal All	Pokaži vse
+Reveal Selection	Razkrij izbor
+Reverse	Obrni
+Revert	Povrni
+Rewrites every pixel layer's numbers so the picture looks the same under the destination profile, as one undo step.	Prepiše vrednosti vsake slikovne plasti, da slika pod ciljnim profilom izgleda enako, v enem koraku razveljavitve.
+Right	Desno
+Right (narrow)	Desno (ozko)
+Right (wide)	Desno (široko)
+Right Edges	Desni robovi
+Right indent	Desni zamik
+Right-click a swatch to remove it	Z desno tipko kliknite vzorec barve, da ga odstranite
+Ring	Obroč
+Ripple…	Valovito…
+Rise	Dvigni
+Rotate	Zasukaj
+Rotate 180°	Zasukaj za 180°
+Rotate 90° Clockwise	Zasukaj za 90° v smeri urnega kazalca
+Rotate 90° Counter Clockwise	Zasukaj za 90° v nasprotni smeri urnega kazalca
+Rotate Canvas	Zasukaj platno
+Rotate the active layer so the measured line is level (Enter)	Zasukaj dejavno plast, da bo izmerjena črta vodoravna (Enter)
+Rotates the canvas and every layer. Right angles are pixel-exact; other angles resample.	Zasuka platno in vse plasti. Pravi koti so natančni na slikovno piko; drugi koti se prevzorčijo.
+Rotation key	Ključ sukanja
+Round	Okroglo
+Round (computed)	Okroglo (izračunano)
+Rounded Steps	Zaobljeni koraki
+Roundness jitter	Nihanje okroglosti
+Rows	Vrstice
+Rulers	Ravnila
+Run	Zaženi
+SVG…	SVG…
+Same Radii	Enake zaokrožitve
+Sample a colour from the canvas	Vzorči barvo s platna
+Sample radius	Polmer vzorčenja
+Sampled	Vzorčeno
+Sampled colour	Vzorčena barva
+Sampled tip not loaded; painting round	Vzorčena konica ni naložena; riše se okroglo
+Satin…	Saten…
+Saturation	Nasičenost
+Saturation jitter	Nihanje nasičenosti
+Save	Shrani
+Save As	Shrani kot
+Save As…	Shrani kot…
+Save Brush	Shrani čopič
+Save Selection	Shrani izbiro
+Save Selection…	Shrani izbiro…
+Save actions	Shrani dejanja
+Save as PSD…	Shrani kot PSD…
+Save current brush	Shrani trenutni čopič
+Save selection as channel	Shrani izbiro kot kanal
+Saves every image in the source folder to the destination in another format, quality or size.	Shrani vsako sliko iz izvorne mape v cilj v drugem formatu, kakovosti ali velikosti.
+Scale	Moč
+Scale %	Merilo %
+Scale Effects	Spremeni merilo učinkov
+Scale Effects…	Spremeni merilo učinkov…
+Scale H	Merilo V
+Scale V	Merilo N
+Scale key	Ključ merila
+Scale:	Merilo:
+Scales every size and distance of the active layer's style as one undo step.	Spremeni vsako velikost in razdaljo sloga dejavne plasti v enem koraku razveljavitve.
+Scaling by 100% changes nothing	Merilo 100 % ne spremeni ničesar
+Scratch directory	Začasna mapa
+Screen	Zaslon
+Screen, print and social presets	Prednastavitve za zaslon, tisk in družbena omrežja
+Script…	Skript…
+Scroll wheel zooms instead of scrolling	Kolešček miške povečuje namesto pomikanja
+Search Commands…	Iskanje ukazov…
+Search layers	Iskanje plasti
+Search layers by name	Iskanje plasti po imenu
+Select	Izberi
+Select All	Izberi vse
+Select Bottom Layer	Izberi spodnjo plast
+Select Layer Above	Izberi plast zgoraj
+Select Layer Below	Izberi plast spodaj
+Select Linked Layers	Izberi povezane plasti
+Select None	Ne izberi ničesar
+Select Top Layer	Izberi zgornjo plast
+Select a layer first	Najprej izberite plast
+Select a layer to see its CSS	Izberite plast, da vidite njen CSS
+Select a layer to see its properties	Izberite plast, da vidite njene lastnosti
+Select a layer: a click on a style applies it to the active layer.	Izberite plast: klik na slog ga uporabi na dejavni plasti.
+Select a path first	Najprej izberite pot
+Select a text layer, or type into one: a click inserts the glyph at the caret.	Izberite besedilno plast ali tipkajte vanjo: klik vstavi glif na mesto kazalke.
+Select a text layer to edit its type	Izberite besedilno plast, da uredite njeno besedilo
+Select every pixel near one colour	Izberi vse slikovne pike blizu ene barve
+Selection	Izbor
+Selection Edges	Robovi izbire
+Selection: white is replaced, black is kept.	Izbira: belo se zamenja, črno se ohrani.
+Selective Color	Izberi Barvo
+Selective Color…	Izberi Barvo…
+Selects a band of this width along the selection's edge	Izbere pas te širine vzdolž roba izbire
+Semi Condensed	Delno zožano
+Semi Expanded	Delno razširjeno
+Semibold	Polkrepko
+Send Backward	Nazaj
+Send to Back	V ozadje
+Separate documents	Ločeni dokumenti
+Separate keywords with commas or semicolons.	Ključne besede ločite z vejicami ali podpičji.
+Sepia	Sepija
+Set	Nabor
+Set the History Brush to paint from this state (the marked row)	Nastavi čopič zgodovine, da riše iz tega stanja (označena vrstica)
+Shadows	Sence
+Shadows/Highlights	Sence/svetli deli
+Shadows/Highlights…	Sence/svetli deli…
+Shape	Oblika
+Shape Dynamics	Dinamika oblike
+Shape Mosaic…	Mozaik oblik…
+Shape Properties	Lastnosti oblike
+Sharpen	Ostro
+Sharpen Edges	Ostri robovi
+Sharpen More	Več ostrine
+Sharpest, with a little ringing on hard edges.	Najostrejše, z nekaj odzvanjanja na trdih robovih.
+Shear…	Nagni…
+Shift Edge	Premakni rob
+Show	Pokaži
+Show / Hide Layer	Pokaži / skrij plast
+Show / hide layer	Pokaži / skrij plast
+Show / hide the effects list	Pokaži / skrij seznam učinkov
+Show / hide the layer style	Pokaži / skrij slog plasti
+Show / hide this channel	Pokaži / skrij ta kanal
+Show / hide this effect	Pokaži / skrij ta učinek
+Show / hide this path	Pokaži / skrij to pot
+Show / hide this smart filter	Pokaži / skrij ta pametni filter
+Show Layers	Pokaži plasti
+Show every layer	Pokaži vse plasti
+Show or hide the position, size and alignment fields	Pokaži ali skrij polja položaja, velikosti in poravnave
+Show or hide the recorded steps	Pokaži ali skrij posnete korake
+Show or hide the set's actions	Pokaži ali skrij dejanja nabora
+Show this alpha channel alone in grayscale and paint into it; click again to store it	Pokaži samo ta kanal alfa v sivinah in riši vanj; kliknite znova, da ga shranite
+Sides	Strani
+Similar	Podobno
+Size	Velikost
+Size jitter	Nihanje velikosti
+Skew	Nagni
+Skewness	Asimetrija
+Slice Options	Možnosti izreza
+Slice Options…	Možnosti izreza…
+Slices	Izrezi
+Slices from Guides	Izrezi iz vodil
+Slices…	Izrezi…
+Small	Malo
+Small Caps	Pomanjšane velike črke
+Smart Blur…	Pametna zameglitev…
+Smart Filter	Pametni filter
+Smart Filters	Pametna sita
+Smart Guides	Pametna vodila
+Smart Object	Pameten predmet
+Smart Sharpen…	Pametno ostrenje…
+Smart filter mask: click to paint on it	Maska pametnega filtra: kliknite, da rišete po njej
+Smooth	Zmehčan
+Smooth Selection	Zgladi izbiro
+Smooth draws grey-scale edges; None draws hard, aliased edges. The glyph scaler has one smooth mode, so Sharp, Crisp and Strong are not offered.	Gladko riše sivinske robove; Brez riše trde, nazobčane robove. Rasterizator glifov ima en sam gladek način, zato Ostro, Jasno in Močno niso na voljo.
+Smooth…	Zmehčan…
+Snap	Pripni
+Snap To	Pripni na
+Soft Light	Mehka svetloba
+Soft Round 100	Mehek okrogel 100
+Soft Round 24	Mehek okrogel 24
+Soft and cheap. Good for a small enlargement.	Mehko in hitro. Dobro za majhno povečanje.
+Softer Brush	Mehkejši čopič
+Solarize	Solariziraj
+Solid Color…	Enobarvno polnilo…
+Solidity	Trdnost
+Source	Izvor
+Source 1	Vir 1
+Source 2	Vir 2
+Source Space	Izvorni prostor
+Spectrum	Spekter
+Spherize…	Zaobli…
+Spin Blur…	Vrtinčna zameglitev…
+Splits the active layer into Linear Light detail layers over a residual, finest on top; together they recomposite to the layer.	Razdeli dejavno plast na plasti podrobnosti v Linearni svetlobi nad ostankom, najfinejšo na vrhu; skupaj znova sestavijo plast.
+Spot Channel	Kanal dodatne barve
+Spot Channel Options…	Možnosti kanala dodatne barve…
+Spot channel: composited over the image as its ink	Kanal dodatne barve: sestavljen nad sliko kot njeno črnilo
+Square	Kvadrat
+Squeeze	Stisni
+Stack Mode	Nalagalni način
+Stamp Visible	Odtisni vidne
+Standard	Standardno
+Standard Deviation	Standardni odklon
+Standard ligatures	Standardne ligature
+Step Backward	Korak nazaj
+Step Forward	Korak naprej
+Stop	Ustavi
+Straighten Layer	Poravnaj plast
+Strength	Jakost
+Stroke	Obroba
+Stroke path with the foreground colour at the brush size, on a new shape layer	Obriši pot z barvo ospredja v velikosti čopiča, na novi plasti oblike
+Stroke…	Obroba…
+Style	Slog
+Styles	Slogi
+Styles enabled	Slogi omogočeni
+Stylize	Poenostavi
+Sub	Podpis
+Subject	Motiv
+Subtract	Odštej
+Subtract Front Shape	Odštej sprednjo obliko
+Subtract from Selection	Odštej od izbire
+Summation	Seštevek
+Sunset	Sončni zahod
+Super	Nadpis
+Superscript raises and shrinks the text; subscript lowers and shrinks it.	Nadpisano dvigne in pomanjša besedilo; podpisano ga spusti in pomanjša.
+Surface Blur…	Površinska zameglitev…
+Swap colours  (X)	Zamenjaj barvi  (X)
+Swap foreground and background (X)	Zamenjaj ospredje in ozadje (X)
+Swatches	Barve
+TGA…	TGA…
+TIF…	TIF…
+Templates	Predloge
+Text	Besedilo
+Text Properties	Lastnosti besedila
+Text overflows the box	Besedilo presega okvir
+Text replacement	Zamenjava besedila
+Texture Dilation…	Širjenje teksture…
+That channel is no longer in the document	Tega kanala ni več v dokumentu
+That file could not be used:	Te datoteke ni bilo mogoče uporabiti:
+The CSV ends inside a quoted field	CSV se konča znotraj polja v narekovajih
+The CSV has a header but no data sets	CSV ima glavo, nima pa naborov podatkov
+The CSV is empty	CSV je prazen
+The CSV names a variable that is not defined:	CSV poimenuje spremenljivko, ki ni določena:
+The active layer is not in the document	Dejavne plasti ni v dokumentu
+The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	Dejavni pametni predmet po vrsti prikaže vsako sliko iz izvorne mape; vsak rezultat se izvozi kot PNG v ciljno mapo.
+The amount must be within	Količina mora biti znotraj
+The angle must be a finite number of degrees	Kot mora biti končno število stopinj
+The balanced default for photographs.	Uravnotežena privzeta nastavitev za fotografije.
+The canvas grows to fit the rotated image.	Platno se poveča, da se vanj prilega zasukana slika.
+The canvas must be at least 1 x 1 pixel	Platno mora imeti vsaj 1 x 1 slikovno piko
+The cell size must be 2 to 200 pixels	Velikost celice mora biti od 2 do 200 slikovnih pik
+The cut is empty: paint more of the part to keep.	Izrez je prazen: prebarvajte več dela, ki ga želite obdržati.
+The destination is the profile the document already has	Cilj je profil, ki ga dokument že ima
+The destination must be another folder than the source.	Cilj mora biti druga mapa kot vir.
+The document has no layers	Dokument nima plasti
+The document is already in {name}	Dokument je že v {name}
+The document is already tagged with this profile	Dokument je že označen s tem profilom
+The document is already tagged {name}	Dokument je že označen kot {name}
+The document's own profile: {error}	Lastni profil dokumenta: {error}
+The first {shown} of {n} pages are listed; a longer file opens only those.	Navedenih je prvih {shown} od {n} strani; daljša datoteka odpre samo te.
+The image has no opaque pixels to count	Slika nima neprosojnih slikovnih pik za štetje
+The ink is laid over the image; the selection, if there is one, is where it prints.	Črnilo se nanese čez sliko; izbira, če obstaja, določa, kje se tiska.
+The last stop has no segment after it.	Zadnja točka za seboj nima odseka.
+The layer has no pixels to cut.	Plast nima slikovnih pik za izrez.
+The layer's pixels are locked	Slikovne pike plasti so zaklenjene
+The list is empty	Seznam je prazen
+The margins and gutters leave no room for a column or a row	Robovi in razmiki ne puščajo prostora za stolpec ali vrstico
+The margins and gutters leave no room for a column or a row.	Robovi in razmiki ne puščajo prostora za stolpec ali vrstico.
+The name cannot be empty	Ime ne sme biti prazno
+The name has not changed	Ime se ni spremenilo
+The name is the file File > Export > Slices writes this slice as. The URL and Alt Tag go into the HTML page it writes beside the images.	Ime je datoteka, pod katero Datoteka > Izvozi > Rezine zapiše to rezino. URL in oznaka Alt gresta v stran HTML, ki se zapiše poleg slik.
+The new canvas is smaller — content outside it will be clipped.	Novo platno je manjše — vsebina zunaj njega bo odrezana.
+The next text layer the Type tool creates starts with this style.	Naslednja besedilna plast, ki jo ustvari orodje Besedilo, se začne s tem slogom.
+The panel is already on this side	Plošča je že na tej strani
+The path encloses no pixel of the canvas	Pot ne obdaja nobene slikovne pike platna
+The position must be a finite number	Položaj mora biti končno število
+The preview runs the real brush engine.	Predogled poganja pravi mehanizem čopičev.
+The resolution must be 1 to 2400 ppi	Ločljivost mora biti od 1 do 2400 ppi
+The resolution must be {min} to {max} dpi	Ločljivost mora biti od {min} do {max} dpi
+The rulers and the size readouts use this unit	Ravnila in odčitki velikosti uporabljajo to enoto
+The scale must be between 1% and 1000%	Merilo mora biti med 1 % in 1000 %
+The selection is kept with the document under this name	Izbira se hrani z dokumentom pod tem imenom
+The source and destination must be different folders	Vir in cilj morata biti različni mapi
+The steps this snapshot named have been discarded	Koraki, ki jih je poimenoval ta posnetek, so zavrženi
+The table needs a name	Tabela potrebuje ime
+The warp has not changed	Krivljenje se ni spremenilo
+There are no guides to slice along	Ni vodil, vzdolž katerih bi rezali
+There are no slices to clear	Ni rezin za čiščenje
+There is no history to clear	Ni zgodovine za čiščenje
+There is no live selection to combine with	Ni dejavne izbire, s katero bi združili
+These are matrix-shaper profiles, which carry no perceptual or saturation tables: those two intents convert as Relative Colorimetric.	To so matrični profili, ki nimajo zaznavnih tabel niti tabel nasičenosti: ta dva namena se pretvorita kot Relativno kolorimetrično.
+Thin	Tanko
+Third-party notices	Obvestila tretjih oseb
+This Layer	Ta plast
+This adjustment has no panel controls	Ta prilagoditev nima kontrolnikov na plošči
+This adjustment has no settings.	Ta prilagoditev nima nastavitev.
+This build keeps channels on layers; it has no free-standing alpha channels yet	Ta različica hrani kanale na plasteh; samostojnih kanalov alfa še nima
+This effect is off. Tick it in the list to edit it.	Ta učinek je izklopljen. Označite ga na seznamu, da ga uredite.
+This format cannot store CMYK, so the document is written as RGB. Choose JPEG or TIFF for CMYK.	Ta format ne more shraniti CMYK, zato se dokument zapiše kot RGB. Za CMYK izberite JPEG ali TIFF.
+This format could not be previewed.	Tega formata ni bilo mogoče predogledati.
+This format has no metadata slot: nothing is embedded	Ta format nima prostora za metapodatke: nič se ne vdela
+This format has no palette, so the indexed colours are written as RGB. Choose PNG or GIF for the palette.	Ta format nima palete, zato se indeksirane barve zapišejo kot RGB. Za paleto izberite PNG ali GIF.
+This format stores 8 bits per channel	Ta format shrani 8 bitov na kanal
+This is a Lab document. No format here stores Lab, so it is converted to RGB on export.	To je dokument Lab. Noben format tukaj ne shrani Lab, zato se ob izvozu pretvori v RGB.
+This layer has no mask	Ta plast nima maske
+This panel is already at the bottom of its dock	Ta plošča je že na dnu svojega sidrišča
+This panel is already at the top of its dock	Ta plošča je že na vrhu svojega sidrišča
+This tool has no options	To orodje nima možnosti
+This tool is already at its defaults	To orodje je že na privzetih nastavitvah
+This window cannot read screen pixels, so the eyedropper is unavailable	To okno ne more brati slikovnih pik zaslona, zato kapalka ni na voljo
+This works on a pixel layer; the active layer is a {kind}	To deluje na slikovni plasti; dejavna plast je {kind}
+This works on an 8-bit document	To deluje na 8-bitnem dokumentu
+This works on an RGB document	To deluje na dokumentu RGB
+Threshold	Prag
+Threshold…	Prag…
+Thumbnail Size	Velikost sličic
+Thumbnail size	Velikost sličic
+Thumbnails by Document	Sličice po dokumentu
+Thumbnails by Layer	Sličice po plasti
+Tiles/List	Ploščice/seznam
+Tiles…	Ploščice…
+Tilt-Shift…	Nagib in zamik…
+Timeline	Časovnica
+Tint	Obarvanje
+Tint hue	Odtenek obarvanja
+Tint saturation	Nasičenost obarvanja
+To canvas	Na platno
+Toggle Link	Preklopi povezavo
+Tonal width	Tonska širina
+Tone	Ton
+Tone and Detail	Ton in podrobnosti
+Tool Presets	Prednastavitve orodja
+Top	Zgoraj
+Top Edges	Zgornji robovi
+Top Left	Zgoraj levo
+Top Left Pixel Color	Barva zgornje leve slikovne pike
+Top Right	Zgoraj desno
+Top left	Zgoraj levo
+Top right	Zgoraj desno
+Trace Contour…	Očrtaj obris…
+Traces the active layer's colours into shape layers, one per colour.	Sledi barvam dejavne plasti v plasti oblik, eno na barvo.
+Transform	Preoblikuj
+Transform Layer	Preoblikuj plast
+Transform Selection	Preoblikuj izbor
+Transparency	Prosojnost
+Transparent Pixels	Prosojne slikovne pike
+Trim	Odreži
+Trim Away	Odreži
+Trim…	Odreži…
+Tritone	Tribarvno
+Turn on Resample to change the pixel count.	Vklopite Prevzorči, da spremenite število slikovnih pik.
+Twirl…	Zvrtinči…
+Twist	Zvij
+Two variables share a name	Dve spremenljivki imata isto ime
+Type	Vrsta
+Type a zoom level	Vnesite raven povečave
+Type is edited in Character and Paragraph	Besedilo se ureja v Znaku in Odstavku
+Type tool defaults	Privzete nastavitve orodja Besedilo
+UI scale	Merilo vmesnika
+URL	URL
+US Letter	US Letter
+Ultra Condensed	Ultra zožano
+Ultra Expanded	Ultra razširjeno
+Underlying Layer	Spodnja plast
+Undo	Razveljavi
+Ungroup Layers	Razdruži plasti
+Uniform	Enakomerna
+Unite Shapes	Združi oblike
+Units	Enote
+Unmake Frames	Razveljavi sličice
+Unsaved changes	Neshranjene spremembe
+Unsharp Mask…	Krinka neostrine…
+Update the applied comp from the layers	Posodobi uporabljeno kompozicijo iz plasti
+Use Black Point Compensation	Uporabi kompenzacijo črne točke
+Use global light	Uporabi globalno svetlobo
+Using:	Uporablja:
+Vanishing Point…	Izginjajoča točka…
+Variables	Spremenljivke
+Variance	Varianca
+Vector Mask	Vektorska krinka
+Vector density	Vektorska gostota
+Vector enabled	Vektor omogočen
+Vector feather	Vektorsko mehčanje
+Vector invert	Vektorski negativ
+Vector mask	Vektorska maska
+Vectorize	Vektoriziraj
+Vectorize Bitmap	Točkovno v vektorsko
+Vectorize Bitmap…	Točkovno v vektorsko…
+Vertical Centers	Navpična središča
+Vertical Distortion	Navpično popačenje
+Vertical center guide	Navpično sredinsko vodilo
+Vertical scale, in percent: stretches the glyphs about the baseline; leading is unchanged	Navpično merilo, v odstotkih: raztegne glife okoli osnovnice; razmik vrstic se ne spremeni
+Vertically	Navpično
+Vibrance	Živost
+Vibrance…	Živost…
+View	Ogled
+Violet	Vijolična
+Visibility	Vidnost
+Visible adjustment layers	Vidne prilagoditvene plasti
+Vivid Light	Živa svetloba
+W	Š
+WEBP…	WEBP…
+Waiting for the composite…	Čakanje na sestavljeno sliko…
+Warm	Toplo
+Warp	Ukrivi
+Warp Style	Slog krivljenja
+Warp Text	Ukrivi besedilo
+Warp Text…	Ukrivi besedilo…
+Wave	Val
+Wavelet Decompose	Valčna razgradnja
+Wavelet Decompose splits into 2 to 7 scales	Valčna razgradnja deli na 2 do 7 lestvic
+Wavelet Decompose works on an sRGB document	Valčna razgradnja deluje na dokumentu sRGB
+Wavelet Decompose: the layer has no pixels	Valčna razgradnja: plast nima slikovnih pik
+Wavelet Decompose: {n} detail layers over a residual; the source layer is hidden	Valčna razgradnja: {n} plasti podrobnosti nad ostankom; izvorna plast je skrita
+Wavelet Decompose…	Valčna razgradnja…
+Wave…	Val…
+Web (216)	Splet (216)
+WebP (lossless)	WebP (brez izgub)
+WebP (lossy)	WebP (z izgubami)
+Weight	Debelina
+White	Bela
+White to Black	Bela v črno
+Whites	Bele
+Width	Širina
+Width and height must be at least 1 pixel	Širina in višina morata biti vsaj 1 slikovna pika
+Width must be between 1 and 250 pixels	Širina mora biti med 1 in 250 slikovnimi pikami
+Width to 110%	Širina na 110 %
+Width to 125%	Širina na 125 %
+Width to 80%	Širina na 80 %
+Width to 90%	Širina na 90 %
+Window	Okno
+Wind…	Veter…
+With Handles	Z ročicami
+Work Path	Delovna pot
+Workspace	Delovni prostor
+Wrap to box	Prelomi v okvir
+Writes the visible adjustment layers, applied to an identity lattice, as a 3D LUT (.cube).	Zapiše vidne prilagoditvene plasti, uporabljene na identitetni mreži, kot 3D LUT (.cube).
+Written as CMYK: a naive ink model, not an ICC press profile.	Zapisano kot CMYK: preprost model črnila, ne tiskarski profil ICC.
+Written as XMP into PNG, JPEG and TIFF files by Export As.	Izvozi kot zapiše kot XMP v datoteke PNG, JPEG in TIFF.
+Written with the document's palette.	Zapisano s paleto dokumenta.
+Yellow	Rumena
+Yellow / Blue	Rumena / modra
+Yellows	Rumene
+ZigZag…	Cikcak…
+Zoom In	Približaj
+Zoom Out	Oddalji
+Zoom in	Povečaj
+Zoom out	Pomanjšaj
+Zoom to Selection	Povečaj na izbiro
+a layer could not be rewritten	plasti ni bilo mogoče prepisati
+before / after	prej / potem
+changed	spremenjeno
+content thumbnail — click to edit the layer's pixels	sličica vsebine — kliknite za urejanje slikovnih pik plasti
+dpi	dpi
+edits are aimed at this mask — right-click for view and mask options	urejanja so usmerjena v to masko — desni klik za možnosti pogleda in maske
+lines past the box	vrstic zunaj okvirja
+mask off	maska izklopljena
+mask thumbnail — click to edit the layer's mask	sličica maske — kliknite za urejanje maske plasti
+minutes (0 is off)	minut (0 je izklopljeno)
+no drop	brez spusta
+px	px
+records here	snema sem
+skipped on play:	preskočeno pri predvajanju:
+the layers could not be added	plasti ni bilo mogoče dodati
+the profile cannot be transformed ({error})	profila ni mogoče preoblikovati ({error})
+to	do
+vector mask thumbnail — click to edit the vector mask	sličica vektorske maske — kliknite za urejanje vektorske maske
+{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time	{format}: časovnica, {frames} sličic pri {fps} fps v {length} ms; vsaka sličica prikaže plasti v svojem trenutku
+{label} is not answered by this route	{label} na tej poti nima odgovora
+{label} was refused: {reason}	{label} je zavrnjen: {reason}
+{name} Residual	{name} ostanek
+{name} Scale {k}	{name} lestvica {k}
+{name}: {n} pages	{name}: {n} strani
+{n} slices from the guides ({cols} x {rows}); they replace the slices there were	{n} rezin iz vodil ({cols} x {rows}); nadomestijo dosedanje rezine
+{path} is a {space} profile; an RGB document takes an RGB profile	{path} je profil {space}; dokument RGB sprejme profil RGB
+{path} is {len} bytes, larger than any colour profile	{path} ima {len} bajtov, več kot kateri koli barvni profil
+{reason}; this one is {space}	{reason}; ta je {space}
+16 Bits	16 bitov
+8 Bits	8 bitov
+AVIF…	AVIF…
+Blank preview image	Prazna slika predogleda
+Byte Order	Vrstni red bajtov
+Depth	Globina
+Duplicate Into…	Podvoji v…
+Guides from Layer	Vodila iz plasti
+Minify the file	Pomanjšaj datoteko
+Nothing under the pointer for this row	Pod kazalcem ni ničesar za to vrstico
+Make Work Path	Ustvari delovno pot
+RAW…	RAW…
+Remove Anchor Point	Odstrani sidrno točko
+Remove Path	Odstrani pot
+Make Selection	Ustvari izbiro
+Divide…	Deli…
+Right-click on an anchor point of the path	Z desno tipko kliknite sidrno točko poti
+Right-click inside a path	Z desno tipko kliknite znotraj poti
+Save PSD/PSB	Shrani PSD/PSB
+Save PSD/PSB…	Shrani PSD/PSB…
+Select or draw a path first	Najprej izberite ali narišite pot
+Right-click on a text layer	Z desno tipko kliknite besedilno plast
+Right-click inside a slice	Z desno tipko kliknite znotraj rezine
+Divide Slices	Razdeli rezine
+N equal parts	N enakih delov
+N pixels per part	N slikovnih pik na del
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Razreže rezino, ki ste jo kliknili z desno tipko, ali platno, če je ni bilo, v mrežo rezin.
+Tick Horizontally or Vertically	Označite Vodoravno ali Navpično
+These settings make no cut: raise N or pick a smaller pixel count	Te nastavitve ne režejo ničesar: povečajte N ali izberite manjše število slikovnih pik
+Cancel (Esc)	Prekliči (Esc)
+All Documents	Vsi dokumenti
+Select Source	Izberi vir
+Alt	Alt
+Turn into JPG	Pretvori v JPG
+ZIP for pixel data	ZIP za podatke slikovnih pik
+a	a
+b	b
+Open a document to see its memory	Odprite dokument, da vidite njegov pomnilnik
+Image data	Podatki slike
+{undo} undo / {redo} redo steps	korakov razveljavitve: {undo} / uveljavitve: {redo}
+Holds copied pixels	Vsebuje kopirane slikovne pike
+{size} ({tiles} tiles)	{size} ({tiles} ploščic)
+Empty	Prazno
+Purge Clipboard	Počisti odložišče
+Purge Histories	Počisti zgodovine
+Purge All	Počisti vse
+Make	Ustvari
+There is no path; draw one or select it in the Paths panel	Poti ni; narišite jo ali jo izberite na plošči Poti
+Artboards	Risalne deske
+No Slices	Brez rezin
+All Slices	Vse rezine
+User Slices	Uporabniške rezine
+Put the file into ZIP	Postavi datoteko v ZIP
+Reverse pages	Obrni vrstni red strani

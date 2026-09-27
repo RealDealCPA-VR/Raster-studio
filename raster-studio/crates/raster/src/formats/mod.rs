@@ -26,7 +26,7 @@
 //! | EPS (W15-E) | the PostScript artwork, run by the bounded interpreter in [`postscript`]; the embedded TIFF / WMF / EPSI preview when that cannot draw it, saying why | no | [`vector_docs`], [`postscript`] |
 //! | Paint.NET PDN, Sketch, Adobe XD, Figma FIG (W13-D) | the embedded preview only, with a sentence saying so; a bare `fig-kiwi` canvas is refused by name | no | [`vector_docs`] |
 //! | DNG (W13-C) | CFA or linear raw, uncompressed or lossless JPEG: developed to 16-bit sRGB | no | [`raw`] |
-//! | CR2, CR3, NEF, ARW, RAF, ORF, RW2 (W13-C) | **refused by name**: no permissive reader (see [`raw`]) | no | [`raw`] |
+//! | CR2, NEF, ARW, RAF, ORF, RW2, PEF, SRW (W18-D) | this crate's own decoders, developed through the DNG path: CR2 lossless JPEG; ARW 2 curve-compressed; uncompressed NEF / ARW / RAF (Bayer and X-Trans) / ORF / RW2 / PEF / SRW. **Refused by name**: CR3, Nikon Huffman NEF, compressed RAF / ORF / RW2, Sony lossless ARW (see [`raw`]'s `vendor` module) | no | [`raw`] |
 //!
 //! W15-A: AVIF and HEIC are read, but never in the calling process. The
 //! decoders (`rusty_av1d` 1.2.0, a BSD-2-Clause rav1d fork, and `heic-rs`
@@ -72,7 +72,17 @@ mod ljpeg;
 // W13-L: MP4 (AV1) video export, and the refusal a video file gets on open.
 pub mod mp4;
 pub mod pnm;
-// W13-C: camera RAW: DNG developed, vendor RAWs refused by name.
+/// W18-H: PowerVR `.pvr` (version 3) textures.
+#[path = "pvr_w18.rs"]
+pub mod pvr;
+/// W18-H: Pixlr `.pxz` documents, as vector layers.
+#[path = "pxz_w18.rs"]
+pub mod pxz;
+/// W18-H: the Photoshop layers a TIFF carries (tag 37724), as a `.psd`.
+#[path = "tiff_layers_w18.rs"]
+pub mod tiff_layers;
+// W13-C: camera RAW: DNG developed. W18-D: vendor RAWs decoded where their
+// encoding is uncompressed or openly documented, else refused by name.
 pub mod raw;
 pub mod xcf;
 
@@ -234,7 +244,8 @@ pub(super) fn probe<R: Read>(
         | ImportFormat::Xd
         | ImportFormat::Fig => vector_docs::probe(format, &bytes, limits),
         ImportFormat::Dng => raw::probe(&bytes, limits),
-        ImportFormat::CameraRaw => Err(raw::refusal(&bytes)),
+        // W18-D: the vendor RAWs this build decodes (see `raw::vendor`).
+        ImportFormat::CameraRaw => raw::vendor::probe(&bytes, limits),
         // W16-L.
         f if more_formats_w16::owns(f) => more_formats_w16::probe(f, &bytes, limits),
         other => Err(not_ours(other)),
@@ -267,7 +278,8 @@ pub(super) fn decode<R: Read>(
         | ImportFormat::Xd
         | ImportFormat::Fig => vector_docs::decode(format, &bytes, limits),
         ImportFormat::Dng => raw::decode(&bytes, limits),
-        ImportFormat::CameraRaw => Err(raw::refusal(&bytes)),
+        // W18-D: the vendor RAWs this build decodes (see `raw::vendor`).
+        ImportFormat::CameraRaw => raw::vendor::decode(&bytes, limits),
         // W16-L.
         f if more_formats_w16::owns(f) => more_formats_w16::decode(f, &bytes, limits),
         other => Err(not_ours(other)),

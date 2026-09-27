@@ -84,6 +84,80 @@ pub enum ChannelKind {
     Component(usize),
     /// A layer mask, shown as an alpha channel.
     Mask { layer: LayerId, mask: MaskId },
+    /// W18-C: a set of colour components chosen together (Shift-click adds a
+    /// component to the selection, Photopea's gesture) or one component of a
+    /// CMYK / Lab document. `mask` has bit `i` set for component `i` of
+    /// `model`'s list ([`model_component_names`]).
+    ///
+    /// A single RGB component stays [`ChannelKind::Component`], so the chord
+    /// hints, the Load Channel route and every existing caller keep the kind
+    /// they always had; this variant is what the row selection becomes when
+    /// it names anything else.
+    Components { mask: u8, model: ChannelModel },
+}
+
+/// W18-C: the colour model a document's component rows describe, read from
+/// `DocumentMeta::color_mode` (the tiles are RGBA in every mode; the mode
+/// decides which components the panel lists and edits).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum ChannelModel {
+    /// Red, green and blue (every mode that is not CMYK or Lab).
+    Rgb,
+    /// Cyan, magenta, yellow and black.
+    Cmyk,
+    /// Lightness, a and b.
+    Lab,
+}
+
+impl ChannelModel {
+    /// The model of a document, from its colour mode.
+    pub fn of(doc: &Document) -> Self {
+        match doc.meta.color_mode {
+            editor_core::color_mode::mode::CMYK => ChannelModel::Cmyk,
+            editor_core::color_mode::mode::LAB => ChannelModel::Lab,
+            _ => ChannelModel::Rgb,
+        }
+    }
+
+    /// How many colour components the model has.
+    pub fn component_count(self) -> usize {
+        match self {
+            ChannelModel::Cmyk => 4,
+            ChannelModel::Rgb | ChannelModel::Lab => 3,
+        }
+    }
+
+    /// The mask naming every component: selecting all of them is the
+    /// composite.
+    pub fn all_mask(self) -> u8 {
+        (1u8 << self.component_count()) - 1
+    }
+}
+
+/// W18-C: the component names of a model, through the catalogue. The RGB
+/// list is [`component_names`]'s (the colour-space-derived names).
+pub fn model_component_names(model: ChannelModel, mode: &ColorSpace) -> Vec<String> {
+    use crate::strings::tr;
+    let keys: &[&str] = match model {
+        ChannelModel::Rgb => {
+            return component_names(mode)
+                .iter()
+                .map(|n| (*n).to_string())
+                .collect()
+        }
+        ChannelModel::Cmyk => &[
+            "ui.w18.channels.cyan",
+            "ui.w18.channels.magenta",
+            "ui.w18.channels.yellow",
+            "ui.w18.channels.black",
+        ],
+        ChannelModel::Lab => &[
+            "ui.w18.channels.lightness",
+            "ui.w18.channels.a",
+            "ui.w18.channels.b",
+        ],
+    };
+    keys.iter().map(|k| tr(k).to_string()).collect()
 }
 
 /// Channel visibility, which is a view setting rather than document state.
@@ -138,18 +212,28 @@ impl ChannelsState {
     /// The rows to draw, composite first.
     pub fn rows(&self, doc: &Document) -> Vec<ChannelRow> {
         let mode = &doc.meta.color_space;
-        let names = component_names(mode);
+        // W18-C: a CMYK or Lab document lists its own components.
+        let model = ChannelModel::of(doc);
+        let names = model_component_names(model, mode);
+        let composite = match model {
+            ChannelModel::Rgb => composite_name(mode),
+            ChannelModel::Cmyk => crate::strings::tr("ui.w18.channels.cmyk"),
+            ChannelModel::Lab => crate::strings::tr("ui.w18.channels.lab"),
+        };
+        // The canvas can hide RGB components only, so a CMYK / Lab row is
+        // always shown (and the panel draws no eye on it).
+        let previewable = model == ChannelModel::Rgb;
         let mut rows = vec![ChannelRow {
-            name: composite_name(mode).to_string(),
+            name: composite.to_string(),
             kind: ChannelKind::Composite,
-            visible: self.composite_visible(mode),
+            visible: !previewable || self.composite_visible(mode),
             shortcut_digit: Some(2),
         }];
-        for (i, name) in names.iter().enumerate() {
+        for (i, name) in names.into_iter().enumerate() {
             rows.push(ChannelRow {
-                name: (*name).to_string(),
-                kind: ChannelKind::Component(i),
-                visible: self.component_visible(i),
+                name,
+                kind: component_kind(model, i),
+                visible: !previewable || self.component_visible(i),
                 // Ctrl+3 is the first component, matching every other editor.
                 shortcut_digit: u8::try_from(i + 3).ok().filter(|d| *d <= 9),
             });
@@ -201,10 +285,107 @@ impl ChannelsState {
                     self.set_component_visible(i, i == index);
                 }
             }
+            // W18-C: several RGB components show together; a CMYK / Lab
+            // component cannot be previewed alone (the canvas upload masks
+            // RGB components only), so the composite stays on screen.
+            ChannelKind::Components {
+                mask,
+                model: ChannelModel::Rgb,
+            } => {
+                for i in 0..component_names(mode).len() {
+                    self.set_component_visible(i, mask & (1 << i) != 0);
+                }
+            }
+            ChannelKind::Components { .. } => self.set_composite_visible(mode, true),
             // A mask channel's visibility is the mask's own `enabled` flag,
             // which is document state; isolating one is a selection only.
             ChannelKind::Mask { .. } => {}
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// W18-C: per-channel editing: the selected colour components
+// ---------------------------------------------------------------------------
+
+/// W18-C: the row kind of component `index` of `model`: an RGB component is
+/// [`ChannelKind::Component`], a CMYK / Lab one a one-bit
+/// [`ChannelKind::Components`].
+pub fn component_kind(model: ChannelModel, index: usize) -> ChannelKind {
+    match model {
+        ChannelModel::Rgb => ChannelKind::Component(index),
+        ChannelModel::Cmyk | ChannelModel::Lab => ChannelKind::Components {
+            mask: 1 << index,
+            model,
+        },
+    }
+}
+
+impl ChannelsState {
+    /// W18-C: the colour components pixel edits write, as a bit mask over
+    /// `model`'s components, or `None` when every component is written (the
+    /// composite, a mask row, or a selection made for another model: a tab
+    /// switch from a CMYK document to an RGB one, say).
+    pub fn edit_mask(&self, model: ChannelModel) -> Option<u8> {
+        let mask = match self.selected {
+            ChannelKind::Component(i) if model == ChannelModel::Rgb && i < 3 => 1u8 << i,
+            ChannelKind::Components { mask, model: m } if m == model => mask & model.all_mask(),
+            _ => return None,
+        };
+        (mask != 0 && mask != model.all_mask()).then_some(mask)
+    }
+
+    /// W18-C: whether the row of kind `row` is part of the selection: a
+    /// component row is when its component is in the selected set.
+    pub fn row_selected(&self, row: ChannelKind) -> bool {
+        let bits = |kind: ChannelKind| match kind {
+            ChannelKind::Component(i) if i < 8 => Some((ChannelModel::Rgb, 1u8 << i)),
+            ChannelKind::Components { mask, model } => Some((model, mask)),
+            _ => None,
+        };
+        match (bits(self.selected), bits(row)) {
+            (Some((sm, sel)), Some((rm, r))) => sm == rm && r != 0 && sel & r == r,
+            _ => self.selected == row,
+        }
+    }
+
+    /// W18-C: a click on the row of kind `row`, Photopea's gesture. A plain
+    /// click selects that channel alone (and shows it alone); a Shift-click
+    /// on a colour component adds it to the selected components (or takes
+    /// it out again, never leaving none). Selecting every component is the
+    /// composite, and the composite row restores all. Answers the new
+    /// selection.
+    pub fn click(&mut self, doc: &Document, row: ChannelKind, shift: bool) -> ChannelKind {
+        let model = ChannelModel::of(doc);
+        let mode = doc.meta.color_space.clone();
+        let row_bits = match row {
+            ChannelKind::Component(i) if model == ChannelModel::Rgb && i < 3 => Some(1u8 << i),
+            ChannelKind::Components { mask, model: m } if m == model => Some(mask),
+            _ => None,
+        };
+        let Some(row_bits) = row_bits else {
+            // The composite or a mask row: selected as it is.
+            self.isolate(&mode, row);
+            return self.selected;
+        };
+        let current = match self.selected {
+            ChannelKind::Composite => Some(model.all_mask()),
+            _ => self.edit_mask(model),
+        };
+        let bits = match (shift, current) {
+            (true, Some(cur)) if cur ^ row_bits != 0 => cur ^ row_bits,
+            (true, Some(cur)) => cur,
+            _ => row_bits,
+        };
+        let kind = if bits == model.all_mask() {
+            ChannelKind::Composite
+        } else if model == ChannelModel::Rgb && bits.count_ones() == 1 {
+            ChannelKind::Component(bits.trailing_zeros() as usize)
+        } else {
+            ChannelKind::Components { mask: bits, model }
+        };
+        self.isolate(&mode, kind);
+        self.selected
     }
 }
 
@@ -244,10 +425,131 @@ pub use crate::dialogs::spot_channel::{SpotChannelDialog, SpotChannelSpec, DEFAU
 #[path = "w13x4_channels_tests.rs"]
 mod w13x4_channels_tests;
 
+/// W18-C: per-channel selection, driven through the real workspace.
+#[cfg(test)]
+#[path = "w18c_channels_tests.rs"]
+mod w18c_channels_tests;
+
 /// W10-B: the id of the `index`th saved-selection (alpha) row's eye in the
 /// Channels panel.
 pub fn alpha_eye_id(index: usize) -> egui::Id {
     egui::Id::new(("channels-alpha-eye", index))
+}
+
+// ---------------------------------------------------------------------------
+// W18-I: renaming an alpha channel in place
+// ---------------------------------------------------------------------------
+
+/// W18-I: the name of the `index`th saved-selection (alpha) row; a
+/// double-click on it opens [`alpha_rename_id`] in its place.
+pub fn alpha_name_id(index: usize) -> egui::Id {
+    egui::Id::new(("channels-alpha-name", index))
+}
+
+/// W18-I: the field an alpha row's name becomes while it is renamed.
+pub fn alpha_rename_id(index: usize) -> egui::Id {
+    egui::Id::new(("channels-alpha-rename", index))
+}
+
+fn alpha_renaming_key() -> egui::Id {
+    egui::Id::new("channels-alpha-renaming")
+}
+
+fn alpha_pending_click_key() -> egui::Id {
+    egui::Id::new("channels-alpha-pending-click")
+}
+
+/// W18-I: Photopea's "double-click the name of an independent channel to
+/// rename it": saved selection `index` renamed to `name` (trimmed), its
+/// coverage kept, as one undo step. `None` for an empty name, the name it
+/// already has, or a slot that is gone.
+pub fn rename_alpha(doc: &Document, index: usize, name: &str) -> Option<editor_core::Command> {
+    let name = name.trim();
+    let (old, selection) = doc.saved_selections.get(index)?;
+    if name.is_empty() || old == name {
+        return None;
+    }
+    Some(editor_core::Command::SetSavedSelection {
+        index,
+        name: name.to_string(),
+        selection: selection.clone(),
+    })
+}
+
+/// W18-I: the name cell of alpha row `index`: its label, or, while the row
+/// is being renamed, the field. Answers the cell's rect (for
+/// [`alpha_name_click`]) and, on the frame the field commits, the rename.
+pub(crate) fn alpha_name_ui(
+    ui: &mut egui::Ui,
+    doc: &Document,
+    index: usize,
+    name: &str,
+) -> (egui::Rect, Option<editor_core::Command>) {
+    use crate::panels::layer_comps::{inline_rename_field, InlineRename};
+    let renaming: Option<usize> = ui.data(|d| d.get_temp(alpha_renaming_key()));
+    if renaming != Some(index) {
+        let label = ui.label(crate::view::body(ui, name.to_string()));
+        return (label.rect, None);
+    }
+    match inline_rename_field(ui, alpha_rename_id(index), name) {
+        InlineRename::Editing => (egui::Rect::NOTHING, None),
+        outcome => {
+            ui.data_mut(|d| d.remove::<usize>(alpha_renaming_key()));
+            let command = match outcome {
+                InlineRename::Commit(text) => rename_alpha(doc, index, &text),
+                _ => None,
+            };
+            (egui::Rect::NOTHING, command)
+        }
+    }
+}
+
+/// W18-I: the name cell's clicks, registered after the row's own click
+/// region so the name answers first. A double-click opens the rename field.
+/// A single click is the row's click (Load Selection), handed back as
+/// `Some(direct)` once a double-click can no longer follow it, so the
+/// dialog it opens does not swallow the second press of a double-click.
+pub(crate) fn alpha_name_click(ui: &egui::Ui, index: usize, rect: egui::Rect) -> Option<bool> {
+    let now = ui.input(|i| i.time);
+    let delay = ui.ctx().options(|o| o.input_options.max_double_click_delay);
+    let pending: Option<(usize, f64, bool)> = ui.data(|d| d.get_temp(alpha_pending_click_key()));
+    if rect.is_positive() {
+        let response = ui.interact(rect, alpha_name_id(index), egui::Sense::click());
+        // egui reports a double-click for any second click in its window:
+        // both clicks must have landed on this name.
+        let first_here = matches!(pending, Some((i, _, _)) if i == index);
+        if response.double_clicked() && first_here {
+            ui.data_mut(|d| {
+                d.remove::<(usize, f64, bool)>(alpha_pending_click_key());
+                d.insert_temp(alpha_renaming_key(), index);
+            });
+            return None;
+        }
+        if response.clicked() {
+            let direct = ui.input(|i| i.modifiers.command);
+            if direct {
+                // Ctrl+click loads at once: no rename follows a Ctrl+click.
+                return Some(true);
+            }
+            ui.data_mut(|d| d.insert_temp(alpha_pending_click_key(), (index, now, false)));
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs_f64(delay));
+            return None;
+        }
+    }
+    match pending {
+        Some((i, at, direct)) if i == index => {
+            if now - at > delay {
+                ui.data_mut(|d| d.remove::<(usize, f64, bool)>(alpha_pending_click_key()));
+                Some(direct)
+            } else {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_secs_f64(delay));
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 /// The component names of a colour mode.

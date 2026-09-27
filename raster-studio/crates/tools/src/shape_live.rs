@@ -61,7 +61,7 @@ pub const PARAMETRIC_KEYS: &[&str] = &[
 ];
 
 /// Every parameter of the Parametric Shape tool, Photopea's defaults: five
-/// sides (the registry's Polygon default is six, kept), a 40% star indent, a
+/// sides (W18-F: the registry's Polygon default too), a 40% star indent, a
 /// 5 px arrow with an end head 50 px wide and 100 px long, a 3 x 4 grid with
 /// an 8 px border, a spiral of length 4.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -95,7 +95,7 @@ impl Default for ParametricOptions {
     fn default() -> Self {
         Self {
             shape: 0,
-            sides: 6,
+            sides: 5,
             inner_ratio: 0.4,
             weight: 5.0,
             head_start: false,

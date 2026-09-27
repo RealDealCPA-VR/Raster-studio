@@ -276,9 +276,11 @@ fn a_one_bit_bitmap_file_opens_as_black_and_white_grey() {
         assert_eq!(file.header.color_mode, ColorMode::Grayscale);
         assert_eq!(file.header.channels, 1);
     }
-    // The writer does not pack bits.
+    // W18-H: the writer packs the bits back: the same black and white.
     let file = read(&bitmap_bytes(false)).unwrap();
-    assert!(matches!(write(&file), Err(PsdError::InvalidDocument(_))));
+    let back = read(&write(&file).unwrap()).unwrap();
+    assert_eq!(back.header.color_mode, ColorMode::Bitmap);
+    assert_eq!(back.merged, file.merged);
 }
 
 #[test]

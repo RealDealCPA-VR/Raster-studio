@@ -107,6 +107,10 @@ use crate::doc::OpenDocument;
 use crate::editor::Editor;
 use crate::tool_input::{self, SnapPolicy};
 
+// W18-A: the canvas menu each tool builds, measured at the right-click.
+#[path = "context_menu_w18.rs"]
+pub(crate) mod context_menu_w18;
+
 /// The egui layer every overlay here is painted on.
 const LAYER_ID: &str = "raster-canvas-extras";
 /// The layer the canvas overlays are painted on: the extras here, then the
@@ -495,7 +499,11 @@ impl CanvasExtras {
                 }
             });
             if let Some(pos) = right_click {
-                ui::context_menu::open(workspace, ui::context_menu::ContextTarget::Canvas, pos);
+                // W18-A: the acting tool's own list, measured where the
+                // pointer was right-clicked.
+                let at = camera.doc_of_screen_pt(&viewport, from_pos2(pos));
+                let zoom_pt = doc.camera.zoom / ppp;
+                context_menu_w18::open(ctx, workspace, editor, doc, at, zoom_pt, pos);
                 report.context_menu = true;
             }
         }

@@ -39,6 +39,12 @@ use super::image_size::{filter_label, FILTERS};
 use super::sizes;
 use super::units::format_bytes;
 
+/// W18-G: File ▸ Save PSD/PSB…'s options (Photopea's dialog). Declared
+/// here, beside the other File ▸ Export dialog, as
+/// `ui::dialogs::export_as::psd_options`.
+#[path = "psd_options.rs"]
+pub mod psd_options;
+
 /// Largest proxy side the dialog will encode per frame. A live preview has to
 /// stay interactive, and a full-resolution JPEG encode per keystroke does not.
 pub const MAX_PROXY_SIDE: u32 = 512;
@@ -346,6 +352,10 @@ pub struct ExportAsDialog {
     /// offered ([`Self::set_metadata`]), and whether the job embeds them.
     metadata: raster::metadata::EmbeddedMetadata,
     embed_metadata: bool,
+    /// W18-G: Photopea's Artboards and Slices options ([`ExportExtras`]),
+    /// and the ids the last frame drew their controls with.
+    extras: ExportExtras,
+    extras_drawn: [Option<egui::Id>; 3],
 }
 
 impl std::fmt::Debug for ExportAsDialog {
@@ -397,6 +407,8 @@ impl ExportAsDialog {
             timeline_frames: None,
             metadata: raster::metadata::EmbeddedMetadata::default(),
             embed_metadata: true,
+            extras: ExportExtras::default(),
+            extras_drawn: [None; 3],
         }
     }
 
@@ -568,8 +580,11 @@ impl ExportAsDialog {
     /// has one.
     pub fn set_format(&mut self, format: ExportFormat) {
         let quality = self.quality();
+        let raw = self.raw_layout();
         if let Some(entry) = self.entry_mut(self.selected) {
             entry.preset.format = match format {
+                // W18-G: re-picking RAW keeps the layout chosen.
+                ExportFormat::Raw(layout) => ExportFormat::Raw(raw.unwrap_or(layout)),
                 ExportFormat::Jpeg(_) => ExportFormat::Jpeg(quality.unwrap_or(90)),
                 // W10-F: AVIF has a quality too; it carries over likewise.
                 ExportFormat::Avif(_) => ExportFormat::Avif(quality.unwrap_or(80)),
@@ -631,6 +646,38 @@ impl ExportAsDialog {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// W18-G: the selected RAW row's sample layout, or `None` when the row
+    /// is not a RAW.
+    pub fn raw_layout(&self) -> Option<raster::codec::RawLayout> {
+        match self.format() {
+            ExportFormat::Raw(layout) => Some(layout),
+            _ => None,
+        }
+    }
+
+    /// W18-G: set the selected RAW row's layout (Photopea's Channels, Depth
+    /// and Byte Order); the row's bit depth follows the layout's. Ignored
+    /// (returns `false`) unless the row is a RAW or the layout is not one
+    /// Photopea offers.
+    pub fn set_raw_layout(&mut self, layout: raster::codec::RawLayout) -> bool {
+        if self.raw_layout().is_none() || ExportFormat::Raw(layout).validate().is_err() {
+            return false;
+        }
+        let index = self.selected;
+        match self.entry_mut(index) {
+            Some(entry) => {
+                entry.preset.format = ExportFormat::Raw(layout);
+                entry.preset.bit_depth = if layout.sixteen_bit {
+                    BitDepth::Sixteen
+                } else {
+                    BitDepth::Eight
+                };
+                true
+            }
+            None => false,
         }
     }
 
@@ -819,7 +866,8 @@ impl ExportAsDialog {
                 DialogButton::Extra(_) => DialogOutcome::Open,
             };
         }
-        outcome
+        // W18-G: a job cut per artboard or per slice goes to its own writer.
+        self.park_extras(outcome)
     }
 
     /// Re-encode the proxy if the settings that affect it changed.
@@ -869,6 +917,8 @@ impl ExportAsDialog {
                     .desired_width(sizes::text_field_wide()),
             );
         });
+        // W18-G: Photopea's Artboards / Slices options.
+        self.w18g_extras(ui);
         caption(
             ui,
             format!("Total: {}", format_bytes(self.total_estimated_bytes())),
@@ -1021,6 +1071,10 @@ impl ExportAsDialog {
                     self.set_mp4_codec(chosen);
                 }
             });
+        }
+        // W18-G: a RAW row's layout, Photopea's three RAW options.
+        if let Some(layout) = self.raw_layout() {
+            self.raw_fields(ui, layout);
         }
         design::inspector_field(ui, "Suffix", |ui| {
             let mut suffix = entry.suffix.clone();
@@ -1204,6 +1258,299 @@ impl ExportAsDialog {
                 ),
             );
         }
+    }
+}
+
+impl ExportAsDialog {
+    /// W18-G: Channels (1, 3, 4), Depth (8 Bits, 16 Bits) and Byte Order
+    /// (12-34, 34-12), as Photopea's RAW export offers them.
+    fn raw_fields(&mut self, ui: &mut egui::Ui, layout: raster::codec::RawLayout) {
+        let mut next = layout;
+        design::inspector_field(ui, crate::strings::tr("ui.w18g.raw.channels"), |ui| {
+            combo(
+                ui,
+                "ex-raw-channels",
+                &mut next.channels,
+                &raster::codec::RawLayout::CHANNELS,
+                |c| c.to_string(),
+                |_| None,
+            )
+        });
+        design::inspector_field(ui, crate::strings::tr("ui.w18g.raw.depth"), |ui| {
+            combo(
+                ui,
+                "ex-raw-depth",
+                &mut next.sixteen_bit,
+                &[false, true],
+                |sixteen| {
+                    crate::strings::tr(if sixteen {
+                        "ui.w18g.raw.16.bits"
+                    } else {
+                        "ui.w18g.raw.8.bits"
+                    })
+                    .to_string()
+                },
+                |_| None,
+            )
+        });
+        design::inspector_field(ui, crate::strings::tr("ui.w18g.raw.byte.order"), |ui| {
+            combo(
+                ui,
+                "ex-raw-byte-order",
+                &mut next.little_endian,
+                &[false, true],
+                |little| if little { "34-12" } else { "12-34" }.to_string(),
+                |_| None,
+            )
+        });
+        if next != layout {
+            self.set_raw_layout(next);
+        }
+    }
+
+    /// W18-G: whether every enabled row's format takes Photopea's
+    /// (Artboards, Slices) options: Artboards for GIF, PNG, JPG, WebP and
+    /// SVG, Slices for GIF, PNG, JPG and WebP.
+    pub fn offered_extras(&self) -> (bool, bool) {
+        let mut enabled = self.entries.iter().filter(|e| e.enabled).peekable();
+        if enabled.peek().is_none() {
+            return (false, false);
+        }
+        enabled.fold((true, true), |(a, s), e| {
+            (
+                a && offers_artboards(e.preset.format),
+                s && offers_slices(e.preset.format),
+            )
+        })
+    }
+
+    /// W18-G: the Artboards / Slices options as set.
+    pub fn extras(&self) -> ExportExtras {
+        self.extras
+    }
+
+    /// W18-G: the options the confirmation acts on — those the rows take.
+    pub fn effective_extras(&self) -> ExportExtras {
+        let (artboards, slices) = self.offered_extras();
+        ExportExtras {
+            artboards: artboards && self.extras.artboards,
+            slices: if slices {
+                self.extras.slices
+            } else {
+                SliceExport::No
+            },
+            reverse_pages: self.offers_reverse_pages() && self.extras.reverse_pages,
+        }
+    }
+
+    /// W18-G: whether Photopea's PDF option "reverse pages" is offered: an
+    /// enabled row writes a PDF.
+    pub fn offers_reverse_pages(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.enabled && e.preset.format == ExportFormat::Pdf)
+    }
+
+    /// W18-G: set the options. As in Photopea the two are one choice (a
+    /// file per artboard or a file per slice), so turning one on turns the
+    /// other off.
+    pub fn set_extras(&mut self, extras: ExportExtras) {
+        let slicing = extras.slices != SliceExport::No;
+        self.extras = if extras.artboards && slicing {
+            if self.extras.artboards {
+                ExportExtras {
+                    artboards: false,
+                    ..extras
+                }
+            } else {
+                ExportExtras {
+                    slices: SliceExport::No,
+                    ..extras
+                }
+            }
+        } else {
+            extras
+        };
+    }
+
+    /// W18-G: the ids the last frame drew the Artboards checkbox, the
+    /// Slices choice and the PDF's Reverse pages checkbox with (`None` when
+    /// not offered).
+    pub fn drawn_extras(&self) -> [Option<egui::Id>; 3] {
+        self.extras_drawn
+    }
+
+    /// W18-G: Photopea's "Artboards" checkbox and "Slices" choice, shown
+    /// while every enabled row can take them.
+    fn w18g_extras(&mut self, ui: &mut egui::Ui) {
+        let (artboards, slices) = self.offered_extras();
+        self.extras_drawn = [None; 3];
+        if artboards {
+            let mut on = self.extras.artboards;
+            let response =
+                checkbox_row(ui, crate::strings::tr("ui.w18g.export.artboards"), &mut on);
+            self.extras_drawn[0] = Some(response.id);
+            if response.changed() {
+                self.set_extras(ExportExtras {
+                    artboards: on,
+                    ..self.extras
+                });
+            }
+        }
+        if slices {
+            let mut choice = self.extras.slices;
+            let field =
+                design::inspector_field(ui, crate::strings::tr("ui.w18g.export.slices"), |ui| {
+                    combo(
+                        ui,
+                        "ex-slices",
+                        &mut choice,
+                        &SliceExport::ALL,
+                        |c| c.label().to_string(),
+                        |_| None,
+                    )
+                });
+            self.extras_drawn[1] = Some(field.response.id);
+            if field.inner {
+                self.set_extras(ExportExtras {
+                    slices: choice,
+                    ..self.extras
+                });
+            }
+        }
+        if self.offers_reverse_pages() {
+            let mut on = self.extras.reverse_pages;
+            let response = checkbox_row(
+                ui,
+                crate::strings::tr("ui.w18g.export.reverse.pages"),
+                &mut on,
+            );
+            self.extras_drawn[2] = Some(response.id);
+            if response.changed() {
+                self.extras.reverse_pages = on;
+            }
+        }
+    }
+
+    /// W18-G: a confirmed job with Artboards or Slices set is parked for
+    /// File ▸ Export ▸ Artboards to Files / Slices, which write it with
+    /// every row ([`take_parked_export`]); the dialog closes. Any other
+    /// outcome passes through.
+    fn park_extras(&self, outcome: DialogOutcome<DialogAction>) -> DialogOutcome<DialogAction> {
+        let extras = self.effective_extras();
+        match outcome {
+            DialogOutcome::Confirmed(DialogAction::Export(job)) if !extras.is_plain() => {
+                park_export(*job, extras);
+                DialogOutcome::Cancelled
+            }
+            other => other,
+        }
+    }
+}
+
+/// W18-G: Photopea's Export As "Slices" choice.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum SliceExport {
+    /// "No Slices": the whole image, one file a row.
+    #[default]
+    No,
+    /// "All Slices": the user's slices and the automatic ones that cover
+    /// the rest of the canvas.
+    All,
+    /// "User Slices": the user's slices only.
+    User,
+}
+
+impl SliceExport {
+    /// Photopea's order.
+    pub const ALL: [SliceExport; 3] = [SliceExport::No, SliceExport::All, SliceExport::User];
+
+    /// The row's words.
+    pub fn label(self) -> &'static str {
+        crate::strings::tr(match self {
+            SliceExport::No => "ui.w18g.slices.no",
+            SliceExport::All => "ui.w18g.slices.all",
+            SliceExport::User => "ui.w18g.slices.user",
+        })
+    }
+}
+
+/// W18-G: Photopea's Export As options that write something other than one
+/// whole-canvas file a row.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub struct ExportExtras {
+    /// "Artboards": one file per artboard.
+    pub artboards: bool,
+    /// "Slices": one file per slice.
+    pub slices: SliceExport,
+    /// A PDF row's "reverse pages": its pages (one per artboard) written
+    /// last first.
+    pub reverse_pages: bool,
+}
+
+impl ExportExtras {
+    /// Neither option: the whole canvas, as the batch writer writes it.
+    pub fn is_plain(self) -> bool {
+        !self.artboards && self.slices == SliceExport::No && !self.reverse_pages
+    }
+}
+
+/// W18-G: whether Photopea offers "Artboards" for `format`.
+pub fn offers_artboards(format: ExportFormat) -> bool {
+    offers_slices(format) || format == ExportFormat::Svg
+}
+
+/// W18-G: whether Photopea offers "Slices" for `format`.
+pub fn offers_slices(format: ExportFormat) -> bool {
+    matches!(
+        format,
+        ExportFormat::Png
+            | ExportFormat::Jpeg(_)
+            | ExportFormat::Gif
+            | ExportFormat::WebP
+            | ExportFormat::WebPLossy(_)
+    )
+}
+
+thread_local! {
+    /// W18-G: the Export As job parked for its per-artboard / per-slice
+    /// writer, and whether the File ▸ Export row is still to be asked for.
+    static PARKED_EXPORT: RefCell<Option<(ExportJob, ExportExtras)>> =
+        const { RefCell::new(None) };
+    static PARKED_ASK: Cell<bool> = const { Cell::new(false) };
+}
+
+/// W18-G: park `job` for its per-artboard / per-slice writer; the next
+/// frame asks for File ▸ Export ▸ Artboards to Files (or Slices), whose
+/// route takes it ([`take_parked_export`]).
+pub fn park_export(job: ExportJob, extras: ExportExtras) {
+    PARKED_EXPORT.with(|slot| *slot.borrow_mut() = Some((job, extras)));
+    PARKED_ASK.with(|ask| ask.set(true));
+}
+
+/// W18-G: the parked Export As job and its options, taken.
+pub fn take_parked_export() -> Option<(ExportJob, ExportExtras)> {
+    PARKED_ASK.with(|ask| ask.set(false));
+    PARKED_EXPORT.with(|slot| slot.borrow_mut().take())
+}
+
+/// W18-G: once a frame, from the right-click menu's host: draw File ▸ Save
+/// PSD/PSB's options while they are open, and ask for the row that writes a
+/// parked Export As job.
+pub fn draw_w18g(w: &mut crate::Workspace, ctx: &Context) {
+    psd_options::draw_requested(w, ctx);
+    if PARKED_ASK.with(|ask| ask.replace(false)) {
+        let slices = PARKED_EXPORT.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .is_some_and(|(_, extras)| extras.slices != SliceExport::No)
+        });
+        w.emit(crate::Intent::Action(if slices {
+            crate::menu::MenuAction::ExportSlices
+        } else {
+            crate::menu::MenuAction::ExportArtboards
+        }));
+        ctx.request_repaint();
     }
 }
 
@@ -2239,5 +2586,108 @@ mod tests {
             let mut dialog = ExportPdfDialog::new(300, 150);
             assert!(dialog.show(ctx).is_open());
         });
+    }
+
+    /// W18-G: Photopea's Artboards / Slices are offered while every row can
+    /// take them, are one choice, and a job confirmed with one is parked
+    /// (the dialog closes, nothing reaches the batch writer) and asks for
+    /// the File > Export row that writes it; a plain job passes through.
+    #[test]
+    fn artboards_and_slices_park_the_job_and_ask_for_their_row() {
+        let mut d = dialog();
+        assert_eq!(d.offered_extras(), (true, true), "a PNG row takes both");
+        d.set_format(ExportFormat::Svg);
+        assert_eq!(d.offered_extras(), (true, false), "SVG: Artboards only");
+        d.set_format(ExportFormat::Tiff);
+        assert_eq!(d.offered_extras(), (false, false));
+        d.set_format(ExportFormat::Png);
+        d.set_extras(ExportExtras {
+            artboards: true,
+            slices: SliceExport::No,
+            ..Default::default()
+        });
+        d.set_extras(ExportExtras {
+            artboards: true,
+            slices: SliceExport::All,
+            ..Default::default()
+        });
+        assert_eq!(
+            d.extras(),
+            ExportExtras {
+                artboards: false,
+                slices: SliceExport::All,
+                reverse_pages: false,
+            },
+            "choosing slices turns Artboards off"
+        );
+        let _ = take_parked_export();
+        let harness = Harness::new();
+        let d = RefCell::new(d);
+        let mut outcome = DialogOutcome::Open;
+        harness.frame(Harness::key_events(egui::Key::Enter), |ctx| {
+            outcome = d.borrow_mut().show(ctx);
+        });
+        assert_eq!(
+            outcome,
+            DialogOutcome::Cancelled,
+            "closed, not handed to the batch"
+        );
+        let mut w = crate::Workspace::new();
+        harness.frame(Vec::new(), |ctx| draw_w18g(&mut w, ctx));
+        assert!(w.drain_intents().contains(&crate::Intent::Action(
+            crate::menu::MenuAction::ExportSlices
+        )));
+        let (job, extras) = take_parked_export().expect("the job is parked");
+        assert_eq!(extras.slices, SliceExport::All);
+        assert_eq!(job, d.borrow().job());
+        // A plain job is the batch writer's, as before.
+        d.borrow_mut().set_extras(ExportExtras::default());
+        harness.frame(Harness::key_events(egui::Key::Enter), |ctx| {
+            outcome = d.borrow_mut().show(ctx);
+        });
+        assert!(matches!(
+            outcome,
+            DialogOutcome::Confirmed(DialogAction::Export(_))
+        ));
+        assert!(take_parked_export().is_none());
+    }
+
+    /// W18-G: Photopea's PDF option "reverse pages" is offered while a row
+    /// writes a PDF, and a job confirmed with it is parked for the writer
+    /// that reverses the pages (File > Export > Artboards to Files' route).
+    #[test]
+    fn reverse_pages_is_offered_on_a_pdf_row_and_parks_the_job() {
+        let mut d = dialog();
+        assert!(!d.offers_reverse_pages(), "a PNG row has no pages");
+        d.set_format(ExportFormat::Pdf);
+        assert!(d.offers_reverse_pages());
+        assert_eq!(
+            d.offered_extras(),
+            (false, false),
+            "no Artboards / Slices on a PDF"
+        );
+        d.set_extras(ExportExtras {
+            reverse_pages: true,
+            ..Default::default()
+        });
+        assert!(d.effective_extras().reverse_pages);
+        let _ = take_parked_export();
+        let harness = Harness::new();
+        let d = RefCell::new(d);
+        let mut outcome = DialogOutcome::Open;
+        harness.frame(Harness::key_events(egui::Key::Enter), |ctx| {
+            outcome = d.borrow_mut().show(ctx);
+        });
+        assert_eq!(outcome, DialogOutcome::Cancelled, "parked, not the batch's");
+        let mut w = crate::Workspace::new();
+        harness.frame(Vec::new(), |ctx| draw_w18g(&mut w, ctx));
+        assert!(w.drain_intents().contains(&crate::Intent::Action(
+            crate::menu::MenuAction::ExportArtboards
+        )));
+        let (_, extras) = take_parked_export().expect("the job is parked");
+        assert!(extras.reverse_pages && !extras.artboards);
+        // Back on a PNG row the option is not offered, and nothing parks.
+        d.borrow_mut().set_format(ExportFormat::Png);
+        assert!(!d.borrow().effective_extras().reverse_pages);
     }
 }

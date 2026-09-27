@@ -1,0 +1,1677 @@
+# Raster Studio interface strings, eo. One row per line: the English source, a TAB,
+# the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
+# Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
+@name	Esperanto
+ fps	 k/s
+ frames	 kadroj
+ ms	 ms
+ px	 px
+0 bytes	0 bajtoj
+16 Bits/Channel	16 bitoj/kanalo
+16 bit	16 bitoj
+32 Bits/Channel	32 bitoj/kanalo
+3D	3D
+50% Grey	50% grizo
+50% Threshold	50% sojlo
+8 Bits/Channel	8 bitoj/kanalo
+8 bit	8 bitoj
+90° Clockwise	90° dekstrume
+90° Counter Clockwise	90° maldekstrume
+A CSV row has the wrong number of fields, at line	CSV-vico havas malĝustan nombron de kampoj, ĉe linio
+A blank canvas at any size	Malplena kanvaso de ajna grando
+A colour channel cannot be deleted	Kolorkanalo ne povas esti forigita
+A layered raster editor	Tavoligita rastruma redaktilo
+A palette holds 2 to 256 colours	Paletro enhavas 2 ĝis 256 kolorojn
+A saved selection already has that name	Konservita elekto kun tiu nomo jam ekzistas
+A saved selection: click to open Select > Load Selection, then choose it by name there	Konservita elekto: alklaku por malfermi Elekti > Ŝargi elekton, kaj tie elektu ĝin laŭ nomo
+A slice needs a name	Tranĉaĵo bezonas nomon
+AV1 (smaller, newer players)	AV1 (pli malgranda, pli novaj ludiloj)
+About Raster Studio	Pri Raster Studio
+Absolute Colorimetric	Absoluta kolorimetria
+Action sets	Agaj aroj
+Actions	Agoj
+Adaptive (median cut)	Adapta (median-tranĉo)
+Add "copy" to copied layers	Aldoni «kopio» al kopiitaj tavoloj
+Add Artboard Above	Aldoni desegnotabulon supre
+Add Artboard Below	Aldoni desegnotabulon sube
+Add Artboard Left	Aldoni desegnotabulon maldekstre
+Add Artboard Right	Aldoni desegnotabulon dekstre
+Add Filter Mask	Aldoni filtrilan maskon
+Add Media	Aldoni aŭdvidaĵon
+Add Noise…	Aldoni bruon…
+Add a layer mask	Aldoni tavolan maskon
+Add a smart filter mask	Aldoni maskon de inteligenta filtrilo
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Meti bildan aŭ videan dosieron (Dosiero > Meti enkorpigite); video iĝas videotavolo ĉe la ludkapo
+Add an adjustment layer	Aldoni alĝustigan tavolon
+Add another instance of this effect	Aldoni alian aperon de ĉi tiu efekto
+Add current colour	Aldoni la nunan koloron
+Add export	Aldoni eksporton
+Add frame	Aldoni kadron
+Add or remove room around the image. Pixels are not resampled.	Aldoni aŭ forigi spacon ĉirkaŭ la bildo. Rastrumeroj ne estas respecimenigitaj.
+Add shortcut	Aldoni fulmoklavon
+Add to Selection	Aldoni al elekto
+Adds one guide at a document coordinate, in pixels.	Aldonas unu gvidlinion ĉe dokumenta koordinato, en rastrumeroj.
+Adjustment	Alĝustigo
+Adjustments	Ĝustigoj
+Advanced	Altnivela
+Again	Denove
+Again with Copy	Denove kun kopio
+Aliased (pencil)	Dentita (krajono)
+Align	Ĝisrandigi
+Align the bottom edge to the canvas	Ĝisrandigi la malsupran randon al la kanvaso
+Align the left edge to the canvas	Ĝisrandigi la maldekstran randon al la kanvaso
+Align the right edge to the canvas	Ĝisrandigi la dekstran randon al la kanvaso
+Align the top edge to the canvas	Ĝisrandigi la supran randon al la kanvaso
+Align with layer	Aranĝi laŭ tavolo
+All	Ĉiujn
+All Caps	Ĉiuj majuskloj
+All Caps shapes every lowercase letter as its capital; Small Caps shapes it as a capital at 70 % size. The stored text keeps the case you typed.	Ĉiuj majuskloj formas ĉiun minusklon kiel majusklon; Etaj majuskloj formas ĝin kiel majusklon je 70 % de la grando. La konservita teksto tenas la usklecon, kiun vi tajpis.
+All Layers	Ĉiuj tavoloj
+Alpha	Alfa
+Already used by	Jam uzata de
+Alt Tag	Alt-etikedo
+Amount	Kvanto
+An export needs at least one output	Eksporto bezonas almenaŭ unu eligon
+An image or project from this computer	Bildo aŭ projekto el ĉi tiu komputilo
+Angle	Angulo
+Angle (degrees)	Angulo (gradoj)
+Angle jitter	Angula varianco
+Animation	Animacio
+Another slice already has this name	Alia tranĉaĵo jam havas ĉi tiun nomon
+Appearance	Aspekto
+Applied	Aplikita
+Apply	Almeti
+Apply Guides	Apliki gvidliniojn
+Apply Image	Apliki bildon
+Apply Image…	Apliki bildon…
+Apply Mask	Apliki maskon
+Apply Style	Apliki stilon
+Apply Style 1	Apliki stilon 1
+Apply Style Preset…	Apliki antaŭagordon de stilo…
+Apply the next comp	Apliki la sekvan komponaĵon
+Apply the previous comp	Apliki la antaŭan komponaĵon
+Apply this mask	Apliki ĉi tiun maskon
+Approximate. The composited result is what the canvas shows.	Proksimuma. La kunmetita rezulto estas tio, kion la kanvaso montras.
+Arbitrary…	Arbitra…
+Arc	Arko
+Arc Lower	Malsupra arko
+Arc Upper	Supra arko
+Arch	Arko
+Arrange	Aranĝi
+Artboard	Arttabulo
+Artboard from Layers	Arttabulo el tavoloj
+Artboards in one document	Desegnotabuloj en unu dokumento
+Artboards to Files…	Desegnotabuloj al dosieroj…
+Assign Profile	Asigni profilon
+Assigned {name}: the pixel numbers are unchanged, so the colours look different	Asignis {name}: la rastrumeraj valoroj ne ŝanĝiĝas, do la koloroj aspektas alie
+Author	Aŭtoro
+Auto Color	Aŭtomata koloro
+Auto Contrast	Aŭtomata kontrasto
+Auto Tone	Aŭtomata tono
+Auto leading	Aŭtomata linia interspaco
+Auto-Align Layers…	Aŭtomate ĝisrandigi tavolojn…
+Auto-Blend Layers…	Aŭtomate miksi tavolojn…
+Automate	Aŭtomatigi
+Autosaves of never-saved documents go here; empty uses the default	Aŭtomataj konservoj de neniam konservitaj dokumentoj iras ĉi tien; malplena uzas la defaŭlton
+Average	Averaĝa
+BMP…	BMP…
+Back to the colour this opened on	Reen al la koloro, per kiu ĉi tio malfermiĝis
+Background — double-click for the picker	Fono — duoble alklaku por la elektilo
+Based On	Surbaze de
+Baseline shift	Movi bazlinion
+Baseline to baseline. Auto leading follows the type size.	De bazlinio al bazlinio. Aŭtomata linia interspaco sekvas la tiparan grandon.
+Batch	Aro
+Batch…	Aro…
+Bend	Fleksi
+Bevel	Bevelo
+Bevel & Emboss	Bevelo kaj reliefo
+Bevel & Emboss…	Bevelo kaj reliefo…
+Bind a text replacement variable to a text layer, or a visibility variable to any layer.	Ligu tekstan anstataŭigan variablon al teksta tavolo, aŭ videbligan variablon al iu ajn tavolo.
+Bitmap	Bitmapo
+Bitmap…	Bitmapo…
+Black	Nigra
+Black & White	Nigrablanka
+Black & White…	Nigrablanka…
+Black to Transparent	Nigra al travidebla
+Black to White	Nigra al blanka
+Black to white through the inks	Nigra al blanka tra la inkoj
+Blacks	Nigroj
+Blend If	Miksi se
+Blend Mode: Color	Miksa reĝimo: Koloro
+Blend Mode: Color Burn	Miksa reĝimo: Kolora bruligo
+Blend Mode: Color Dodge	Miksa reĝimo: Kolora evito
+Blend Mode: Darken	Miksa reĝimo: Malheligi
+Blend Mode: Difference	Miksa reĝimo: Diferenco
+Blend Mode: Dissolve	Miksa reĝimo: Dissolvi
+Blend Mode: Exclusion	Miksa reĝimo: Ekskludo
+Blend Mode: Hard Light	Miksa reĝimo: Forta lumo
+Blend Mode: Hard Mix	Miksa reĝimo: Forta miksaĵo
+Blend Mode: Hue	Miksa reĝimo: Nuanco
+Blend Mode: Lighten	Miksa reĝimo: Heligi
+Blend Mode: Linear Burn	Miksa reĝimo: Lineara bruligo
+Blend Mode: Linear Dodge (Add)	Miksa reĝimo: Lineara evito (adicio)
+Blend Mode: Linear Light	Miksa reĝimo: Lineara lumo
+Blend Mode: Luminosity	Miksa reĝimo: Lumeco
+Blend Mode: Multiply	Miksa reĝimo: Multobligi
+Blend Mode: Normal	Miksa reĝimo: Normala
+Blend Mode: Overlay	Miksa reĝimo: Surmeto
+Blend Mode: Pin Light	Miksa reĝimo: Punkta lumo
+Blend Mode: Saturation	Miksa reĝimo: Saturo
+Blend Mode: Screen	Miksa reĝimo: Ekrano
+Blend Mode: Soft Light	Miksa reĝimo: Milda lumo
+Blend Mode: Vivid Light	Miksa reĝimo: Viva lumo
+Blending	Miksado
+Blending Options	Miksadaj agordoj
+Blending Options…	Miksadaj agordoj…
+Blending options	Miksaj agordoj
+Blends a source document, layer or channel into the active layer as one step.	Miksas fontan dokumenton, tavolon aŭ kanalon en la aktivan tavolon per unu paŝo.
+Blends one channel of each of two sources into a new channel, a selection or a new document.	Miksas po unu kanalo el ĉiu el du fontoj en novan kanalon, elekton aŭ novan dokumenton.
+Blue	Blua
+Blues	Bluoj
+Blur	Nebuligo
+Blur Gallery	Galerio de malklarigo
+Blur More	Nebuligi pli
+Bold	Grasa
+Border Selection	Randa elekto
+Border…	Limo…
+Both axes	Ambaŭ aksoj
+Bottom	Malsupre
+Bottom Edges	Malsupraj randoj
+Bottom Left	Malsupre maldekstre
+Bottom Right	Malsupre dekstre
+Bottom Right Pixel Color	Koloro de la malsupra dekstra rastrumero
+Bottom left	Malsupre maldekstre
+Bottom right	Malsupre dekstre
+Box Blur…	Skatola nebuligo…
+Box height	Skatola alto
+Brightness	Heleco
+Brightness jitter	Heleca varianco
+Brightness/Contrast	Heleco & kontrasto
+Brightness/Contrast…	Heleco & kontrasto…
+Bring Forward	Porti antaŭen
+Bring to Front	Porti al antaŭo
+Brush Editor	Penikila redaktilo
+Brush: Background	Penikilo: fono
+Brush: Foreground	Penikilo: malfono
+Brushes	Penikiloj
+Bulge	Ĝibigi
+Butt	Plata
+CMYK Color	CMYK-koloro
+Calculations	Kalkuloj
+Calculations…	Kalkuloj…
+Camera Raw…	Camera Raw…
+Canvas Size	Kanvasa grandeco
+Canvas Size…	Kanvasa grandeco…
+Canvas extension	Kanvasa etendo
+Caps	Majuskloj
+Carries the XMP; the source's EXIF goes into JPEG only	Portas la XMP-on; la EXIF de la fonto iras nur en JPEG
+Cell size (pixels)	Ĉela grando (rastrumeroj)
+Center	Centren
+Center horizontally on the canvas	Centrigi horizontale sur la kanvaso
+Center vertically on the canvas	Centrigi vertikale sur la kanvaso
+Centimeters	Centimetroj
+Centre	Centro
+Centre the view on this note	Centrigi la vidon sur ĉi tiu noto
+Change Bit Depth	Ŝanĝi bitprofundon
+Change Colour Mode	Ŝanĝi kolorreĝimon
+Change Layer Properties	Ŝanĝi tavolajn ecojn
+Change how many pixels the document has, or how large it prints.	Ŝanĝu kiom da rastrumeroj la dokumento havas, aŭ kiom granda ĝi presiĝas.
+Channel	Kanalo
+Channel Mixer	Kanalmiksilo
+Channel Mixer…	Kanalmiksilo…
+Channel thumbnail	Kanala bildeto
+Channels	Kanaloj
+Character	Signo
+Character Style	Signostilo
+Character Styles	Signostiloj
+Checkerboard	Ŝaktabulo
+Choose 2 to 256 colours	Elektu 2 ĝis 256 kolorojn
+Choose a colour profile	Elektu kolorprofilon
+Choose a destination folder	Elektu celan dosierujon
+Choose a source folder	Elektu fontan dosierujon
+Choose at least one page to open	Elektu almenaŭ unu paĝon por malfermi
+Choose at least one side to trim	Elektu almenaŭ unu flankon por stuci
+Choose the Action to play	Elektu la agon por ludi
+Choose the open grayscale document each channel of the new RGB document comes from.	Elektu la malfermitan grizoskalan dokumenton, el kiu venas ĉiu kanalo de la nova RGB-dokumento.
+Choose the pages to open, their resolution and how they open.	Elektu la malfermotajn paĝojn, ilian distingivon kaj kiel ili malfermiĝas.
+Choose the source and the destination folders.	Elektu la fontan kaj la celan dosierujojn.
+Choose…	Elekti…
+Clear	Forigi
+Clear All	Viŝi ĉion
+Clear Guides	Forigi gvidilojn
+Clear History	Viŝi historion
+Clear Layer Style	Viŝi tavolan stilon
+Clear Slices	Forigi tranĉaĵojn
+Clear Strokes	Viŝi strekojn
+Clear existing guides	Viŝi ekzistantajn gvidliniojn
+Clear the {noun} from the active text layer	Forigi la {noun} de la aktiva teksta tavolo
+Cleared {n} slice(s)	Viŝitaj tranĉaĵoj: {n}
+Click an item in the panel first	Unue alklaku eron en la panelo
+Click anywhere to sample a colour	Alklaku ie ajn por specimeni koloron
+Click anywhere to sample a colour, or press Escape.	Alklaku ie ajn por specimeni koloron, aŭ premu Escape.
+Click the graph to add a point, drag a point to bend the curve, drag it off the graph to remove it	Alklaku la grafikaĵon por aldoni punkton, trenu punkton por fleksi la kurbon, trenu ĝin for de la grafikaĵo por forigi ĝin
+Click the preview to sample a colour from it	Alklaku la antaŭvidon por specimeni koloron el ĝi
+Click the preview to sample the colour to replace	Alklaku la antaŭvidon por specimeni la anstataŭigotan koloron
+Click the ramp to edit its stops.	Alklaku la gradientan strion por redakti ĝiajn haltojn.
+Clip to layer below	Tondi al la suba tavolo
+Clipboard	Tondujo
+Clipping	Tondado
+Close	Fermi
+Close All	Fermi ĉiujn
+Close Alpha Channel	Fermi alfa-kanalon
+Close Others	Fermi la aliajn
+Close panel	Fermi panelon
+Clouds	Nuboj
+Codec	Kodeko
+Color	Koloro
+Color Balance	Kolora ekvilibro
+Color Balance…	Kolora ekvilibro…
+Color Burn	Kolora brulo
+Color Dodge	Kolora evito
+Color Dynamics	Kolora dinamiko
+Color Halftone…	Kolora duontono…
+Color Intensity	Kolora intenseco
+Color Label	Kolora etikedo
+Color Lookup	Kolorserĉo
+Color Lookup Tables…	Koloraj serĉtabeloj…
+Color Lookup…	Kolorserĉo…
+Color Overlay	Kolora kovraĵo
+Color Overlay…	Kolora kovraĵo…
+Color Picker	Kolorelektilo
+Color Range	Kolora gamo
+Color Range…	Kolora gamo…
+Color fringe cleanup: pulls the boundary pixels' color toward the nearby interior ink — a separate edit from mask refinement.	Purigo de koloraj franĝoj: tiras la koloron de la randaj rastrumeroj al la proksima interna inko — aparta redakto de la maskoprecizigo.
+Color to Alpha…	Koloro al Alfo…
+Colors	Koloroj
+Colour	Koloro
+Colour varies once per stroke.	La koloro varias unufoje po streko.
+Colours	Koloroj
+Colours must be 1 to 64, the tolerance above 0 and the corner length at least 1	Koloroj devas esti 1 ĝis 64, la toleremo super 0 kaj la angula longo almenaŭ 1
+Columns	Kolumnoj
+Columns and rows with gutters between them, inside optional margins, in pixels.	Kolumnoj kaj vicoj kun interspacoj inter ili, ene de nedevigaj marĝenoj, en rastrumeroj.
+Combine Shapes	Kombini formojn
+Commit (Enter)	Konfirmi (Enter)
+Commit Contents	Konfirmi enhavon
+Composite	Kunmetaĵo
+Condensed	Kondensita
+Cone	Konuso
+Constant	Konstanta
+Constrain proportions	Konservi proporciojn
+Content-Aware	Enhav-konscia
+Content-Aware Scale	Enhavkonscia skalo
+Contour	Konturo
+Contract Selection	Kuntiri elekton
+Contract by	Kuntiri je
+Contract…	Kontrakto…
+Contrast	Kontrasto
+Conversion Options	Konvertaj agordoj
+Convert Formats	Konverti formatojn
+Convert Formats…	Konverti formatojn…
+Convert for Smart Filters	Konverti por inteligentaj filtriloj
+Convert to Layers	Konverti al tavoloj
+Convert to Linked…	Konverti al ligita…
+Convert to Paragraph Text	Konverti al alinea teksto
+Convert to Point Text	Konverti al punkta teksto
+Convert to Profile	Konverti al profilo
+Convert to Profile works on 8- and 16-bit documents	Konverti al profilo funkcias en 8- kaj 16-bitaj dokumentoj
+Convert to Profile…	Konverti al profilo…
+Convert to Shape	Konverti al formo
+Convert to Smart Object	Konverti al saĝa objekto
+Converted to {name} ({intent}): the numbers changed so the colours look the same	Konvertita al {name} ({intent}): la valoroj ŝanĝiĝis, por ke la koloroj aspektu same
+Cool	Malvarma
+Copper	Kupro
+Copy	Kopii
+Copy Layer Style	Kopii tavolan stilon
+Copy Merged	Kopii kunfanditan
+Copyright Notice	Kopirajta avizo
+Corner length	Angula longo
+Corner radius	Angula radiuso
+Corner radius applies to rectangles; this path has no corners to round	Angula radiuso validas por rektanguloj; ĉi tiu vojo ne havas angulojn por rondigi
+Corners	Anguloj
+Count jitter	Nombra varianco
+Create Clipping Mask	Krei tondan maskon
+Create Layer	Krei tavolon
+Create Layers	Krei tavolojn
+Crop	Stuci
+Crop and Straighten Photos	Stuci kaj rektigi fotojn
+Crops the canvas to the content, judged by the basis below.	Stucas la kanvason al la enhavo, juĝante laŭ la suba bazo.
+Crystallize…	Kristaligi…
+Current Layer	Nuntempa tavolo
+Current Path	Nuntempa vojeto
+Curve tolerance	Kurba toleremo
+Curves	Kurboj
+Curves…	Kurboj…
+Custom	Propra
+Custom Brush	Propra penikilo
+Custom: with the Move tool, drag the 16 mesh handles on the canvas	Propra: per la movilo, trenu la 16 retajn tenilojn sur la kanvaso
+Custom…	Propra…
+Cut	Tondi
+Cyan	Cejana
+Cyan / Red	Cejana / ruĝa
+Cyans	Cejanoj
+DDS…	DDS…
+DXF…	DXF…
+Dark	Malhela
+Dark Blue	Malhelblua
+Dark Grey	Malhelgriza
+Darken	Malheligi
+Darker Color	Pli malhela koloro
+Dash	Streketo
+Data Set	Datumaro
+Data Sets	Datumaroj
+Data Sets…	Datumaroj…
+Default	Defaŭlta
+Default colours  (D)	Defaŭltaj koloroj  (D)
+Default colours (D)	Defaŭltaj koloroj (D)
+Define	Difini
+Define Brush Preset…	Difini antaŭagordon de penikilo…
+Define Custom Shape…	Difini propran formon…
+Define New	Difini novan
+Define Pattern…	Difini ŝablonon…
+Define…	Difini…
+Delete	Forigi
+Delete Filter Mask	Forigi filtrilan maskon
+Delete Layer	Forigi tavolon
+Delete Mask	Forigi maskon
+Delete Vector Mask	Forigi vektoran maskon
+Delete action	Forigi agon
+Delete channel	Forigi kanalon
+Delete frame	Forigi kadron
+Delete path	Forigi vojon
+Delete selected layers	Forigi elektitajn tavolojn
+Delete set and its actions	Forigi aron kaj ĝiajn agojn
+Delete stop	Forigi halton
+Delete the applied comp	Forigi la aplikitan komponaĵon
+Delete the selected keyframe	Forigi la elektitan ŝlosilkadron
+Delete the selected tool preset	Forigi la elektitan antaŭagordon de ilo
+Delete the selected {noun}	Forigi la elektitan {noun}
+Delete the smart filter mask	Forigi la maskon de la inteligenta filtrilo
+Delete this note	Forigi ĉi tiun noton
+Delete this smart filter	Forigi ĉi tiun inteligentan filtrilon
+Delete this spot channel	Forigi ĉi tiun punktokoloran kanalon
+Density	Denseco
+Dents…	Kavetoj…
+Desaturate	Malsaturi
+Description	Priskribo
+Deselect	Malelekti
+Deselect Layers	Malelekti tavolojn
+Despeckle	Senmakuligi
+Destination	Celloko
+Destination Space	Cela spaco
+Detail	Detalo
+Detail scales	Detalaj skaloj
+Diamond	Diamanto
+Difference	Diferenco
+Difference Clouds	Malsamecaj nuboj
+Diffuse…	Difuzi…
+Diffusion	Disvastigo
+Diffusion Dither	Disvastiga punktumado
+Disable / Enable Filter Mask	Malŝalti / ŝalti filtrilan maskon
+Disable / Enable Mask	Malŝalti / ŝalti maskon
+Disable / Enable Vector Mask	Malŝalti / ŝalti vektoran maskon
+Disable Mask	Malŝalti maskon
+Disable Vector Mask	Malebligi vektoran maskon
+Displace…	Movi per heleco…
+Dissolve	Dissolva
+Distance	Distanco
+Distort	Distordi
+Distribute	Distribui
+Dither	Apliki punktojn
+Dither…	Apliki punktojn…
+Divide	Dividi
+Dock this panel here	Doki ĉi tiun panelon ĉi tie
+Document	Dokumento
+Document Bounds	Dokumentaj randoj
+Document Info	Dokumentaj informoj
+Document Title	Dokumenta titolo
+Document size	Dokumenta grando
+Double-click to edit in Layer Style; drag to the trash to delete	Duoble alklaku por redakti en Tavola stilo; trenu al la rubujo por forigi
+Double-click to edit this filter's settings	Duoble alklaku por redakti la agordojn de ĉi tiu filtrilo
+Double-click to rename	Duoble alklaku por renomi
+Drag a line with the Ruler first	Unue trenu linion per la Liniilo
+Drag to zoom the view	Trenu por zomi la vidon
+Drop Shadow	Ĵetita ombro
+Drop Shadow…	Ĵetita ombro…
+Duotone	Dutono
+Duotone Options	Dutonaj agordoj
+Duotone…	Dutono…
+Duplicate	Duobligi
+Duplicate Layer	Duobligi tavolon
+Duplicate Layer…	Duobligi tavolon…
+Duplicate frame	Duobligi kadron
+Dust & Scratches…	Polvo kaj grataĵoj…
+EMF…	EMF…
+EXIF and XMP writing is not implemented — only ICC is embedded	Skribado de EXIF kaj XMP ne estas realigita — nur ICC estas enkorpigita
+EXR…	EXR…
+Ease In	Milda komenco
+Ease Out	Milda fino
+Edge Glow	Randa brilo
+Edge refinement: feather, shift, smooth, and contrast over the mask's existing coverage — not subject recognition.	Randa precizigo: plumigo, deŝovo, glatigo kaj kontrasto super la ekzistanta kovro de la masko — ne rekono de subjekto.
+Edges	Randoj
+Edit	Redakti
+Edit Adjustment	Redakti alĝustigon
+Edit Adjustment…	Redakti alĝustigon…
+Edit Alpha Channel	Redakti alfa-kanalon
+Edit Contents…	Redakti enhavon…
+Edit Document Records	Redakti dokumentajn registrojn
+Edit Fill	Redakti plenigon
+Edit Filter Mask	Redakti filtrilan maskon
+Edit Generator	Redakti generilon
+Edit Group	Redakti grupon
+Edit Guides	Redakti gvidliniojn
+Edit Raster	Redakti rastrumon
+Edit Saved Selection	Redakti konservitan elekton
+Edit Shape	Redakti formon
+Edit Slices	Redakti tranĉaĵojn
+Edit Smart object	Redakti inteligentan objekton
+Edit Text	Redakti tekston
+Edit Timeline	Redakti templinion
+Edit brush…	Redakti penikilon…
+Edit fill	Redakti plenigon
+Edit gradient stops — click to open the editor	Redakti gradientajn haltojn — alklaku por malfermi la redaktilon
+Edit in Quick Mask Mode	Redakti en rapidmaska reĝimo
+Edit this ramp	Redakti ĉi tiun gradientan strion
+Effects	Efektoj
+Effects apply to the whole layer and undo as one step.	Efektoj aplikiĝas al la tuta tavolo kaj malfariĝas per unu paŝo.
+Embed EXIF and XMP	Enkorpigi EXIF kaj XMP
+Embed Linked	Enkorpigi ligitan
+Embed colour profile	Enkorpigi kolorprofilon
+Embedded source	Enkorpigita fonto
+Emboss…	Reliefi…
+Enable / disable the smart filter mask	Ŝalti / malŝalti la maskon de la inteligenta filtrilo
+Enable Mask	Ŝalti maskon
+Enable Vector Mask	Ebligi vektoran maskon
+Enable at least one export	Ŝaltu almenaŭ unu eksporton
+Enabled	Ŝaltita
+Enlarge smaller images	Pligrandigi pli malgrandajn bildojn
+Enter a colour like #3366CC	Enigu koloron kiel #3366CC
+Entropy	Entropio
+Equalize	Egaligi
+Essentials	Esencaĵoj
+Every enabled row is written when you export.	Ĉiu ŝaltita vico skribiĝas dum eksporto.
+Every image in the source folder is fitted into the box and written to the destination folder in its own format.	Ĉiu bildo en la fonta dosierujo estas adaptita al la skatolo kaj skribita al la cela dosierujo en sia propra formato.
+Every parameter is at its neutral value — there is nothing to clean	Ĉiu parametro estas je sia neŭtrala valoro — estas nenio por purigi
+Every parameter is at its neutral value — there is nothing to refine	Ĉiu parametro estas je sia neŭtrala valoro — estas nenio por precizigi
+Every variable needs a name	Ĉiu variablo bezonas nomon
+Exact	Preciza
+Exclude Overlapping Shapes	Ekskludi interkovrantajn formojn
+Exclusion	Ekskluziveco
+Expand Selection	Pligrandigi elekton
+Expand by	Pligrandigi je
+Expand the dock	Etendi la dokon
+Expanded	Etendita
+Expand…	Etendi…
+Export	Eksporti
+Export As	Eksporti kiel
+Export Color Lookup	Eksporti koloran serĉtabelon
+Export Contents…	Eksporti enhavon…
+Export Diagnostics…	Eksporti diagnozojn…
+Export Layers…	Eksporti tavolojn…
+Export PDF	Eksporti PDF
+Export as .ABR…	Eksporti kiel .ABR…
+Export as .ACO…	Eksporti kiel .ACO…
+Export as .ASL…	Eksporti kiel .ASL…
+Export set as .atn	Eksporti aron kiel .atn
+Export…	Eksporti…
+Exposure	Eksponeco
+Exposure…	Eksponeco…
+Extra Bold	Ekstra grasa
+Extra Condensed	Ekstra kondensita
+Extra Expanded	Ekstra etendita
+Extra Light	Ekstra maldika
+Extras	Kromaĵoj
+Extrude…	Eltrudi…
+Eyedropper	Gutigilo
+Face	Tiparfasono
+Facet	Faceto
+Fade	Dissolvi
+Fade…	Dissolvi…
+Family	Familio
+Feather	Plumi
+Feather Selection	Plumigi elekton
+Feather radius	Pluma radiuso
+Feather…	Plumi…
+Fibers…	Fibroj…
+Field Blur…	Kampa malklarigo…
+File	Dosiero
+File Info	Pri dosiero
+File Info…	Pri dosiero…
+File name	Dosiernomo
+Files that fail are listed in batch-errors.txt in the destination.	Malsukcesaj dosieroj estas listigitaj en batch-errors.txt en la celo.
+Fill	Plenigi
+Fill Filter Mask	Plenigi filtrilan maskon
+Fill Layer	Pleniga tavolo
+Fill Mask	Plenigi maskon
+Fill Screen	Plenigi ekranon
+Fill in File Info, or open a file that has EXIF, to embed metadata	Plenigu Dosierajn informojn, aŭ malfermu dosieron kun EXIF, por enkorpigi metadatumojn
+Fill path with the foreground colour, on a new shape layer	Plenigi la vojon per la malfona koloro, sur nova forma tavolo
+Fill type	Pleniga tipo
+Fills the active selection with the chosen contents.	Plenigas la aktivan elekton per la elektita enhavo.
+Fill…	Plenigi…
+Filter	Filtrilo
+Filter Gallery	Filtrilaro
+Filter Gallery…	Filtrilaro…
+Find Edges	Trovi randojn
+First line	Unua linio
+Fish	Fiŝo
+Fisheye	Fiŝokulo
+Fit The Area	Adapti per la areo
+Fit on Screen	Adapti al ekrano
+Fit the whole image in the window	Adapti la tutan bildon al la fenestro
+Fixed height	Fiksa alto
+Flag	Flago
+Flame…	Flamo…
+Flat Angled 40	Plata oblikva 40
+Flatten Image	Unutavoligi bildon
+Flip Canvas Horizontal	Spegulturni kanvason horizontale
+Flip Canvas Vertical	Spegulturni kanvason vertikale
+Flip Horizontal	Spegulturni horizontale
+Flip Vertical	Spegulturni vertikale
+Flip View Horizontal	Spegulturni vidon horizontale
+Flip View Vertical	Spegulturni vidon vertikale
+Flow jitter	Flua varianco
+Folders	Dosierujoj
+Font: 	Tiparo: 
+Foreground strokes mark what to keep, background strokes what to drop; Preview shows the cut.	Malfonaj strekoj markas tion, kion teni, fonaj strekoj tion, kion forĵeti; Antaŭvido montras la tranĉon.
+Foreground — double-click for the picker	Malfono — duoble alklaku por la elektilo
+Foreground/background jitter	Malfona/fona varianco
+Format	Formato
+Fourier	Fourier
+Fourier Transform	Fourier-transformo
+Fragment	Fragmento
+Frame	Kadro
+Frames	Kadroj
+Free Transform	Libertransformilo
+Free Transform a Copy	Libera transformo de kopio
+From Transparency	Laŭ travidebleco
+Fullscreen	Plenekrana
+Fuzziness	Lanugeco
+GIF…	GIF…
+Gamma	Gamao
+Gamut Warning	Averto pri gamo
+Gaussian	Gaussian
+Gaussian Blur…	Gaussian-nebuligo…
+Generate Mockups	Generi maketojn
+Generate Mockups…	Generi maketojn…
+Give the brush a name	Donu nomon al la penikilo
+Give the export a file name	Donu dosiernomon al la eksporto
+Glass Menus	Vitraj menuoj
+Global light	Ĉiea lumo
+Glyphs	Signobildoj
+Gradient	Gradiento
+Gradient Editor	Gradientredaktilo
+Gradient Map	Gradienta mapo
+Gradient Map…	Gradienta mapo…
+Gradient Overlay	Gradienta kovraĵo
+Gradient Overlay…	Gradienta kovraĵo…
+Gradient…	Gradiento…
+Gray	Griza
+Grayscale	Grizoskalo
+Green	Verda
+Greens	Verdoj
+Grid	Krado
+Grid points	Kradaj punktoj
+Group	Grupo
+Group Layers	Grupigi tavolojn
+Grow	Kreskigi
+Guide Guy	Guide Guy
+Guides	Gvidiloj
+Gutter	Interspaco
+H	A
+H.264 (plays everywhere)	H.264 (ludiĝas ĉie)
+HDR Toning	HDR-tonigo
+HDR Toning…	HDR-tonigo…
+HSB/HSL…	HSB/HSL…
+Halftone Screen	Duontona rastrumo
+Hard Light	Malmola lumo
+Hard Mix	Malmola miksaĵo
+Hard Round 24	Malmola ronda 24
+Hard Round 4	Malmola ronda 4
+Hard edges, no blending. Pixel art only — it aliases on downscale.	Malmolaj randoj, sen miksado. Nur por rastruma arto — dentiĝas dum malgrandigo.
+Harder Brush	Pli malmola penikilo
+Height	Alteco
+Height to 110%	Alto al 110%
+Height to 125%	Alto al 125%
+Height to 80%	Alto al 80%
+Height to 90%	Alto al 90%
+Help	Helpo
+Hide All	Kaŝi ĉion
+Hide Layers	Kaŝi tavolojn
+Hide Selection	Kaŝi elekton
+Hide the source layer	Kaŝi la fontan tavolon
+High Contrast	Alta kontrasto
+High Pass…	Altpasa…
+Highlights	Lumemfazoj
+Histogram	Histogramo
+Histories	Historioj
+History	Historio
+Hold	Teni
+Horizontal Centers	Horizontalaj centroj
+Horizontal Distortion	Horizontala distordo
+Horizontal center guide	Horizontala centra gvidlinio
+Horizontal scale, in percent: widens or narrows the glyphs and their spacing	Horizontala skalo, en procentoj: larĝigas aŭ mallarĝigas la glifojn kaj ilian interspacon
+Horizontally	Horizontale
+Hue	Kolornuanco
+Hue jitter	Nuanca varianco
+Hue/Saturation	Kolortono & satureco
+Hue/Saturation…	Kolortono & satureco…
+ICC profile	ICC-profilo
+ICO…	ICO…
+Image	Bildo
+Image Options	Bildaj agordoj
+Image Rotation	Bilda turno
+Image Size	Bilda grandeco
+Image Size…	Bilda grandeco…
+Image size	Bilda grando
+Import CSV…	Importi CSV…
+Import PDF	Importi PDF
+Import a CSV of data sets first	Unue importu CSV-on de datumaroj
+Import a CSV: the first row names the variables, every further row is one data set.	Importu CSV-on: la unua vico nomas la variablojn, ĉiu plia vico estas unu datumaro.
+In use	En uzo
+Inches	Coloj
+Indexed Color	Indeksita koloro
+Indexed Color…	Indeksita koloro…
+Inflate	Ŝveligi
+Info	Informoj
+Ink	Inko
+Ink Color	Inka koloro
+Ink printed at 0, 25, 50, 75 and 100% tint	Inko presita je 0, 25, 50, 75 kaj 100% nuanco
+Inner Glow	Interna ardo
+Inner Glow…	Interna ardo…
+Inner Radius	Interna radiuso
+Inner Shadow	Interna ombro
+Inner Shadow…	Interna ombro…
+Inside	Internen
+Intent	Intenco
+Intersect Shape Areas	Kruci formajn areojn
+Intersect with Selection	Kruci kun elekto
+Inverse	Inverso
+Inverse Fourier Transform	Inversa Fourier-transformo
+Invert	Inversigi
+Invert coverage	Inversigi kovron
+Invert has no parameters	Inversigi ne havas parametrojn
+Iris Blur…	Iris-malklarigo…
+Italic	Kursiva
+JPEG carries the XMP and the source's EXIF	JPEG portas la XMP-on kaj la EXIF de la fonto
+JPG…	JPG…
+Justify	Ĝisrandigi ambaŭflanke
+Kaleidoscope…	Kalejdoskopo…
+Keep as it was	Teni kiel ĝi estis
+Kept when a comp is first applied	Tenata kiam komponaĵo estas unuafoje aplikita
+Kerning	Signoparigo
+Keyboard Shortcut Sheet…	Folio de fulmoklavoj…
+Keyboard Shortcuts…	Klavaraj ŝparvojoj…
+Keywords	Ŝlosilvortoj
+Kind	Speco
+Kurtosis	Kurtozo
+Lab Color	Lab-koloro
+Landscape	Pejzaĝa
+Language	Lingvo
+Large	Granda
+Last Document State	Lasta dokumenta stato
+Last Filter	Lasta filtrilo
+Last line	Lasta linio
+Layer	Tavolo
+Layer Comps	Tavolaj kompozicioj
+Layer Edges	Tavolaj randoj
+Layer Mask	Tavola masko
+Layer Properties	Tavolaj ecoj
+Layer Style	Tavolstilo
+Layer knocks out drop shadow	La tavolo eltranĉas la falombron
+Layer via Copy	Tavolo per kopio
+Layer via Cut	Tavolo per eltondo
+Layers	Tavoloj
+Layers panel options	Agordoj de la Tavoloj-panelo
+Left	Maldekstre
+Left Edges	Maldekstraj randoj
+Left indent	Maldekstra krommarĝeno
+Length	Longeco
+Lens Blur…	Lensa nebuligo…
+Lens Correction…	Lensa korektado…
+Lens Flare…	Lensa flagro…
+Level	Nivelo
+Levels	Niveloj
+Levels…	Niveloj…
+Light	Hela
+Light Grey	Helgriza
+Lighten	Heligi
+Lighter Color	Pli hela koloro
+Lighting Effects…	Lumaj efektoj…
+Lightness	Lumeco
+Line	Linio
+Linear	Lineara
+Linear Burn	Lineara brulo
+Linear Dodge (Add)	Lineara evito (adicio)
+Linear Light	Lineara lumo
+Link / Unlink Mask	Ligi / malligi maskon
+Link Layers	Ligi tavolojn
+Link selected layers	Ligi elektitajn tavolojn
+Link with layer	Ligi kun tavolo
+Linked	Ligita
+Linked file	Ligita dosiero
+Liquify…	Likvigi…
+Live Shape	Tujredaktebla formo
+Live preview	Viva antaŭvido
+Live preview is off.	Viva antaŭvido estas malŝaltita.
+Load	Ŝargi
+Load .atn	Ŝargi .atn
+Load .cube file…	Ŝargi .cube-dosieron…
+Load Selection	Ŝargi elekton
+Load Selection…	Ŝargi elekton…
+Load actions	Ŝargi agojn
+Load channel as selection	Ŝargi kanalon kiel elekton
+Load path as a selection	Ŝargi vojon kiel elekton
+Loaded file	Ŝargita dosiero
+Lock	Ŝlosi
+Lock All	Ŝlosi ĉion
+Lock Guides	Ŝlosi gvidilojn
+Lock Image Pixels	Ŝlosi bildajn rastrumerojn
+Lock Position	Ŝlosi pozicion
+Lock Transparent Pixels	Ŝlosi travideblajn rastrumerojn
+Lock all	Ŝlosi ĉion
+Lock pixels	Ŝlosi rastrumerojn
+Lock position	Ŝlosi pozicion
+Lock transparent pixels	Ŝlosi travideblajn rastrumerojn
+Long-tap as a right click	Longa tuŝo kiel dekstra klako
+Lookup table	Serĉtabelo
+Luminance	Lumo
+Luminance of the preview source; the markers are the black and white points.	Lumo de la antaŭvida fonto; la markiloj estas la nigra kaj la blanka punktoj.
+Luminosity	Lumeco
+MP4…	MP4…
+Magenta	Magenta
+Magenta / Green	Magenta / verda
+Magentas	Magentoj
+Magic Cut	Magia tranĉo
+Magic Cut…	Magia tranĉo…
+Make Frames	Fari kadrojn
+Make a selection first	Unue faru elekton
+Make work path from selection	Fari laborvojon el la elekto
+Manual	Mana
+Maps every colour onto one palette. The document keeps RGBA pixels; GIF and PNG export write this palette.	Mapas ĉiun koloron al unu paletro. La dokumento tenas RGBA-rastrumerojn; GIF- kaj PNG-eksporto skribas ĉi tiun paletron.
+Maps the active layer onto a palette as one undo step; the document stays RGB.	Mapas la aktivan tavolon al paletro per unu malfarebla paŝo; la dokumento restas RGB.
+Margins	Marĝenoj
+Mark this state so you can come back to it	Marku ĉi tiun staton por povi reveni al ĝi
+Mask	Masko
+Mask Properties	Maskaj ecoj
+Mask source	Maska fonto
+Match Color	Kongruigi koloron
+Match Color…	Kongruigi koloron…
+Matting	Forigo de haloo
+Maximum	Maksimumo
+Maximum…	Maksimumo…
+Mean	Meznombro
+Median	Mediano
+Median…	Mediano…
+Medium	Mezgranda
+Memory	Memoro
+Menu Bar and Canvas	Menubreto kaj kanvaso
+Merge	Kunigi
+Merge Channels	Kunfandi kanalojn
+Merge Channels…	Kunfandi kanalojn…
+Merge Down	Kunfandigi malsupren
+Merge Layers	Kunfandigi tavolojn
+Merge Visible	Kunfandi videblajn
+Merged	Kunfandita
+Method	Metodo
+Metrics	Metrika
+Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.	Metrika uzas la paran signoparigon de la tiparo mem; 0 malŝaltas signoparigon; Mana metas unu kvanton (1/1000 em) inter ĉiu paro de la teksto kia ĝi nun estas, kaj signoj tajpitaj poste komenciĝas sen signoparigo; ĝi bezonas almenaŭ du signojn, do pli mallonga teksto kaj la defaŭltoj de la tekstilo ne proponas ĝin. La formilo ne havas optikan signoparigon, do tiu reĝimo ne estas proponata.
+Mezzotint…	Mezotinto…
+Midtones	Meztonoj
+Millimeters	Milimetroj
+Min diameter	Min. diametro
+Min roundness	Min. rondeco
+Min size	Min. grando
+Minimal	Minimuma
+Minimum	Minimumo
+Minimum size only applies when pressure controls size.	Minimuma grando validas nur kiam premo regas grandon.
+Minimum…	Minimumo…
+Miter	Pinta angulo
+Mode	Reĝimo
+Modify	Modifi
+Monochrome	Unukolora
+Monotone	Unutona
+More readouts	Pliaj legaĵoj
+More tabs	Pliaj langetoj
+Mosaic…	Mozaiko…
+Motion Blur…	Movada nebuligo…
+Move Layer	Movi tavolon
+Move a control first: these settings would change nothing	Unue movu regilon: ĉi tiuj agordoj ŝanĝus nenion
+Move this panel	Movi ĉi tiun panelon
+Move this panel within its dock	Movi ĉi tiun panelon ene de ĝia doko
+Move to	Movi al
+Move with the layer	Movi kun la tavolo
+Multiply	Multipliki
+Name	Nomo
+Name Change	Ŝanĝi nomon
+Name the channel first.	Unue nomu la kanalon.
+Navigator	Navigilo
+Nearest Neighbour	Plej proksima najbaro
+Neutralize	Neŭtraligi
+Neutrals	Neŭtraloj
+New	Nova
+New Adjustment Layer	Nova ĝustigo-tavolo
+New Channel	Nova kanalo
+New Document	Nova dokumento
+New Fill Layer	Nova pleniga tavolo
+New Folder	Nova dosierujo
+New Guide	Nova gvidlinio
+New Guide Layout	Nova aranĝo de gvidlinioj
+New Guide Layout…	Nova aranĝo de gvidlinioj…
+New Guide…	Nova gvidlinio…
+New Layer	Nova tavolo
+New Layer Based Slice	Nova tavol-bazita tranĉaĵo
+New Selection	Nova elekto
+New Smart Object via Copy	Nova inteligenta objekto per kopio
+New Snapshot	Nova momentfoto
+New Spot Channel	Nova punktokolora kanalo
+New Spot Channel…	Nova punktokolora kanalo…
+New Style Preset	Nova antaŭagordo de stilo
+New Video Group	Nova videogrupo
+New channel	Nova kanalo
+New folder	Nova dosierujo
+New group	Nova grupo
+New layer	Nova tavolo
+New layer comp	Nova tavola komponaĵo
+New note at the centre of the view	Nova noto en la centro de la vido
+New path (saves the Work Path when it is selected)	Nova vojo (konservas la laborvojon kiam ĝi estas elektita)
+New set	Nova aro
+New size	Nova grando
+New style from the active layer	Nova stilo el la aktiva tavolo
+New tool preset from the active tool	Nova antaŭagordo de ilo el la aktiva ilo
+New {noun} from the active text layer	Nova {noun} el la aktiva teksta tavolo
+New…	Nova…
+Next Blend Mode	Sekva miksa reĝimo
+No Color	Neniu koloro
+No character styles yet. New records the active text layer's font, size and look.	Ankoraŭ neniuj signostiloj. Nova registras la tiparon, grandon kaj aspekton de la aktiva teksta tavolo.
+No command loads a channel as the selection in this build; the Select menu's Load Selection restores a saved selection instead	Neniu komando ŝargas kanalon kiel elekton en ĉi tiu versio; Ŝargi elekton en la menuo Elekti anstataŭe restarigas konservitan elekton
+No commands to bind	Neniuj komandoj por ligi
+No document	Neniu dokumento
+No document is open	Neniu dokumento estas malfermita
+No export selected	Neniu eksporto elektita
+No faces listed for this family name	Neniuj fasonoj listigitaj por ĉi tiu familinomo
+No frames yet. Add frame makes an _a_ layer: each one is a frame, bottom first.	Ankoraŭ neniuj kadroj. Aldoni kadron kreas _a_-tavolon: ĉiu estas kadro, komencante de la malsupro.
+No guide crosses the canvas	Neniu gvidlinio trairas la kanvason
+No installed family matches	Neniu instalita familio kongruas
+No layer comps yet. New Layer Comp records every layer's visibility, position and appearance.	Ankoraŭ neniuj tavolaj komponaĵoj. Nova tavola komponaĵo registras la videblecon, pozicion kaj aspekton de ĉiu tavolo.
+No layers yet. Add one with the + button below.	Ankoraŭ neniuj tavoloj. Aldonu unu per la butono + sube.
+No layers yet: each top-level layer gets a bar on the timeline.	Ankoraŭ neniuj tavoloj: ĉiu plejsupra tavolo ricevas strion sur la templinio.
+No notes yet. Click the canvas with the Note tool (I), or New Note pins one at the centre of the view; notes are saved with the document and never exported.	Ankoraŭ neniuj notoj. Alklaku la kanvason per la notilo (I), aŭ Nova noto alpinglas unu en la centro de la vido; notoj konserviĝas kun la dokumento kaj neniam eksportiĝas.
+No open document is the same size as this one	Neniu malfermita dokumento havas la saman grandon kiel ĉi tiu
+No paragraph styles yet. New records the active text layer's alignment, indents and spacing.	Ankoraŭ neniuj alinestiloj. Nova registras la ĝisrandigon, krommarĝenojn kaj interspacojn de la aktiva teksta tavolo.
+No pattern chosen — the overlay paints nothing.	Neniu ŝablono elektita — la surmeto pentras nenion.
+No patterns are defined yet	Ankoraŭ neniuj ŝablonoj difinitaj
+No profile file was chosen	Neniu profila dosiero estis elektita
+No recent files yet	Ankoraŭ neniuj lastatempaj dosieroj
+No selection has been saved	Neniu elekto estis konservita
+No source recorded for this object	Neniu fonto registrita por ĉi tiu objekto
+No stop selected	Neniu halto elektita
+No style presets yet. Define one with Layer > Layer Style > Define Style Preset, or add a Photoshop library with File > Open (.asl).	Ankoraŭ neniuj antaŭagordoj de stilo. Difinu unu per Tavolo > Tavola stilo > Difini antaŭagordon de stilo, aŭ aldonu Photoshop-bibliotekon per Dosiero > Malfermi (.asl).
+No styles yet. The + button saves the active layer's style; File > Open loads an .asl style library.	Ankoraŭ neniuj stiloj. La butono + konservas la stilon de la aktiva tavolo; Dosiero > Malfermi ŝargas .asl-stilbibliotekon.
+No such command	Tia komando ne ekzistas
+No tool presets yet. New Tool Preset saves the active tool with its current options.	Ankoraŭ neniuj antaŭagordoj de ilo. Nova antaŭagordo de ilo konservas la aktivan ilon kun ĝiaj nunaj agordoj.
+Noise	Bruo
+None	Neniu
+Normal	Normala
+Normal Map…	Normala Mapo…
+Not a hex colour	Ne estas deksesuma koloro
+Not installed — shaping with	Ne instalita — formata per
+Not saved yet	Ankoraŭ ne konservita
+Notes	Notoj
+Nothing has changed	Nenio ŝanĝiĝis
+Nothing in this submenu is available right now	Nenio en ĉi tiu submenuo disponeblas nun
+Nothing is left to learn the background from: paint over it with the background brush.	Restas nenio el kio lerni la fonon: pentru super ĝi per la fona penikilo.
+Nothing to measure yet — paint or place something on this layer first	Ankoraŭ nenio por mezuri — unue pentru aŭ metu ion sur ĉi tiun tavolon
+Nothing to preview.	Nenio por antaŭvidi.
+OK	Okej
+Oblique	Oblikva
+Off: the wheel pans the view and Ctrl+wheel zooms	Malŝaltita: la rado ŝovas la vidon kaj Ctrl+rado zomas
+Offset…	Ofseto…
+Oil Paint…	Olefarbo…
+One page holding the flattened image; no vector content.	Unu paĝo kun la platigita bildo; sen vektora enhavo.
+Onion skin	Cepŝelo
+Only English is available in this build	Nur la angla disponeblas en ĉi tiu versio
+Only a mask channel can be loaded as a selection here	Ĉi tie nur maska kanalo povas esti ŝargita kiel elekto
+Only web-safe colours	Nur retsekuraj koloroj
+Opacity	Opakeco
+Opacity 10%	Opakeco 10%
+Opacity 100%	Opakeco 100%
+Opacity 20%	Opakeco 20%
+Opacity 30%	Opakeco 30%
+Opacity 40%	Opakeco 40%
+Opacity 50%	Opakeco 50%
+Opacity 60%	Opakeco 60%
+Opacity 70%	Opakeco 70%
+Opacity 80%	Opakeco 80%
+Opacity 90%	Opakeco 90%
+Opacity jitter	Opakeca varianco
+Opacity key	Opakeca ŝlosilo
+Opacity must be between 0% and 100%	Opakeco devas esti inter 0% kaj 100%
+Opacity scales the layer and its effects; Fill scales the layer's own pixels only.	Opakeco skalas la tavolon kaj ĝiajn efektojn; Plenigo skalas nur la proprajn rastrumerojn de la tavolo.
+Opacity stops sit above the bar, colour stops below it.	Opakecaj haltoj sidas super la strio, koloraj haltoj sub ĝi.
+Open	Malfermi
+Open .ABR…	Malfermi .ABR…
+Open .ACO…	Malfermi .ACO…
+Open .ASL…	Malfermi .ASL…
+Open Recent	Malfermi lastatempan
+Open a document first	Unue malfermu dokumenton
+Open a document to animate it.	Malfermu dokumenton por animacii ĝin.
+Open a document to apply styles to its layers.	Malfermu dokumenton por apliki stilojn al ĝiaj tavoloj.
+Open a document to insert glyphs into its text.	Malfermu dokumenton por enmeti glifojn en ĝian tekston.
+Open a document to keep text styles in it.	Malfermu dokumenton por teni tekststilojn en ĝi.
+Open a document to lay guides out on it.	Malfermu dokumenton por aranĝi gvidliniojn sur ĝi.
+Open a document to pin notes on it.	Malfermu dokumenton por alpingli notojn sur ĝi.
+Open a document to record layer comps.	Malfermu dokumenton por registri tavolajn komponaĵojn.
+Open a document to see its CSS	Malfermu dokumenton por vidi ĝian CSS-on
+Open a document to see its facts.	Malfermu dokumenton por vidi ĝiajn faktojn.
+Open a document to see its histogram	Malfermu dokumenton por vidi ĝian histogramon
+Open a document to see its history	Malfermu dokumenton por vidi ĝian historion
+Open a document to see its properties	Malfermu dokumenton por vidi ĝiajn ecojn
+Open another document, or add another pixel layer, to match its colours.	Malfermu alian dokumenton, aŭ aldonu alian rastrumeran tavolon, por kongruigi ĝiajn kolorojn.
+Open as	Malfermi kiel
+Open editor…	Malfermi redaktilon…
+Open or close the folder	Malfermi aŭ fermi la dosierujon
+Open the Adjustments panel	Malfermi la Alĝustigoj-panelon
+Open…	Malfermi…
+Operation	Operacio
+Orange	Oranĝa
+Other	Alia
+Out of gamut	Ekster gamo
+Outer Glow	Ekstera ardo
+Outer Glow…	Ekstera ardo…
+Outline the path	Konturi la vojon
+Output	Eligo
+Output channel	Eliga kanalo
+Outside	Eksteren
+Overlay	Kovraĵo
+PBM…	PBM…
+PDF Presentation…	PDF-prezentaĵo…
+PDF…	PDF…
+PGM…	PGM…
+PNG…	PNG…
+PPM…	PPM…
+Page	Paĝo
+Page {n}	Paĝo {n}
+Page {page} opens at {w} x {h} px	Paĝo {page} malfermiĝas je {w} x {h} px
+Pages	Paĝoj
+Paint	Pentri
+Paint Filter Mask	Pentri filtrilan maskon
+Paint Mask	Pentri maskon
+Paint over the part to keep with the foreground brush first.	Unue pentru super la tenenda parto per la malfona penikilo.
+Paint over what to keep and over what to drop	Pentru super tio, kion teni, kaj super tio, kion forĵeti
+Paint the inside of the path	Pentri la internon de la vojo
+Painting	Pentrado
+Paints a band along the active selection's border.	Pentras bendon laŭ la rando de la aktiva elekto.
+Pair kerning	Para signoparigo
+Palette	Paletro
+Paragraph	Alineo
+Paragraph Style	Alinestilo
+Paragraph Styles	Alinestiloj
+Particles…	Partikloj…
+Paste	Alglui
+Paste Into	Alglui interne
+Paste Layer Style	Alglui tavolan stilon
+Paste Outside	Alglui ekstere
+Paste Special	Speciala algluo
+Paste in Place	Alglui surloke
+Path	Vojeto
+Path Blur…	Voja malklarigo…
+Path editing lives in the Paths panel	Voja redaktado troviĝas en la Vojoj-panelo
+Paths	Vojetoj
+Pattern	Skemo
+Pattern Dither	Ŝablona punktumado
+Pattern Overlay	Ŝablona kovraĵo
+Pattern Overlay…	Ŝablona kovraĵo…
+Pattern Preview	Antaŭrigardo de skemo
+Pattern…	Skemo…
+Pencil 1px	Krajono 1px
+Percent	Procento
+Perceptual	Percepta
+Perspective	Perspektivo
+Perspective Warp	Perspektiva kurbigo
+Photo Filter	Fotofiltrilo
+Photo Filter…	Fotofiltrilo…
+Photography	Fotografio
+Picas	Pikaoj
+Pick a filter; it applies at its default settings.	Elektu filtrilon; ĝi aplikiĝas kun siaj defaŭltaj agordoj.
+Pin Light	Alpingli lumon
+Pinch…	Pinĉi…
+Pixel Grid	Piksela krado
+Pixel dimensions	Rastrumeraj dimensioj
+Pixel mask	Rastrumera masko
+Pixel to Pixel	Pikselo al pikselo
+Pixelate	Pikseligi
+Pixels	Pikseloj
+Place Embedded…	Meti enkorpigite…
+Place Linked…	Meti ligite…
+Play	Ludi
+Play from step	Ludi ekde paŝo
+Play selection	Ludi elekton
+Play this step (unchecked steps are passed over)	Ludi ĉi tiun paŝon (nemarkitaj paŝoj estas preterlasitaj)
+Plays a recorded Action on every image in the source folder and saves each result to the destination.	Ludas registritan agon sur ĉiu bildo en la fonta dosierujo kaj konservas ĉiun rezulton al la celo.
+Pointer	Montrilo
+Pointillize…	Punktigi…
+Points	Punktoj
+Polar Coordinates…	Polusaj koordinatoj…
+Position	Pozicio
+Position is locked — unlock it in the Layers panel to move or resize	La pozicio estas ŝlosita — malŝlosu ĝin en la Tavoloj-panelo por movi aŭ regrandigi
+Position key	Pozicia ŝlosilo
+Posterize	Posterizi
+Posterize…	Posterizi…
+Precise Cursor	Preciza kursoro
+Preferences…	Preferoj…
+Preserve Transparency	Konservi travideblecon
+Preserve luminosity	Konservi lumecon
+Preset Manager…	Antaŭagorda mastrumilo…
+Press a key…	Premu klavon…
+Pressure controls flow	Premo regas fluon
+Pressure controls size	Premo regas grandon
+Preview	Antaŭrigardi
+Preview against	Antaŭvidi kontraŭ
+Preview is off.	Antaŭvido estas malŝaltita.
+Previewed on the active layer; applied to its pixels as one undoable step.	Antaŭvidita sur la aktiva tavolo; aplikita al ĝiaj rastrumeroj per unu malfarebla paŝo.
+Previous Blend Mode	Antaŭa miksa reĝimo
+Print Size	Presa grando
+Print as PDF…	Presi kiel PDF…
+Print size	Presa grando
+Prints the grayscale image through one to four inks, each through its own curve. The inks are applied to the pixels when the mode changes.	Presas la grizoskalan bildon per unu ĝis kvar inkoj, ĉiu tra sia propra kurbo. La inkoj aplikiĝas al la rastrumeroj kiam la reĝimo ŝanĝiĝas.
+Print…	Printi…
+Profile	Profilo
+Profile from File…	Profilo el dosiero…
+Profiles are assigned to RGB documents	Profiloj estas asignitaj al RGB-dokumentoj
+Profiles are converted between in RGB documents	Profiloj estas konvertataj inter si en RGB-dokumentoj
+Profiles belong to RGB documents; convert to RGB first	Profiloj apartenas al RGB-dokumentoj; unue konvertu al RGB
+Proof Colors	Provaj koloroj
+Properties	Ecoj
+Puppet Warp	Pupa tordo
+Purge	Purigi memoron
+Purple	Purpura
+Quadtone	Kvartono
+Quality	Kvalito
+Quick Export Layer as PNG…	Rapide eksporti tavolon kiel PNG…
+Quit	Eliri
+RGB Color	RGB-koloro
+Radial Blur…	Radiusa nebuligo…
+Radius	Radiuso
+Radius (px)	Radiuso (px)
+Range	Gamo
+Raster Studio Help	Helpo pri Raster Studio
+Rasterize	Rastrumigi
+Reassign anyway	Tamen reasigni
+Recent	Lastatempaj
+Record	Registri
+Record Source Size	Registri fontan grandon
+Record an Action in the Actions panel first	Unue registru agon en la Agoj-panelo
+Record an edit, then replay the whole sequence on any document with at least as many layers.	Registru redakton, poste reludu la tutan sinsekvon sur iu ajn dokumento kun almenaŭ tiom da tavoloj.
+Record into set	Registri en aron
+Recording: every edit is captured until Stop	Registrado: ĉiu redakto kaptiĝas ĝis Halti
+Red	Ruĝa
+Redefine the selected {noun} from the active text layer, restyling every layer that uses it	Redifini la elektitan {noun} el la aktiva teksta tavolo, restiligante ĉiun tavolon, kiu uzas ĝin
+Redo	Refari
+Reds	Ruĝoj
+Reduce Colors	Malpliigi kolorojn
+Reduce Colors changed nothing: the layer already uses only colours of that palette	Redukti kolorojn ŝanĝis nenion: la tavolo jam uzas nur kolorojn de tiu paletro
+Reduce Colors: the layer now uses at most {n} colours	Redukti kolorojn: la tavolo nun uzas maksimume {n} kolorojn
+Reduce Colors…	Malpliigi kolorojn…
+Reduce Noise…	Malpliigi bruon…
+Reduces the grayscale image to pure black and white. The layers are flattened into one, over white.	Reduktas la grizoskalan bildon al pura nigra kaj blanka. La tavoloj platiĝas en unu, sur blanko.
+Reference point: Bottom	Referenca punkto: malsupre
+Reference point: Bottom Left	Referenca punkto: malsupre maldekstre
+Reference point: Bottom Right	Referenca punkto: malsupre dekstre
+Reference point: Centre	Referenca punkto: centro
+Reference point: Left	Referenca punkto: maldekstre
+Reference point: Right	Referenca punkto: dekstre
+Reference point: Top	Referenca punkto: supre
+Reference point: Top Left	Referenca punkto: supre maldekstre
+Reference point: Top Right	Referenca punkto: supre dekstre
+Refine	Precizigi
+Refine Edge…	Rafini randon…
+Refine Mask	Precizigi maskon
+Refine Mask…	Precizigi maskon…
+Regular	Regula
+Relative	Relativa
+Relative Colorimetric	Relativa kolorimetria
+Release Clipping Mask	Malligi tondan maskon
+Release Notes	Eldonaj notoj
+Relink to File…	Religi al dosiero…
+Remove Black Matte	Forigi nigran fonon
+Remove Color Fringe	Forigi koloran franĝon
+Remove Color Fringe…	Forigi koloran franĝon…
+Remove Fringe	Forigi franĝon
+Remove White Matte	Forigi blankan fonon
+Remove export	Forigi eksporton
+Remove this instance of the effect	Forigi ĉi tiun aperon de la efekto
+Remove this shortcut	Forigi ĉi tiun fulmoklavon
+Rename Layer	Renomi tavolon
+Rename Layer…	Renomi tavolon…
+Rename set	Renomi aron
+Render	Bildigi
+Rendering the preview…	Bildigado de la antaŭvido…
+Repeat…	Refojigi…
+Replace Color	Anstataŭigi koloron
+Replace Color…	Anstataŭigi koloron…
+Replace Contents	Anstataŭigi enhavon
+Replace Contents…	Anstataŭigi enhavon…
+Replace existing guides	Anstataŭigi ekzistantajn gvidliniojn
+Replay	Reludi
+Report an Issue	Raporti problemon
+Reselect	Reelekti
+Reset	Restarigi
+Reset Transform	Restarigi transformon
+Reset View Rotation	Restarigi vidan turnon
+Reset all shortcuts	Restarigi ĉiujn fulmoklavojn
+Resize Canvas	Regrandigi kanvason
+Resize Images	Regrandigi bildojn
+Resize Images…	Regrandigi bildojn…
+Resolution	Difino
+Resolution must be greater than zero	La distingivo devas esti pli granda ol nulo
+Restore Layer	Restarigi tavolon
+Result	Rezulto
+Return this tool to its defaults	Restarigi la defaŭltojn de ĉi tiu ilo
+Reveal All	Malkaŝi ĉiujn
+Reveal Selection	Malkaŝi elekton
+Reverse	Inversi
+Revert	Reveni al konservita
+Rewrites every pixel layer's numbers so the picture looks the same under the destination profile, as one undo step.	Reskribas la valorojn de ĉiu rastrumera tavolo, por ke la bildo aspektu same sub la cela profilo, per unu malfarebla paŝo.
+Right	Dekstre
+Right (narrow)	Dekstre (mallarĝa)
+Right (wide)	Dekstre (larĝa)
+Right Edges	Dekstraj randoj
+Right indent	Dekstra krommarĝeno
+Right-click a swatch to remove it	Dekstre alklaku specimenon por forigi ĝin
+Ring	Ringo
+Ripple…	Ondetigi…
+Rise	Altiĝi
+Rotate	Turni
+Rotate 180°	Turni 180°
+Rotate 90° Clockwise	Turni 90° dekstrume
+Rotate 90° Counter Clockwise	Turni 90° maldekstrume
+Rotate Canvas	Turni kanvason
+Rotate the active layer so the measured line is level (Enter)	Turni la aktivan tavolon, por ke la mezurita linio estu horizontala (Enter)
+Rotates the canvas and every layer. Right angles are pixel-exact; other angles resample.	Turnas la kanvason kaj ĉiun tavolon. Ortaj anguloj estas rastrumere precizaj; aliaj anguloj respecimeniĝas.
+Rotation key	Turna ŝlosilo
+Round	Ronda
+Round (computed)	Ronda (kalkulita)
+Rounded Steps	Rondigitaj ŝtupoj
+Roundness jitter	Rondeca varianco
+Rows	Vicoj
+Rulers	Liniiloj
+Run	Ruli
+SVG…	SVG…
+Same Radii	Samaj radiusoj
+Sample a colour from the canvas	Specimeni koloron el la kanvaso
+Sample radius	Specimena radiuso
+Sampled	Specimenita
+Sampled colour	Specimenita koloro
+Sampled tip not loaded; painting round	Specimenita pinto ne ŝargita; pentrante ronde
+Satin…	Sateno…
+Saturation	Satureco
+Saturation jitter	Satura varianco
+Save	Konservi
+Save As	Konservi kiel
+Save As…	Konservi kiel…
+Save Brush	Konservi penikilon
+Save Selection	Konservi elekton
+Save Selection…	Konservi elekton…
+Save actions	Konservi agojn
+Save as PSD…	Konservi kiel PSD…
+Save current brush	Konservi la nunan penikilon
+Save selection as channel	Konservi elekton kiel kanalon
+Saves every image in the source folder to the destination in another format, quality or size.	Konservas ĉiun bildon en la fonta dosierujo al la celo en alia formato, kvalito aŭ grando.
+Scale	Skali
+Scale %	Skalo %
+Scale Effects	Skalaj efektoj
+Scale Effects…	Skalaj efektoj…
+Scale H	Skalo H
+Scale V	Skalo V
+Scale key	Skala ŝlosilo
+Scale:	Skalo:
+Scales every size and distance of the active layer's style as one undo step.	Skalas ĉiun grandon kaj distancon de la stilo de la aktiva tavolo per unu malfarebla paŝo.
+Scaling by 100% changes nothing	Skali je 100% ŝanĝas nenion
+Scratch directory	Provizora dosierujo
+Screen	Ekrano
+Screen, print and social presets	Antaŭagordoj por ekrano, preso kaj sociaj retoj
+Script…	Skripto…
+Scroll wheel zooms instead of scrolling	La rulrado zomas anstataŭ rulumi
+Search Commands…	Serĉi komandojn…
+Search layers	Serĉi tavolojn
+Search layers by name	Serĉi tavolojn laŭ nomo
+Select	Elekti
+Select All	Elekti ĉion
+Select Bottom Layer	Elekti la plej malsupran tavolon
+Select Layer Above	Elekti la tavolon supre
+Select Layer Below	Elekti la tavolon sube
+Select Linked Layers	Elekti ligitajn tavolojn
+Select None	Elekti nenion
+Select Top Layer	Elekti la plej supran tavolon
+Select a layer first	Unue elektu tavolon
+Select a layer to see its CSS	Elektu tavolon por vidi ĝian CSS-on
+Select a layer to see its properties	Elektu tavolon por vidi ĝiajn ecojn
+Select a layer: a click on a style applies it to the active layer.	Elektu tavolon: alklako sur stilo aplikas ĝin al la aktiva tavolo.
+Select a path first	Unue elektu vojon
+Select a text layer, or type into one: a click inserts the glyph at the caret.	Elektu tekstan tavolon, aŭ tajpu en ĝi: alklako enmetas la glifon ĉe la kursoro.
+Select a text layer to edit its type	Elektu tekstan tavolon por redakti ĝian tiparon
+Select every pixel near one colour	Elekti ĉiun rastrumeron proksiman al unu koloro
+Selection	Elektaĵo
+Selection Edges	Elektaj randoj
+Selection: white is replaced, black is kept.	Elekto: blanko estas anstataŭigita, nigro estas tenata.
+Selective Color	Selektema koloro
+Selective Color…	Selektema koloro…
+Selects a band of this width along the selection's edge	Elektas bendon de ĉi tiu larĝo laŭ la rando de la elekto
+Semi Condensed	Duonkondensita
+Semi Expanded	Duonetendita
+Semibold	Duongrasa
+Send Backward	Sendi malantaŭen
+Send to Back	Sendi al malantaŭo
+Separate documents	Apartaj dokumentoj
+Separate keywords with commas or semicolons.	Apartigu ŝlosilvortojn per komoj aŭ punktokomoj.
+Sepia	Sepio
+Set	Aro
+Set the History Brush to paint from this state (the marked row)	Agordi la historian penikilon pentri el ĉi tiu stato (la markita vico)
+Shadows	Ombroj
+Shadows/Highlights	Ombroj/helaĵoj
+Shadows/Highlights…	Ombroj/helaĵoj…
+Shape	Formo
+Shape Dynamics	Forma dinamiko
+Shape Mosaic…	Forma mozaiko…
+Shape Properties	Formaj ecoj
+Sharpen	Akrigi
+Sharpen Edges	Akrigi randojn
+Sharpen More	Akrigi pli
+Sharpest, with a little ringing on hard edges.	La plej akra, kun iom da sonoro ĉe malmolaj randoj.
+Shear…	Tondi…
+Shift Edge	Deŝovi randon
+Show	Montri
+Show / Hide Layer	Montri / kaŝi tavolon
+Show / hide layer	Montri / kaŝi tavolon
+Show / hide the effects list	Montri / kaŝi la liston de efektoj
+Show / hide the layer style	Montri / kaŝi la tavolan stilon
+Show / hide this channel	Montri / kaŝi ĉi tiun kanalon
+Show / hide this effect	Montri / kaŝi ĉi tiun efekton
+Show / hide this path	Montri / kaŝi ĉi tiun vojon
+Show / hide this smart filter	Montri / kaŝi ĉi tiun inteligentan filtrilon
+Show Layers	Montri tavolojn
+Show every layer	Montri ĉiun tavolon
+Show or hide the position, size and alignment fields	Montri aŭ kaŝi la kampojn de pozicio, grando kaj ĝisrandigo
+Show or hide the recorded steps	Montri aŭ kaŝi la registritajn paŝojn
+Show or hide the set's actions	Montri aŭ kaŝi la agojn de la aro
+Show this alpha channel alone in grayscale and paint into it; click again to store it	Montri ĉi tiun alfa-kanalon sola en grizoskalo kaj pentri en ĝi; alklaku denove por konservi ĝin
+Sides	Flankoj
+Similar	Simila
+Size	Grandeco
+Size jitter	Granda varianco
+Skew	Oblikvigi
+Skewness	Malsimetrio
+Slice Options	Tranĉaĵaj agordoj
+Slice Options…	Tranĉaĵaj agordoj…
+Slices	Tranĉaĵoj
+Slices from Guides	Tranĉaĵoj el gvidiloj
+Slices…	Tranĉaĵoj…
+Small	Malgranda
+Small Caps	Etaj majuskloj
+Smart Blur…	Saĝa nebuligo…
+Smart Filter	Inteligenta filtrilo
+Smart Filters	Saĝaj filtriloj
+Smart Guides	Inteligentaj gvidlinioj
+Smart Object	Saĝa objekto
+Smart Sharpen…	Saĝakrigi…
+Smart filter mask: click to paint on it	Masko de inteligenta filtrilo: alklaku por pentri sur ĝi
+Smooth	Glata
+Smooth Selection	Glatigi elekton
+Smooth draws grey-scale edges; None draws hard, aliased edges. The glyph scaler has one smooth mode, so Sharp, Crisp and Strong are not offered.	Glata desegnas grizoskalajn randojn; Neniu desegnas malmolajn, dentitajn randojn. La glifa skalilo havas nur unu glatan reĝimon, do Akra, Klara kaj Forta ne estas proponataj.
+Smooth…	Glata…
+Snap	Fiksi
+Snap To	Alfiksi
+Soft Light	Mola lumo
+Soft Round 100	Mola ronda 100
+Soft Round 24	Mola ronda 24
+Soft and cheap. Good for a small enlargement.	Mola kaj rapida. Taŭga por malgranda pligrandigo.
+Softer Brush	Pli mola penikilo
+Solarize	Sunigi
+Solid Color…	Plena koloro…
+Solidity	Solideco
+Source	Fonto
+Source 1	Fonto 1
+Source 2	Fonto 2
+Source Space	Fonta spaco
+Spectrum	Spektro
+Spherize…	Sferigi…
+Spin Blur…	Turna malklarigo…
+Splits the active layer into Linear Light detail layers over a residual, finest on top; together they recomposite to the layer.	Dividas la aktivan tavolon en detalajn tavolojn de Lineara lumo super restaĵo, la plej fajna supre; kune ili rekunmetas la tavolon.
+Spot Channel	Punktokolora kanalo
+Spot Channel Options…	Agordoj de punktokolora kanalo…
+Spot channel: composited over the image as its ink	Punktokolora kanalo: kunmetita super la bildo kiel ĝia inko
+Square	Kvadrato
+Squeeze	Elpremi
+Stack Mode	Staka reĝimo
+Stamp Visible	Stampi videblajn
+Standard	Norma
+Standard Deviation	Norma devio
+Standard ligatures	Normaj ligaturoj
+Step Backward	Iri malantaŭen
+Step Forward	Iri antaŭen
+Stop	Halti
+Straighten Layer	Rektigi tavolon
+Strength	Forteco
+Stroke	Randlinio
+Stroke path with the foreground colour at the brush size, on a new shape layer	Streki la vojon per la malfona koloro je la penikila grando, sur nova forma tavolo
+Stroke…	Randlinio…
+Style	Stilo
+Styles	Stiloj
+Styles enabled	Stiloj ŝaltitaj
+Stylize	Stiligi
+Sub	Sub
+Subject	Subjekto
+Subtract	Depreni
+Subtract Front Shape	Subtrahi la antaŭan formon
+Subtract from Selection	Subtrahi de elekto
+Summation	Sumo
+Sunset	Sunsubiro
+Super	Super
+Superscript raises and shrinks the text; subscript lowers and shrinks it.	Supraskribo levas kaj malgrandigas la tekston; subskribo mallevas kaj malgrandigas ĝin.
+Surface Blur…	Surfaca nebuligo…
+Swap colours  (X)	Interŝanĝi kolorojn  (X)
+Swap foreground and background (X)	Interŝanĝi malfonon kaj fonon (X)
+Swatches	Koloraroj
+TGA…	TGA…
+TIF…	TIF…
+Templates	Ŝablonoj
+Text	Teksto
+Text Properties	Tekstaj ecoj
+Text overflows the box	La teksto superfluas la skatolon
+Text replacement	Teksta anstataŭigo
+Texture Dilation…	Teksturdilato…
+That channel is no longer in the document	Tiu kanalo ne plu estas en la dokumento
+That file could not be used:	Tiu dosiero ne povis esti uzata:
+The CSV ends inside a quoted field	La CSV finiĝas ene de citita kampo
+The CSV has a header but no data sets	La CSV havas kaplinion sed neniujn datumarojn
+The CSV is empty	La CSV estas malplena
+The CSV names a variable that is not defined:	La CSV nomas variablon, kiu ne estas difinita:
+The active layer is not in the document	La aktiva tavolo ne estas en la dokumento
+The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	La aktiva inteligenta objekto montras laŭvice ĉiun bildon de la fonta dosierujo; ĉiu rezulto estas eksportita kiel PNG al la cela dosierujo.
+The amount must be within	La kvanto devas esti ene de
+The angle must be a finite number of degrees	La angulo devas esti finia nombro da gradoj
+The balanced default for photographs.	La ekvilibra defaŭlto por fotoj.
+The canvas grows to fit the rotated image.	La kanvaso kreskas por enteni la turnitan bildon.
+The canvas must be at least 1 x 1 pixel	La kanvaso devas esti almenaŭ 1 x 1 rastrumero
+The cell size must be 2 to 200 pixels	La ĉela grando devas esti 2 ĝis 200 rastrumeroj
+The cut is empty: paint more of the part to keep.	La tranĉo estas malplena: pentru pli de la tenenda parto.
+The destination is the profile the document already has	La celo estas la profilo, kiun la dokumento jam havas
+The destination must be another folder than the source.	La celo devas esti alia dosierujo ol la fonto.
+The document has no layers	La dokumento ne havas tavolojn
+The document is already in {name}	La dokumento jam estas en {name}
+The document is already tagged with this profile	La dokumento jam estas etikedita per ĉi tiu profilo
+The document is already tagged {name}	La dokumento jam estas etikedita {name}
+The document's own profile: {error}	La propra profilo de la dokumento: {error}
+The first {shown} of {n} pages are listed; a longer file opens only those.	La unuaj {shown} el {n} paĝoj estas listigitaj; pli longa dosiero malfermas nur tiujn.
+The image has no opaque pixels to count	La bildo ne havas opakajn rastrumerojn por kalkuli
+The ink is laid over the image; the selection, if there is one, is where it prints.	La inko estas metita super la bildon; la elekto, se ekzistas, estas kie ĝi presiĝas.
+The last stop has no segment after it.	La lasta halto ne havas segmenton post si.
+The layer has no pixels to cut.	La tavolo ne havas rastrumerojn por eltondi.
+The layer's pixels are locked	La rastrumeroj de la tavolo estas ŝlositaj
+The list is empty	La listo estas malplena
+The margins and gutters leave no room for a column or a row	La marĝenoj kaj interspacoj lasas neniun lokon por kolumno aŭ vico
+The margins and gutters leave no room for a column or a row.	La marĝenoj kaj interspacoj lasas neniun lokon por kolumno aŭ vico.
+The name cannot be empty	La nomo ne povas esti malplena
+The name has not changed	La nomo ne ŝanĝiĝis
+The name is the file File > Export > Slices writes this slice as. The URL and Alt Tag go into the HTML page it writes beside the images.	La nomo estas la dosiero, kiel kiu Dosiero > Eksporti > Tranĉaĵoj skribas ĉi tiun tranĉaĵon. La URL kaj Alt-etikedo iras en la HTML-paĝon, kiun ĝi skribas apud la bildoj.
+The new canvas is smaller — content outside it will be clipped.	La nova kanvaso estas pli malgranda — enhavo ekster ĝi estos tondita.
+The next text layer the Type tool creates starts with this style.	La sekva teksta tavolo, kiun la tekstilo kreos, komenciĝas per ĉi tiu stilo.
+The panel is already on this side	La panelo jam estas ĉe ĉi tiu flanko
+The path encloses no pixel of the canvas	La vojo ĉirkaŭas neniun rastrumeron de la kanvaso
+The position must be a finite number	La pozicio devas esti finia nombro
+The preview runs the real brush engine.	La antaŭvido uzas la veran penikilan motoron.
+The resolution must be 1 to 2400 ppi	La distingivo devas esti 1 ĝis 2400 ppi
+The resolution must be {min} to {max} dpi	La distingivo devas esti {min} ĝis {max} dpi
+The rulers and the size readouts use this unit	La liniiloj kaj grandaj legaĵoj uzas ĉi tiun unuon
+The scale must be between 1% and 1000%	La skalo devas esti inter 1% kaj 1000%
+The selection is kept with the document under this name	La elekto estas tenata kun la dokumento sub ĉi tiu nomo
+The source and destination must be different folders	La fonto kaj la celo devas esti malsamaj dosierujoj
+The steps this snapshot named have been discarded	La paŝoj, kiujn ĉi tiu momentfoto nomis, estis forĵetitaj
+The table needs a name	La tabelo bezonas nomon
+The warp has not changed	La kurbigo ne ŝanĝiĝis
+There are no guides to slice along	Ne estas gvidlinioj laŭ kiuj tranĉi
+There are no slices to clear	Ne estas tranĉaĵoj por viŝi
+There is no history to clear	Ne estas historio por viŝi
+There is no live selection to combine with	Ne estas viva elekto kun kiu kombini
+These are matrix-shaper profiles, which carry no perceptual or saturation tables: those two intents convert as Relative Colorimetric.	Ĉi tiuj estas matric-formilaj profiloj, kiuj ne havas perceptajn aŭ saturajn tabelojn: tiuj du intencoj konvertiĝas kiel Relativa kolorimetria.
+Thin	Maldika
+Third-party notices	Avizoj de triaj partioj
+This Layer	Ĉi tiu tavolo
+This adjustment has no panel controls	Ĉi tiu alĝustigo ne havas panelajn regilojn
+This adjustment has no settings.	Ĉi tiu alĝustigo ne havas agordojn.
+This build keeps channels on layers; it has no free-standing alpha channels yet	Ĉi tiu versio tenas kanalojn sur tavoloj; ĝi ankoraŭ ne havas memstarajn alfa-kanalojn
+This effect is off. Tick it in the list to edit it.	Ĉi tiu efekto estas malŝaltita. Marku ĝin en la listo por redakti ĝin.
+This format cannot store CMYK, so the document is written as RGB. Choose JPEG or TIFF for CMYK.	Ĉi tiu formato ne povas konservi CMYK, do la dokumento estas skribita kiel RGB. Elektu JPEG aŭ TIFF por CMYK.
+This format could not be previewed.	Ĉi tiu formato ne povis esti antaŭvidita.
+This format has no metadata slot: nothing is embedded	Ĉi tiu formato ne havas lokon por metadatumoj: nenio estas enkorpigita
+This format has no palette, so the indexed colours are written as RGB. Choose PNG or GIF for the palette.	Ĉi tiu formato ne havas paletron, do la indeksitaj koloroj estas skribitaj kiel RGB. Elektu PNG aŭ GIF por la paletro.
+This format stores 8 bits per channel	Ĉi tiu formato konservas 8 bitojn po kanalo
+This is a Lab document. No format here stores Lab, so it is converted to RGB on export.	Ĉi tio estas Lab-dokumento. Neniu formato ĉi tie konservas Lab, do ĝi estas konvertita al RGB dum eksporto.
+This layer has no mask	Ĉi tiu tavolo ne havas maskon
+This panel is already at the bottom of its dock	Ĉi tiu panelo jam estas ĉe la fundo de sia doko
+This panel is already at the top of its dock	Ĉi tiu panelo jam estas ĉe la supro de sia doko
+This tool has no options	Ĉi tiu ilo ne havas agordojn
+This tool is already at its defaults	Ĉi tiu ilo jam estas je siaj defaŭltoj
+This window cannot read screen pixels, so the eyedropper is unavailable	Ĉi tiu fenestro ne povas legi ekranajn rastrumerojn, do la gutigilo ne disponeblas
+This works on a pixel layer; the active layer is a {kind}	Ĉi tio funkcias sur rastrumera tavolo; la aktiva tavolo estas {kind}
+This works on an 8-bit document	Ĉi tio funkcias sur 8-bita dokumento
+This works on an RGB document	Ĉi tio funkcias sur RGB-dokumento
+Threshold	Sojlo
+Threshold…	Sojlo…
+Thumbnail Size	Bildeta grando
+Thumbnail size	Bildeta grando
+Thumbnails by Document	Bildetoj laŭ dokumento
+Thumbnails by Layer	Bildetoj laŭ tavolo
+Tiles/List	Kaheloj/listo
+Tiles…	Kaheloj…
+Tilt-Shift…	Klin-ŝovo…
+Timeline	Templinio
+Tint	Nuancigo
+Tint hue	Nuanciga koloro
+Tint saturation	Nuanciga saturo
+To canvas	Al kanvaso
+Toggle Link	Baskuligi ligon
+Tonal width	Tona larĝo
+Tone	Tono
+Tone and Detail	Tono kaj detalo
+Tool Presets	Ilaj antaŭagordoj
+Top	Supre
+Top Edges	Supraj randoj
+Top Left	Supre maldekstre
+Top Left Pixel Color	Koloro de la supra maldekstra rastrumero
+Top Right	Supre dekstre
+Top left	Supre maldekstre
+Top right	Supre dekstre
+Trace Contour…	Spuri Konturo…
+Traces the active layer's colours into shape layers, one per colour.	Spuras la kolorojn de la aktiva tavolo en formajn tavolojn, unu po koloro.
+Transform	Transformi
+Transform Layer	Transformi tavolon
+Transform Selection	Transformi elekton
+Transparency	Travidebleco
+Transparent Pixels	Travideblaj rastrumeroj
+Trim	Ĉirkaŭhaki
+Trim Away	Fortranĉi
+Trim…	Ĉirkaŭhaki…
+Tritone	Tritono
+Turn on Resample to change the pixel count.	Ŝaltu Respecimenigi por ŝanĝi la nombron de rastrumeroj.
+Twirl…	Bukli…
+Twist	Tordi
+Two variables share a name	Du variabloj havas la saman nomon
+Type	Tipo
+Type a zoom level	Tajpu zomnivelon
+Type is edited in Character and Paragraph	Tiparo estas redaktata en Signo kaj Alineo
+Type tool defaults	Defaŭltoj de la tekstilo
+UI scale	Interfaca skalo
+URL	URL
+US Letter	US Letter
+Ultra Condensed	Ultrakondensita
+Ultra Expanded	Ultraetendita
+Underlying Layer	Suba tavolo
+Undo	Malfari
+Ungroup Layers	Malgrupigi tavolojn
+Uniform	Unuforma
+Unite Shapes	Unuigi formojn
+Units	Unuoj
+Unmake Frames	Malfari kadrojn
+Unsaved changes	Nekonservitaj ŝanĝoj
+Unsharp Mask…	Malakra masko…
+Update the applied comp from the layers	Ĝisdatigi la aplikitan komponaĵon el la tavoloj
+Use Black Point Compensation	Uzi kompenson de nigra punkto
+Use global light	Uzi ĉiean lumon
+Using:	Uzante:
+Vanishing Point…	Fuĝpunkto…
+Variables	Ŝanĝiĝemaĵoj
+Variance	Varianco
+Vector Mask	Vektora masko
+Vector density	Vektora denseco
+Vector enabled	Vektoro ŝaltita
+Vector feather	Vektora plumigo
+Vector invert	Vektora inversigo
+Vector mask	Vektora masko
+Vectorize	Vektorigi
+Vectorize Bitmap	Vektorigi bitmapon
+Vectorize Bitmap…	Vektorigi bitmapon…
+Vertical Centers	Vertikalaj centroj
+Vertical Distortion	Vertikala distordo
+Vertical center guide	Vertikala centra gvidlinio
+Vertical scale, in percent: stretches the glyphs about the baseline; leading is unchanged	Vertikala skalo, en procentoj: streĉas la glifojn ĉirkaŭ la bazlinio; la linia interspaco ne ŝanĝiĝas
+Vertically	Vertikale
+Vibrance	Vigleco
+Vibrance…	Vigleco…
+View	Vido
+Violet	Viola
+Visibility	Videbleco
+Visible adjustment layers	Videblaj alĝustigaj tavoloj
+Vivid Light	Viva lumo
+W	L
+WEBP…	WEBP…
+Waiting for the composite…	Atendante la kunmetaĵon…
+Warm	Varma
+Warp	Tordi
+Warp Style	Kurbiga stilo
+Warp Text	Kurbigi tekston
+Warp Text…	Kurbigi tekston…
+Wave	Ondo
+Wavelet Decompose	Ondeteta malkomponado
+Wavelet Decompose splits into 2 to 7 scales	Ondeteta malkomponado dividas en 2 ĝis 7 skalojn
+Wavelet Decompose works on an sRGB document	Ondeteta malkomponado funkcias sur sRGB-dokumento
+Wavelet Decompose: the layer has no pixels	Ondeteta malkomponado: la tavolo ne havas rastrumerojn
+Wavelet Decompose: {n} detail layers over a residual; the source layer is hidden	Ondeteta malkomponado: {n} detalaj tavoloj super restaĵo; la fonta tavolo estas kaŝita
+Wavelet Decompose…	Ondeteta malkomponado…
+Wave…	Ondo…
+Web (216)	Reto (216)
+WebP (lossless)	WebP (senperda)
+WebP (lossy)	WebP (perda)
+Weight	Pezo
+White	Blanka
+White to Black	Blanka al nigra
+Whites	Blankoj
+Width	Larĝeco
+Width and height must be at least 1 pixel	Larĝo kaj alto devas esti almenaŭ 1 rastrumero
+Width must be between 1 and 250 pixels	Larĝo devas esti inter 1 kaj 250 rastrumeroj
+Width to 110%	Larĝo al 110%
+Width to 125%	Larĝo al 125%
+Width to 80%	Larĝo al 80%
+Width to 90%	Larĝo al 90%
+Window	Fenestro
+Wind…	Vento…
+With Handles	Kun teniloj
+Work Path	Laborvojo
+Workspace	Laborspaco
+Wrap to box	Faldi en la skatolon
+Writes the visible adjustment layers, applied to an identity lattice, as a 3D LUT (.cube).	Skribas la videblajn alĝustigajn tavolojn, aplikitajn al identeca krado, kiel 3D LUT (.cube).
+Written as CMYK: a naive ink model, not an ICC press profile.	Skribita kiel CMYK: simpla inka modelo, ne ICC-presprofilo.
+Written as XMP into PNG, JPEG and TIFF files by Export As.	Eksporti kiel skribas kiel XMP en PNG-, JPEG- kaj TIFF-dosierojn.
+Written with the document's palette.	Skribita kun la paletro de la dokumento.
+Yellow	Flava
+Yellow / Blue	Flava / blua
+Yellows	Flavoj
+ZigZag…	Zigzago…
+Zoom In	Zomi
+Zoom Out	Malzomi
+Zoom in	Zomi
+Zoom out	Malzomi
+Zoom to Selection	Zomi al elekto
+a layer could not be rewritten	tavolo ne povis esti reskribita
+before / after	antaŭ / post
+changed	ŝanĝita
+content thumbnail — click to edit the layer's pixels	enhava bildeto — alklaku por redakti la rastrumerojn de la tavolo
+dpi	dpi
+edits are aimed at this mask — right-click for view and mask options	redaktoj celas ĉi tiun maskon — dekstre alklaku por vidaj kaj maskaj agordoj
+lines past the box	linioj preter la skatolo
+mask off	masko malŝaltita
+mask thumbnail — click to edit the layer's mask	maska bildeto — alklaku por redakti la maskon de la tavolo
+minutes (0 is off)	minutoj (0 estas malŝaltita)
+no drop	sen faligo
+px	px
+records here	registras ĉi tie
+skipped on play:	preterlasita dum ludado:
+the layers could not be added	la tavoloj ne povis esti aldonitaj
+the profile cannot be transformed ({error})	la profilo ne povas esti transformita ({error})
+to	ĝis
+vector mask thumbnail — click to edit the vector mask	bildeto de vektora masko — alklaku por redakti la vektoran maskon
+{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time	{format}: la templinio, {frames} kadroj je {fps} fps dum {length} ms; ĉiu kadro montras la tavolojn je sia tempo
+{label} is not answered by this route	{label} ne estas respondata per ĉi tiu vojo
+{label} was refused: {reason}	{label} estis rifuzita: {reason}
+{name} Residual	{name} Restaĵo
+{name} Scale {k}	{name} Skalo {k}
+{name}: {n} pages	{name}: {n} paĝoj
+{n} slices from the guides ({cols} x {rows}); they replace the slices there were	{n} tranĉaĵoj el la gvidlinioj ({cols} x {rows}); ili anstataŭigas la antaŭajn tranĉaĵojn
+{path} is a {space} profile; an RGB document takes an RGB profile	{path} estas {space}-profilo; RGB-dokumento prenas RGB-profilon
+{path} is {len} bytes, larger than any colour profile	{path} havas {len} bajtojn, pli ol iu ajn kolorprofilo
+{reason}; this one is {space}	{reason}; ĉi tiu estas {space}
+16 Bits	16 bitoj
+8 Bits	8 bitoj
+AVIF…	AVIF…
+Blank preview image	Malplena antaŭvida bildo
+Byte Order	Bajta ordo
+Depth	Profundo
+Duplicate Into…	Duobligi en…
+Guides from Layer	Gvidiloj el tavolo
+Minify the file	Malgrandigi la dosieron
+Nothing under the pointer for this row	Nenio sub la montrilo por ĉi tiu vico
+Make Work Path	Fari laborvojon
+RAW…	RAW…
+Remove Anchor Point	Forigi ankropunkton
+Remove Path	Forigi vojon
+Make Selection	Fari elekton
+Divide…	Dividi…
+Right-click on an anchor point of the path	Dekstre alklaku ankropunkton de la vojo
+Right-click inside a path	Dekstre alklaku ene de vojo
+Save PSD/PSB	Konservi PSD/PSB
+Save PSD/PSB…	Konservi PSD/PSB…
+Select or draw a path first	Unue elektu aŭ desegnu vojon
+Right-click on a text layer	Dekstre alklaku tekstan tavolon
+Right-click inside a slice	Dekstre alklaku ene de tranĉaĵo
+Divide Slices	Dividi tranĉaĵojn
+N equal parts	N egalaj partoj
+N pixels per part	N rastrumeroj po parto
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Tranĉas la tranĉaĵon, kiun vi dekstre alklakis, aŭ la kanvason se estis neniu, en kradon de tranĉaĵoj.
+Tick Horizontally or Vertically	Marku Horizontale aŭ Vertikale
+These settings make no cut: raise N or pick a smaller pixel count	Ĉi tiuj agordoj faras neniun tranĉon: plialtigu N aŭ elektu pli malgrandan nombron de rastrumeroj
+Cancel (Esc)	Nuligi (Esc)
+All Documents	Ĉiuj dosieroj
+Select Source	Elekti fonton
+Alt	Alt
+Turn into JPG	Igi JPG
+ZIP for pixel data	ZIP por rastrumeraj datumoj
+a	a
+b	b
+Open a document to see its memory	Malfermu dokumenton por vidi ĝian memoron
+Image data	Bildaj datumoj
+{undo} undo / {redo} redo steps	{undo} malfaraj / {redo} refaraj paŝoj
+Holds copied pixels	Enhavas kopiitajn rastrumerojn
+{size} ({tiles} tiles)	{size} ({tiles} kaheloj)
+Empty	Malplena
+Purge Clipboard	Purigi tondujon
+Purge Histories	Purigi historiojn
+Purge All	Purigi ĉion
+Make	Fari
+There is no path; draw one or select it in the Paths panel	Ne estas vojo; desegnu unu aŭ elektu ĝin en la Vojoj-panelo
+Artboards	Arttabuloj
+No Slices	Neniuj tranĉaĵoj
+All Slices	Ĉiuj tranĉaĵoj
+User Slices	Uzantaj tranĉaĵoj
+Put the file into ZIP	Meti la dosieron en ZIP
+Reverse pages	Inversigi paĝojn

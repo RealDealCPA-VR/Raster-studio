@@ -1,6 +1,7 @@
-//! W13-C: camera RAW. **DNG is read** by this module's own code; the
-//! proprietary RAW containers are recognised by content and **refused by
-//! name**.
+//! W13-C: camera RAW. **DNG is read** by this module's own code. W18-D: the
+//! proprietary RAW containers are recognised by content and **decoded** by
+//! [`vendor`] where their encoding is uncompressed or openly documented,
+//! else **refused by name**.
 //!
 //! # DNG
 //!
@@ -44,11 +45,16 @@
 //! Canon CR2 / CR3, Nikon NEF, Sony ARW, Fujifilm RAF, Olympus ORF,
 //! Panasonic RW2 (and Pentax PEF / Samsung SRW) are identified from their
 //! own signatures or, for the TIFF-shaped ones, from a CFA or vendor-coded
-//! raw IFD with no `DNGVersion`, and refused with [`refusal`]. The Rust
-//! crates that read them are `rawloader` and `rawler` (LGPL-2.1),
-//! `quickraw` (LGPL-2.1) and `zenraw` (AGPL-3.0 or commercial): none is
-//! permissive, and each vendor's compression is its own bounded-but-large
-//! reverse-engineered codec this wave did not write.
+//! raw IFD with no `DNGVersion`. The Rust crates that read them
+//! (`rawloader`, `rawler`, `quickraw`: LGPL-2.1; `zenraw`: AGPL-3.0) are
+//! not permissive, so W18-D wrote its own decoders from public format
+//! descriptions ([`vendor`], one file per vendor): Canon CR2 (lossless
+//! JPEG, sliced), Sony ARW 2 (curve-compressed) and the uncompressed
+//! storages of NEF, ARW, RAF, ORF, RW2, PEF and SRW, developed through this
+//! module's demosaic and tone stages. CR3 (CRX), Nikon's Huffman NEF, and
+//! the compressed RAF / ORF / RW2 / lossless-ARW encodings are refused by
+//! name ([`vendor`] lists why); a file named as a RAW that holds no raw
+//! image gets [`refusal`].
 
 use crate::codec::{
     CodecError, DecodedSurface, ImageInfo, ImportFormat, ImportLimits, SurfacePixels,
@@ -159,10 +165,10 @@ pub fn refusal(bytes: &[u8]) -> CodecError {
         _ => "camera RAW",
     };
     CodecError::Unsupported(format!(
-        "opening {name} files is not supported: this build reads DNG only. The Rust readers \
-         for vendor RAW formats (rawloader, rawler, quickraw: LGPL-2.1; zenraw: AGPL-3.0) \
-         are not permissively licensed, so none is linked; convert the file to DNG (for \
-         example with Adobe DNG Converter) and open that"
+        "opening {name} files is not supported: this file holds no raw image this build \
+         reads (it reads DNG and the uncompressed or openly documented vendor RAW \
+         encodings); convert the file to DNG (for example with Adobe DNG Converter) and \
+         open that"
     ))
 }
 
@@ -1154,13 +1160,37 @@ pub fn decode(bytes: &[u8], limits: ImportLimits) -> Result<DecodedSurface, Code
         .filter(|e| e.abs() <= 10.0)
         .unwrap_or(0.0);
     let gain = exposure.exp2();
-    let (cx, cy, cw, ch) = plan.crop;
-    let (ow, oh) = plan.output_size();
+    Ok(render(
+        &planes,
+        aw,
+        plan.crop,
+        plan.orientation,
+        &rgb_cam,
+        gain,
+        ImportFormat::Dng,
+    ))
+}
+
+/// W18-D: the develop's shared last step, for DNG and the vendor RAWs
+/// ([`vendor`]): demosaiced camera planes (`aw` wide) to linear sRGB through
+/// `rgb_cam`, times `gain`, clipped, sRGB-encoded, cut to `crop`
+/// `(x, y, w, h)` and turned by the TIFF `orientation`.
+fn render(
+    planes: &[Vec<f32>; 3],
+    aw: usize,
+    crop: (usize, usize, usize, usize),
+    orientation: u32,
+    rgb_cam: &M3,
+    gain: f64,
+    source_format: ImportFormat,
+) -> DecodedSurface {
+    let (cx, cy, cw, ch) = crop;
+    let (ow, oh) = if orientation >= 5 { (ch, cw) } else { (cw, ch) };
     let mut rgba = vec![0u16; ow * oh * 4];
     for oy in 0..oh {
         for ox in 0..ow {
             // Where this output pixel comes from inside the crop.
-            let (sx, sy) = match plan.orientation {
+            let (sx, sy) = match orientation {
                 2 => (cw - 1 - ox, oy),
                 3 => (cw - 1 - ox, ch - 1 - oy),
                 4 => (ox, ch - 1 - oy),
@@ -1171,8 +1201,8 @@ pub fn decode(bytes: &[u8], limits: ImportLimits) -> Result<DecodedSurface, Code
                 _ => (ox, oy),
             };
             let i = (cy + sy) * aw + cx + sx;
-            let cam = [0, 1, 2].map(|c| f64::from(planes[c][i]));
-            let rgb = apply(&rgb_cam, cam);
+            let cam = [0, 1, 2].map(|c| f64::from(planes[c].get(i).copied().unwrap_or(0.0)));
+            let rgb = apply(rgb_cam, cam);
             let o = (oy * ow + ox) * 4;
             for c in 0..3 {
                 let v = srgb_encode((rgb[c] * gain).clamp(0.0, 1.0));
@@ -1181,15 +1211,25 @@ pub fn decode(bytes: &[u8], limits: ImportLimits) -> Result<DecodedSurface, Code
             rgba[o + 3] = u16::MAX;
         }
     }
-    Ok(DecodedSurface {
+    DecodedSurface {
         width: ow as u32,
         height: oh as u32,
         pixels: SurfacePixels::Rgba16(rgba),
         color_space: color::ColorSpace::Srgb,
         icc_profile: None,
-        source_format: ImportFormat::Dng,
-    })
+        source_format,
+    }
 }
+
+// W18-D: the vendor RAW decoders (CR2, NEF, ARW, RAF, ORF, RW2, PEF, SRW),
+// one file per vendor, sharing this module's TIFF reader and develop.
+#[path = "raw_vendor/mod.rs"]
+pub(crate) mod vendor;
+
+// W18-D: synthetic vendor RAW writers for tests (here and in `app-shell`).
+#[doc(hidden)]
+#[path = "raw_vendor/fixture.rs"]
+pub mod vendor_fixture;
 
 #[doc(hidden)]
 #[path = "raw_fixture.rs"]

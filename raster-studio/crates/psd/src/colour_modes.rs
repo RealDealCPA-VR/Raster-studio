@@ -96,8 +96,8 @@ pub fn unpack_bitmap(
 }
 
 /// Pack 8-bit grey into 1-bit Bitmap rows (anything below 128 is black).
-/// The inverse of [`unpack_bitmap`], for building Bitmap files in tests and
-/// tools; the writer itself saves a Bitmap document as Greyscale.
+/// The inverse of [`unpack_bitmap`]; W18-H: the writer packs a Bitmap
+/// file's composite with it.
 pub fn pack_bitmap(grey: &[u8], width: u32, height: u32) -> Vec<u8> {
     let row_bytes = width.div_ceil(8) as usize;
     let mut out = vec![0u8; row_bytes * height as usize];
@@ -707,6 +707,17 @@ pub enum Separation<'a> {
     /// A flat document mapped onto a palette: the table, and the index each
     /// opaque colour takes.
     Indexed(&'a IndexedTable, &'a mut dyn FnMut([u8; 3]) -> u8),
+    /// W18-H: a flat black-and-white file: the merged composite at 1 bit a
+    /// pixel (Rec. 601 luma below 128 is black; a transparent pixel is white
+    /// paper). The file must have no layers.
+    Bitmap,
+    /// W18-H: a Duotone file: every colour channel set becomes the one grey
+    /// base plane (`grey_of` finds the grey the inks print as that colour),
+    /// and `record` is written as the colour mode data.
+    Duotone {
+        grey_of: &'a mut dyn FnMut([u8; 3]) -> u8,
+        record: &'a DuotoneRecord,
+    },
 }
 
 /// Rec. 601 luma, the formula Image > Mode > Grayscale uses.
@@ -753,8 +764,14 @@ pub fn from_working_rgb(file: &mut PsdFile, separation: Separation<'_>) -> PsdRe
             "a 32-bit file cannot be written in a print colour mode".into(),
         ));
     }
+    let duotone_data = match &separation {
+        Separation::Duotone { record, .. } => Some(record.encode()),
+        _ => None,
+    };
     let (target, outputs, mut separation) = match separation {
         Separation::Indexed(table, index_of) => return to_indexed(file, table, index_of),
+        Separation::Bitmap => return to_bitmap(file),
+        s @ Separation::Duotone { .. } => (ColorMode::Duotone, 1usize, s),
         s @ Separation::Grayscale => (ColorMode::Grayscale, 1usize, s),
         s @ Separation::Cmyk(_) => (ColorMode::Cmyk, 4, s),
         s @ Separation::Lab(_) => (ColorMode::Lab, 3, s),
@@ -775,7 +792,8 @@ pub fn from_working_rgb(file: &mut PsdFile, separation: Separation<'_>) -> PsdRe
                     0,
                 ]
             }
-            Separation::Indexed(..) => [0; 4],
+            Separation::Duotone { grey_of, .. } => [grey_of(rgb), 0, 0, 0],
+            Separation::Indexed(..) | Separation::Bitmap => [0; 4],
         }
     };
     let bps = depth.bytes_per_sample();
@@ -849,6 +867,63 @@ pub fn from_working_rgb(file: &mut PsdFile, separation: Separation<'_>) -> PsdRe
     let channels = usize::from(file.header.channels).saturating_sub(3) + outputs;
     file.header.channels = channels.min(56) as u16;
     file.header.color_mode = target;
+    if let Some(data) = duotone_data {
+        file.color_mode_data = data;
+    }
+    Ok(())
+}
+
+/// W18-H: the flat merged composite as one 1-bit plane (see
+/// [`Separation::Bitmap`]); alpha and extra channels are not kept, as a
+/// Bitmap file has none.
+fn to_bitmap(file: &mut PsdFile) -> PsdResult<()> {
+    if !file.layers.is_empty() {
+        return Err(PsdError::InvalidDocument(
+            "a Bitmap file is flat: merge the layers first".into(),
+        ));
+    }
+    let depth = file.header.depth;
+    let n = file.header.canvas_pixels() as usize;
+    let merged = file.merged.as_ref().ok_or_else(|| {
+        PsdError::InvalidDocument("a Bitmap file needs its merged composite".into())
+    })?;
+    if merged.channels.len() < 3 {
+        return Err(PsdError::InvalidDocument(
+            "the merged composite has fewer than three colour channels".into(),
+        ));
+    }
+    let has_alpha = file.header.has_alpha();
+    let take = if has_alpha { 4 } else { 3 };
+    let planes: Vec<Vec<u8>> = merged
+        .channels
+        .iter()
+        .take(take)
+        .map(|p| narrow(p, depth))
+        .collect();
+    if planes.len() < take || planes.iter().any(|p| p.len() != n) {
+        return Err(PsdError::InvalidDocument(
+            "the merged composite is the wrong size".into(),
+        ));
+    }
+    let alpha = if has_alpha { planes.get(3) } else { None };
+    let plane: Vec<u8> = (0..n)
+        .map(|i| {
+            let paper = alpha.is_some_and(|a| a[i] < 128);
+            let grey = luma601([planes[0][i], planes[1][i], planes[2][i]]);
+            if paper || grey >= 128 {
+                255
+            } else {
+                0
+            }
+        })
+        .collect();
+    file.header.channels = 1;
+    file.header.depth = Depth::Eight;
+    file.header.color_mode = ColorMode::Bitmap;
+    file.merged = Some(MergedImage {
+        channels: vec![plane],
+    });
+    file.color_mode_data.clear();
     Ok(())
 }
 
@@ -905,3 +980,7 @@ fn to_indexed(
 #[cfg(test)]
 #[path = "colour_modes_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "colour_modes_w18_tests.rs"]
+mod w18_tests;

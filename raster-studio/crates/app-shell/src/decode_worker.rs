@@ -1034,3 +1034,152 @@ mod tests {
         }
     }
 }
+
+/// W18-H: a WebM / Matroska video reaches the demuxer through the real
+/// routes: the worker body (the `video` kind, over the protocol) and File >
+/// Open (`Editor::open_paths`) with the in-process decoder.
+#[cfg(test)]
+mod w18_matroska_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn id_bytes(id: u32) -> Vec<u8> {
+        let b = id.to_be_bytes();
+        let skip = b.iter().position(|x| *x != 0).unwrap_or(3);
+        b[skip..].to_vec()
+    }
+
+    fn el(id: u32, payload: &[u8]) -> Vec<u8> {
+        let mut out = id_bytes(id);
+        out.push(0x01);
+        out.extend_from_slice(&(payload.len() as u64).to_be_bytes()[1..]);
+        out.extend_from_slice(payload);
+        out
+    }
+
+    fn uint_el(id: u32, v: u64) -> Vec<u8> {
+        el(id, &v.to_be_bytes())
+    }
+
+    fn be32(b: &[u8], at: usize) -> usize {
+        u32::from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]) as usize
+    }
+
+    /// An AV1 MP4 the exporter wrote, remuxed into a WebM (its samples, in
+    /// order from the first chunk, `delay_ms` apart).
+    fn webm(w: u32, h: u32, frames: &[Vec<u8>], delay_ms: u32) -> Vec<u8> {
+        use raster::codec::formats::mp4::{encode_with, Mp4Codec, Mp4Frame};
+        let input: Vec<Mp4Frame<'_>> = frames
+            .iter()
+            .map(|p| Mp4Frame {
+                rgba8: p,
+                duration_ms: delay_ms,
+            })
+            .collect();
+        let mp4 = encode_with(w, h, &input, 95, Mp4Codec::Av1).unwrap();
+        let find = |name: &[u8]| mp4.windows(4).position(|x| x == name).unwrap() + 4;
+        let stsz = find(b"stsz");
+        let count = be32(&mp4, stsz + 8);
+        let stco = find(b"stco");
+        let mut at = be32(&mp4, stco + 8);
+        let mut clusters = uint_el(0xE7, 0);
+        for i in 0..count {
+            let size = be32(&mp4, stsz + 12 + i * 4);
+            let mut block = vec![0x81];
+            block.extend_from_slice(&((i as u32 * delay_ms) as i16).to_be_bytes());
+            block.push(0x80);
+            block.extend_from_slice(&mp4[at..at + size]);
+            at += size;
+            clusters.extend(el(0xA3, &block));
+        }
+        let entry = [
+            uint_el(0xD7, 1),
+            uint_el(0x83, 1),
+            el(0x86, b"V_AV1"),
+            el(
+                0xE0,
+                &[uint_el(0xB0, u64::from(w)), uint_el(0xBA, u64::from(h))].concat(),
+            ),
+        ]
+        .concat();
+        let body = [
+            el(0x1549_A966, &uint_el(0x2A_D7B1, 1_000_000)),
+            el(0x1654_AE6B, &el(0xAE, &entry)),
+            el(0x1F43_B675, &clusters),
+        ]
+        .concat();
+        [
+            el(0x1A45_DFA3, &el(0x4282, b"webm")),
+            el(0x1853_8067, &body),
+        ]
+        .concat()
+    }
+
+    fn flat(w: u32, h: u32, px: [u8; 4]) -> Vec<u8> {
+        px.repeat((w * h) as usize)
+    }
+
+    #[test]
+    fn a_webm_decodes_through_the_worker_protocol_and_opens_from_file_open() {
+        let (w, h) = (32, 32);
+        let frames = vec![
+            flat(w, h, [200, 40, 40, 255]),
+            flat(w, h, [40, 200, 40, 255]),
+        ];
+        let bytes = webm(w, h, &frames, 250);
+        let limits = ImportLimits::default();
+
+        // The worker body, as `--decode-worker video` runs it.
+        let mut out = Vec::new();
+        let code = worker_main(
+            Some(VIDEO_ARG.into()),
+            Cursor::new(encode_request(&bytes, limits)),
+            &mut out,
+        );
+        assert_eq!(code, 0);
+        let Ok(Answer::Decoded(window)) = read_video_answer(Cursor::new(out), limits) else {
+            panic!("the worker did not decode the WebM");
+        };
+        assert_eq!(window.codec, VideoCodec::Av1);
+        assert_eq!((window.width, window.height), (w, h));
+        assert_eq!(window.durations_ms, vec![250, 250]);
+        let red = &window.frames[0].rgba8[..4];
+        assert!(red[0] > 150 && red[1] < 90, "{red:?}");
+
+        // File > Open of a `.webm`: a document holding the video layer.
+        crate::timeline::video_layers::install_video_decoder(video::decode_window_in_this_process);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clip.webm");
+        std::fs::write(&path, &bytes).unwrap();
+        let mut ed = crate::editor::Editor::with_state(
+            crate::prefs::AppPaths::rooted(dir.path().join("config")),
+            crate::prefs::Preferences::default(),
+            crate::recent::RecentFiles::new(),
+            Box::new(crate::dialogs::ScriptedDialogs::new()),
+        );
+        ed.open_paths(std::slice::from_ref(&path));
+        let status = ed.status().unwrap_or_default().to_string();
+        let doc = &ed.active().unwrap_or_else(|| panic!("{status}")).document;
+        assert_eq!((doc.width(), doc.height()), (w, h));
+        assert_eq!(doc.timeline.videos.len(), 1, "one video layer");
+        assert_eq!(doc.timeline.videos[0].durations_ms, vec![250, 250]);
+
+        // A VP9 WebM is refused by name through the same worker body.
+        let vp9: Vec<u8> = {
+            let mut b = bytes.clone();
+            let i = b.windows(5).position(|x| x == b"V_AV1").unwrap();
+            b[i..i + 5].copy_from_slice(b"V_VP9");
+            b
+        };
+        let mut out = Vec::new();
+        worker_main(
+            Some(VIDEO_ARG.into()),
+            Cursor::new(encode_request(&vp9, limits)),
+            &mut out,
+        );
+        let Ok(Answer::Refused(e)) = read_video_answer(Cursor::new(out), limits) else {
+            panic!("a VP9 WebM was not refused");
+        };
+        assert!(e.to_string().contains("VP9"), "{e}");
+    }
+}

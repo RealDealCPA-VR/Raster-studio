@@ -68,6 +68,8 @@ pub enum PanelId {
     /// W13-N: margins, columns / rows with gutters and centre guides,
     /// previewed and applied as guides.
     GuideGuy,
+    /// W18-I: what the document holds in memory, and the purges.
+    Memory,
 }
 
 impl PanelId {
@@ -106,6 +108,8 @@ impl PanelId {
         PanelId::Styles,
         PanelId::DocumentInfo,
         PanelId::GuideGuy,
+        // W18-I: appended last for the same by-position reason.
+        PanelId::Memory,
     ];
 
     /// Panel title, as shown on its header and in the Window menu, in the
@@ -144,6 +148,7 @@ impl PanelId {
             PanelId::Styles => "Styles",
             PanelId::DocumentInfo => "Document Info",
             PanelId::GuideGuy => "Guide Guy",
+            PanelId::Memory => "Memory",
         }
     }
 
@@ -176,6 +181,7 @@ impl PanelId {
             PanelId::Styles => "styles",
             PanelId::DocumentInfo => "document-info",
             PanelId::GuideGuy => "guide-guy",
+            PanelId::Memory => "memory",
         }
     }
 }

@@ -1,10 +1,10 @@
 //! W10-J: the View menu's guide rows and the keyboard chords Photoshop and
 //! Photopea have that no menu row lists.
 //!
-//! * **View > New Guides from Shape** — guides at the active shape layer's
-//!   document bounds: both vertical edges and the vertical centre, both
-//!   horizontal edges and the horizontal centre, appended to the document's
-//!   guide set as one [`Command::SetGuides`] (one Ctrl+Z).
+//! * **View > Guides from Layer** (W18-G: Photopea's row, any layer) —
+//!   four guides on each selected layer's document bounds (left, top, right,
+//!   bottom), appended to the document's guide set as one
+//!   [`Command::SetGuides`] (one Ctrl+Z).
 //! * **Alt+Ctrl+T** — duplicate, then Free Transform the copy: with a
 //!   selection the selected pixels are floated to a new layer (Layer via
 //!   Copy), without one the whole layer is duplicated; either way the copy is
@@ -117,46 +117,62 @@ pub fn brush_hardness(editor: &mut Editor, harder: bool) -> Result<String, Strin
     Ok(format!("Hardness {}%", (next * 100.0).round() as i32))
 }
 
-/// View > New Guides from Shape: guides at the active shape layer's bounds.
+/// W18-G: View > Guides from Layer, Photopea's `gidsFromLayer`: for every
+/// selected layer (of any kind) with content, four guides on its document
+/// bounds — left, top, right, bottom — appended to the guide set as one
+/// step. A layer with nothing drawn is skipped, as Photopea skips it.
 pub fn guides_from_shape(editor: &mut Editor) -> Result<String, String> {
-    let command = {
+    let (command, layers) = {
         let doc = editor.active().ok_or("No document is open")?;
-        let id = doc
-            .document
-            .active_layer()
-            .ok_or("Select a shape layer first")?;
-        let layer = doc
-            .document
-            .layers
-            .get(id)
-            .ok_or("The active layer is not in the tree")?;
-        if !matches!(layer.kind, layer_model::LayerKind::Shape(_)) {
-            return Err("The active layer is not a shape layer".to_string());
+        let mut chosen = doc.document.layer_selection();
+        if let Some(active) = doc.document.active_layer() {
+            if !chosen.contains(&active) {
+                chosen.push(active);
+            }
         }
-        let bounds = compositor::bounds::document_bounds(
-            &doc.document,
-            &doc.tiles,
-            id,
-            0,
-            compositor::CompositeOptions::default(),
-        )
-        .map_err(|e| e.to_string())?
-        .ok_or("The shape layer has no outline to put guides on")?;
+        if chosen.is_empty() {
+            return Err("Select a layer first".to_string());
+        }
         let mut guides = doc.document.guides.clone();
-        guides.list.extend(shape_guides(bounds));
-        Command::SetGuides { guides }
+        let mut layers = 0usize;
+        for id in chosen {
+            let bounds = compositor::bounds::document_bounds(
+                &doc.document,
+                &doc.tiles,
+                id,
+                0,
+                compositor::CompositeOptions::default(),
+            )
+            .map_err(|e| e.to_string())?;
+            if let Some(bounds) = bounds.filter(|b| b.width > 0 && b.height > 0) {
+                guides.list.extend(shape_guides(bounds));
+                layers += 1;
+            }
+        }
+        if layers == 0 {
+            return Err("The selected layers have nothing drawn to put guides on".to_string());
+        }
+        (
+            Command::Transaction {
+                label: "Guides from Layer".to_string(),
+                commands: vec![Command::SetGuides { guides }],
+            },
+            layers,
+        )
     };
     editor.apply_command(command);
-    Ok("Placed 6 guides on the shape's bounds".to_string())
+    Ok(format!(
+        "Placed {} guides on the bounds of {layers} layer{}",
+        layers * 4,
+        if layers == 1 { "" } else { "s" }
+    ))
 }
 
-/// The six guides New Guides from Shape places on `bounds`: left, centre and
-/// right (vertical), then top, centre and bottom (horizontal).
+/// The four guides Guides from Layer places on `bounds`, in Photopea's
+/// order: left (vertical), top (horizontal), right, bottom.
 pub fn shape_guides(bounds: raster::PixelRect) -> Vec<Guide> {
     let left = bounds.x as f32;
     let top = bounds.y as f32;
-    let right = left + bounds.width as f32;
-    let bottom = top + bounds.height as f32;
     let guide = |axis, doc| Guide {
         axis,
         doc,
@@ -164,11 +180,9 @@ pub fn shape_guides(bounds: raster::PixelRect) -> Vec<Guide> {
     };
     vec![
         guide(GuideAxis::Vertical, left),
-        guide(GuideAxis::Vertical, (left + right) * 0.5),
-        guide(GuideAxis::Vertical, right),
         guide(GuideAxis::Horizontal, top),
-        guide(GuideAxis::Horizontal, (top + bottom) * 0.5),
-        guide(GuideAxis::Horizontal, bottom),
+        guide(GuideAxis::Vertical, left + bounds.width as f32),
+        guide(GuideAxis::Horizontal, top + bounds.height as f32),
     ]
 }
 
@@ -339,10 +353,45 @@ mod tests {
         assert_eq!(ed.brush().size, size, "the size is untouched");
     }
 
+    /// W18-G: View > Guides from Layer is Photopea's row: live over a pixel
+    /// layer (not only a shape), four guides on each selected layer's
+    /// bounds — left, top, right, bottom — as one undo step.
     #[test]
-    fn new_guides_from_shape_places_six_guides_as_one_step() {
+    fn guides_from_layer_puts_four_guides_on_every_selected_layers_bounds() {
         let dir = tempfile::tempdir().unwrap();
         let mut ed = opened(dir.path());
+        let pixels = ed.active().unwrap().document.active_layer().unwrap();
+        let row = ui::menu::MenuAction::NewGuidesFromShape;
+        assert_eq!(row.label(), "Guides from Layer");
+        let chrome = crate::chrome::Chrome::new();
+        let ctx = super::super::context(&mut ed, chrome.workspace());
+        assert!(
+            row.resolve(&ctx).is_enabled(),
+            "a pixel layer is enough: {:?}",
+            row.resolve(&ctx)
+        );
+        let before = ed.active().unwrap().document.guides.list.len();
+        let depth = ed.active().unwrap().history.undo_depth();
+        super::super::perform(row, &mut ed).unwrap();
+        let doc = ed.active().unwrap();
+        assert_eq!(doc.history.undo_depth(), depth + 1, "one undo step");
+        let placed: Vec<(GuideAxis, f32)> = doc.document.guides.list[before..]
+            .iter()
+            .map(|g| (g.axis, g.doc))
+            .collect();
+        assert_eq!(
+            placed,
+            vec![
+                (GuideAxis::Vertical, 0.0),
+                (GuideAxis::Horizontal, 0.0),
+                (GuideAxis::Vertical, 96.0),
+                (GuideAxis::Horizontal, 64.0),
+            ],
+            "the pixel layer's bounds, Photopea's order"
+        );
+        assert!(ed.active_mut().unwrap().undo().unwrap());
+
+        // A shape selected with the pixel layer: four more on its bounds.
         let shape = layer_model::Layer::with_kind(
             "Box",
             layer_model::LayerKind::Shape(layer_model::ShapeLayer::from_svg(
@@ -351,37 +400,25 @@ mod tests {
         );
         let id = shape.id;
         ed.apply_command(Command::create_layer(shape));
-        ed.active_mut()
-            .unwrap()
-            .document
-            .set_active_layer(Some(id))
-            .unwrap();
-        let before = ed.active().unwrap().document.guides.list.len();
-        let depth = ed.active().unwrap().history.undo_depth();
-        super::super::perform(ui::menu::MenuAction::NewGuidesFromShape, &mut ed).unwrap();
-        let doc = ed.active().unwrap();
-        assert_eq!(doc.history.undo_depth(), depth + 1, "one undo step");
-        let guides = &doc.document.guides.list[before..];
-        assert_eq!(guides.len(), 6);
+        {
+            let doc = &mut ed.active_mut().unwrap().document;
+            doc.set_active_layer(Some(id)).unwrap();
+            doc.set_layer_selection(vec![pixels, id]).unwrap();
+        }
+        super::super::perform(row, &mut ed).unwrap();
+        let guides = &ed.active().unwrap().document.guides.list[before..];
+        assert_eq!(guides.len(), 8, "{guides:?}");
         let near = |axis, v: f32| {
             guides
                 .iter()
                 .any(|g| g.axis == axis && (g.doc - v).abs() <= 1.0)
         };
-        for v in [10.0, 30.0, 50.0] {
-            assert!(
-                near(GuideAxis::Vertical, v),
-                "a vertical guide at {v}: {guides:?}"
-            );
+        for v in [10.0, 50.0] {
+            assert!(near(GuideAxis::Vertical, v), "vertical {v}: {guides:?}");
         }
-        for v in [20.0, 40.0, 60.0] {
-            assert!(
-                near(GuideAxis::Horizontal, v),
-                "a horizontal guide at {v}: {guides:?}"
-            );
+        for v in [20.0, 60.0] {
+            assert!(near(GuideAxis::Horizontal, v), "horizontal {v}: {guides:?}");
         }
-        assert!(ed.active_mut().unwrap().undo().unwrap());
-        assert_eq!(ed.active().unwrap().document.guides.list.len(), before);
     }
 
     #[test]

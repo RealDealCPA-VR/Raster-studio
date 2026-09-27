@@ -264,6 +264,10 @@ pub enum ViewFlag {
     /// View > Pattern Preview: the canvas repeated around itself, for
     /// seamless-pattern work. A view setting; the document is untouched.
     PatternPreview,
+    // W18-E: appended (bit positions follow `ALL`).
+    /// View > Show > Paths: the active shape layer's path outline and the
+    /// path tools' selected components and knots on the canvas.
+    Paths,
 }
 
 impl ViewFlag {
@@ -290,6 +294,7 @@ impl ViewFlag {
         ViewFlag::SnapToBounds,
         ViewFlag::SnapToSlices,
         ViewFlag::PatternPreview,
+        ViewFlag::Paths,
     ];
 
     /// W10-J: the View > Snap To submenu's targets, in Photoshop's order.
@@ -299,6 +304,16 @@ impl ViewFlag {
         ViewFlag::SnapToLayers,
         ViewFlag::SnapToSlices,
         ViewFlag::SnapToBounds,
+    ];
+
+    /// W18-E: the View > Show submenu's rows, in Photopea's order.
+    pub const SHOW: &'static [ViewFlag] = &[
+        ViewFlag::SelectionEdges,
+        ViewFlag::Paths,
+        ViewFlag::Guides,
+        ViewFlag::Grid,
+        ViewFlag::PixelGrid,
+        ViewFlag::Slices,
     ];
 
     /// W10-J: the overlays View > Extras hides at once.
@@ -312,6 +327,7 @@ impl ViewFlag {
                 | ViewFlag::SelectionEdges
                 | ViewFlag::LayerEdges
                 | ViewFlag::Slices
+                | ViewFlag::Paths
         )
     }
 
@@ -320,7 +336,14 @@ impl ViewFlag {
     pub const fn in_submenu(self) -> bool {
         matches!(
             self,
-            ViewFlag::Slices
+            // W18-E: Photopea's View > Show carries Selection, Paths, Guides,
+            // Grid and Pixel Grid beside Slices.
+            ViewFlag::SelectionEdges
+                | ViewFlag::Paths
+                | ViewFlag::Guides
+                | ViewFlag::Grid
+                | ViewFlag::PixelGrid
+                | ViewFlag::Slices
                 | ViewFlag::SnapToGuides
                 | ViewFlag::SnapToGrid
                 | ViewFlag::SnapToLayers
@@ -355,6 +378,7 @@ impl ViewFlag {
             // W13-F: the menu row reads `ui.w13f.menu.pattern_preview`
             // (`MenuAction::label`); a const fn cannot call `tr`.
             ViewFlag::PatternPreview => "Pattern Preview",
+            ViewFlag::Paths => "Paths",
         }
     }
 }
@@ -390,6 +414,8 @@ impl ViewFlags {
             ViewFlag::SnapToLayers,
             ViewFlag::SnapToBounds,
             ViewFlag::SnapToSlices,
+            // W18-E: paths show, as in a fresh Photopea.
+            ViewFlag::Paths,
         ] {
             f.set(flag, true);
         }

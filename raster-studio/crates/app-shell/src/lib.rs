@@ -152,6 +152,8 @@ mod w10e_tests;
 // W16-G: live shapes' `.psd` origination, and their (and the Parametric
 // Shape and Vector Gradient tools') route tests.
 mod live_shape;
+// W18-E: Delete on path parts, the canvas path overlay, the Pen bar's Make.
+mod paths_w18;
 
 pub use action::{Action, Category, ToolKey};
 pub use canvas_extras::{CanvasExtras, ExtrasReport};

@@ -1399,6 +1399,72 @@ pub enum ExportFormat {
     /// is an empty drawing of the canvas extent; the application rewrites a
     /// 100% row with the vector layers as polylines.
     Dxf,
+    // ---- W18-G (appended): Photopea's File > Export As > RAW.
+    /// W18-G: headerless interleaved samples in the [`RawLayout`] chosen
+    /// (Photopea's RAW options: 1, 3 or 4 channels, 8 or 16 bits, byte order
+    /// 12-34 or 34-12), row-major, top row first. Nothing records the size,
+    /// so nothing here reads it back.
+    Raw(RawLayout),
+}
+
+/// W18-G: the sample layout an [`ExportFormat::Raw`] file is written in —
+/// Photopea's three RAW options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RawLayout {
+    /// Samples per pixel: 1 (Rec. 601 luma), 3 (R, G, B) or 4 (R, G, B, A).
+    pub channels: u8,
+    /// Two bytes per sample instead of one.
+    pub sixteen_bit: bool,
+    /// Photopea's "34-12" byte order (least significant byte first); the
+    /// default "12-34" writes the most significant byte first.
+    pub little_endian: bool,
+}
+
+impl RawLayout {
+    /// Photopea's opening state: 4 channels, 8 bits, 12-34.
+    pub const DEFAULT: RawLayout = RawLayout {
+        channels: 4,
+        sixteen_bit: false,
+        little_endian: false,
+    };
+    /// The channel counts Photopea offers, in its order.
+    pub const CHANNELS: [u8; 3] = [1, 3, 4];
+
+    /// Bytes one pixel takes.
+    pub fn bytes_per_pixel(self) -> usize {
+        usize::from(self.channels) * if self.sixteen_bit { 2 } else { 1 }
+    }
+
+    /// Interleave straight-alpha RGBA samples (`max` is the full-scale value
+    /// of `samples`: 255 or 65 535) into this layout.
+    fn interleave(self, samples: impl Iterator<Item = u32>, max: u32, out: &mut Vec<u8>) {
+        let mut px = [0u32; 4];
+        for (i, v) in samples.enumerate() {
+            px[i % 4] = v;
+            if i % 4 != 3 {
+                continue;
+            }
+            let luma = (px[0] * 299 + px[1] * 587 + px[2] * 114 + 500) / 1000;
+            let picked: &[u32] = match self.channels {
+                1 => std::slice::from_ref(&luma),
+                3 => &px[..3],
+                _ => &px[..],
+            };
+            for &v in picked {
+                if self.sixteen_bit {
+                    let wide = if max == 255 { v * 257 } else { v } as u16;
+                    let bytes = if self.little_endian {
+                        wide.to_le_bytes()
+                    } else {
+                        wide.to_be_bytes()
+                    };
+                    out.extend_from_slice(&bytes);
+                } else {
+                    out.push(if max == 255 { v } else { (v + 128) / 257 } as u8);
+                }
+            }
+        }
+    }
 }
 
 /// The square sizes an [`ExportFormat::Ico`] file carries, smallest first.
@@ -1452,6 +1518,10 @@ impl ExportFormat {
     /// ones: PDF, EMF and DXF ([`export_vector`]).
     pub const VECTOR: [ExportFormat; 3] = [ExportFormat::Pdf, ExportFormat::Emf, ExportFormat::Dxf];
 
+    /// W18-G: Photopea's headerless RAW, at its default layout; written
+    /// only (nothing in the file says how wide it is).
+    pub const RAW: [ExportFormat; 1] = [ExportFormat::Raw(RawLayout::DEFAULT)];
+
     /// W10-F: every format the exporter can write: [`ExportFormat::ALL`]
     /// followed by [`ExportFormat::WRITE_ONLY`] and (W11-H)
     /// [`ExportFormat::MIN_TWO_PIXELS`].
@@ -1464,6 +1534,8 @@ impl ExportFormat {
             .chain(&Self::VIDEO)
             // W16-K.
             .chain(&Self::VECTOR)
+            // W18-G.
+            .chain(&Self::RAW)
             .copied()
             .collect()
     }
@@ -1479,6 +1551,8 @@ impl ExportFormat {
                 | ExportFormat::Pdf
                 | ExportFormat::Emf
                 | ExportFormat::Dxf
+                // W18-G: no header to read a size from.
+                | ExportFormat::Raw(_)
         )
     }
 
@@ -1516,6 +1590,12 @@ impl ExportFormat {
                     "lossy WebP quality must be 1..=100, got {q}"
                 )))
             }
+            ExportFormat::Raw(layout) if !RawLayout::CHANNELS.contains(&layout.channels) => {
+                Err(CodecError::InvalidParameter(format!(
+                    "RAW writes 1, 3 or 4 channels, not {}",
+                    layout.channels
+                )))
+            }
             _ => Ok(()),
         }
     }
@@ -1543,6 +1623,9 @@ impl ExportFormat {
             | ExportFormat::WebPLossy(_)
             // W16-K: a soft mask carries it.
             | ExportFormat::Pdf => AlphaSupport::Full,
+            // W18-G: the fourth channel is the alpha.
+            ExportFormat::Raw(layout) if layout.channels == 4 => AlphaSupport::Full,
+            ExportFormat::Raw(_) => AlphaSupport::None,
             ExportFormat::Gif => AlphaSupport::Binary,
             ExportFormat::Jpeg(_)
             | ExportFormat::Ppm
@@ -1574,10 +1657,14 @@ impl ExportFormat {
 
     /// Whether the container can store 16 bits per channel.
     pub fn supports_16_bit(self) -> bool {
-        matches!(
-            self,
-            ExportFormat::Png | ExportFormat::Tiff | ExportFormat::Exr
-        )
+        match self {
+            // W18-G: when its layout asks for two bytes a sample.
+            ExportFormat::Raw(layout) => layout.sixteen_bit,
+            other => matches!(
+                other,
+                ExportFormat::Png | ExportFormat::Tiff | ExportFormat::Exr
+            ),
+        }
     }
 
     /// The conventional file extension, without a dot.
@@ -1605,6 +1692,7 @@ impl ExportFormat {
             ExportFormat::Pdf => "pdf",
             ExportFormat::Emf => "emf",
             ExportFormat::Dxf => "dxf",
+            ExportFormat::Raw(_) => "raw",
         }
     }
 
@@ -1633,6 +1721,7 @@ impl ExportFormat {
             ExportFormat::Pdf => "application/pdf",
             ExportFormat::Emf => "image/emf",
             ExportFormat::Dxf => "image/vnd.dxf",
+            ExportFormat::Raw(_) => "application/octet-stream",
         }
     }
 }
@@ -1964,6 +2053,20 @@ pub fn encode_into<W: Write + Seek>(
                     title: String::new(),
                 })?,
             };
+            out.write_all(&bytes).map_err(image::ImageError::IoError)?;
+        }
+        // W18-G: headerless interleaved samples in the chosen layout.
+        ExportFormat::Raw(layout) => {
+            let mut bytes =
+                Vec::with_capacity((width as usize) * (height as usize) * layout.bytes_per_pixel());
+            match pixels {
+                EncodedPixels::Rgba8(v) => {
+                    layout.interleave(v.iter().map(|s| u32::from(*s)), 255, &mut bytes)
+                }
+                EncodedPixels::Rgba16(v) => {
+                    layout.interleave(v.iter().map(|s| u32::from(*s)), 65_535, &mut bytes)
+                }
+            }
             out.write_all(&bytes).map_err(image::ImageError::IoError)?;
         }
     }
@@ -2450,6 +2553,8 @@ mod tests {
                 ExportFormat::Pdf | ExportFormat::Emf | ExportFormat::Dxf => {
                     unreachable!("the vector formats are not in ExportFormat::ALL")
                 }
+                // W18-G: nor RAW.
+                ExportFormat::Raw(_) => unreachable!("RAW is not in ExportFormat::ALL"),
                 // Lossy and alpha-free.
                 ExportFormat::Jpeg(_) => {
                     for (got, want) in decoded
@@ -3962,5 +4067,67 @@ mod tests {
         assert_eq!(bytes[16], 32, "bits per pixel");
         assert_eq!((back.width, back.height), (w, h));
         assert_eq!(back.pixels, SurfacePixels::Rgba8(px));
+    }
+
+    /// W18-G: RAW writes exactly the interleaved samples of the layout asked
+    /// for — Photopea's channel counts, depths and byte orders — and nothing
+    /// else (no header).
+    #[test]
+    fn raw_writes_the_interleaved_samples_of_its_layout() {
+        let px = [10u8, 20, 30, 40, 200, 100, 50, 255];
+        let raw = |channels, sixteen_bit, little_endian| {
+            let layout = RawLayout {
+                channels,
+                sixteen_bit,
+                little_endian,
+            };
+            encode(ExportFormat::Raw(layout), 2, 1, &px).unwrap()
+        };
+        assert_eq!(raw(4, false, false), px.to_vec());
+        assert_eq!(raw(3, false, false), vec![10, 20, 30, 200, 100, 50]);
+        // Rec. 601 luma: (10*299 + 20*587 + 30*114) / 1000 = 18.
+        assert_eq!(raw(1, false, false), vec![18, 124]);
+        // 16 bits, 12-34 (most significant first) and 34-12.
+        assert_eq!(&raw(3, true, false)[..6], &[10, 10, 20, 20, 30, 30]);
+        let wide = raw(1, true, false);
+        assert_eq!(wide, vec![18, 18, 124, 124]);
+        let big = u16::from_be_bytes([raw(4, true, false)[14], raw(4, true, false)[15]]);
+        assert_eq!(big, 255 * 257);
+        let sixteen = [0x1234u16, 0, 0, 0xffff];
+        let bytes = encode_with(
+            ExportFormat::Raw(RawLayout {
+                channels: 4,
+                sixteen_bit: true,
+                little_endian: true,
+            }),
+            1,
+            1,
+            EncodedPixels::Rgba16(&sixteen),
+            &EncodeOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(bytes, vec![0x34, 0x12, 0, 0, 0, 0, 0xff, 0xff]);
+        let bytes = encode_with(
+            ExportFormat::Raw(RawLayout {
+                channels: 4,
+                sixteen_bit: true,
+                little_endian: false,
+            }),
+            1,
+            1,
+            EncodedPixels::Rgba16(&sixteen),
+            &EncodeOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(bytes[..2], [0x12, 0x34]);
+        // Two channels is not one of Photopea's layouts.
+        let two = RawLayout {
+            channels: 2,
+            ..RawLayout::DEFAULT
+        };
+        assert!(ExportFormat::Raw(two).validate().is_err());
+        assert!(ExportFormat::writable().contains(&ExportFormat::Raw(RawLayout::DEFAULT)));
+        assert!(!ExportFormat::Raw(RawLayout::DEFAULT).reads_back());
+        assert_eq!(ExportFormat::Raw(RawLayout::DEFAULT).extension(), "raw");
     }
 }

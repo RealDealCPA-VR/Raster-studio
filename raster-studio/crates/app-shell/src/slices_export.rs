@@ -309,6 +309,11 @@ fn name_or_default(name: &str, index: usize) -> String {
 /// the tool is not Slice Select or nothing is picked, so the key clears as
 /// usual.
 pub fn delete_picked_slice(editor: &mut Editor) -> Option<Result<String, String>> {
+    // W18-A: the canvas menu's slice rows (Divide Slices, and the pick and
+    // Delete of the slice under the pointer) ride this arm.
+    if let Some(done) = perform_slice_menu_request(editor) {
+        return Some(done);
+    }
     if editor.tool() != tools::ToolId::SliceSelect {
         return None;
     }
@@ -319,6 +324,73 @@ pub fn delete_picked_slice(editor: &mut Editor) -> Option<Result<String, String>
     persist_slices(editor);
     let left = editor.slices.get(id).len();
     Some(Ok(format!("Deleted slice {name}; {left} slice(s) left")))
+}
+
+/// W18-A: perform the request the slice tools' canvas menu parked
+/// ([`ui::context_menu::divide_slice`]): pick or delete the slice that was
+/// under the pointer, or divide a slice (or the canvas) into the grid Divide
+/// Slices confirmed — Photopea's `divide`: the divided slice is replaced by
+/// the cells, which take the Slice tool's names; the rest keep theirs. The
+/// request carries the set it was built over and is refused when the set has
+/// changed since. `None` when nothing is parked.
+pub fn perform_slice_menu_request(editor: &mut Editor) -> Option<Result<String, String>> {
+    use ui::context_menu::divide_slice::SliceMenuRequest;
+    let request = ui::context_menu::divide_slice::take()?;
+    let Some(id) = editor.active().map(OpenDocument::id) else {
+        return Some(Err("No document is open".to_string()));
+    };
+    restore_saved_slices(editor);
+    let before = match &request {
+        SliceMenuRequest::Pick { before, .. } | SliceMenuRequest::Delete { before, .. } => before,
+        SliceMenuRequest::Divide(divide) => &divide.before,
+    };
+    if before.as_slice() != editor.slices.get(id) {
+        return Some(Err(
+            "The slices changed since the right-click; right-click again".to_string(),
+        ));
+    }
+    Some(match request {
+        SliceMenuRequest::Pick { index, .. } => {
+            editor.slices.set_picked(id, Some(index));
+            Ok(format!("Picked slice {}", index + 1))
+        }
+        SliceMenuRequest::Delete { index, .. } => {
+            let name = editor
+                .slices
+                .options(id)
+                .get(index)
+                .map(|o| o.name.clone())
+                .unwrap_or_default();
+            if !editor.slices.delete(id, index) {
+                return Some(Err(format!("There is no slice {}", index + 1)));
+            }
+            persist_slices(editor);
+            let left = editor.slices.get(id).len();
+            Ok(format!("Deleted slice {name}; {left} slice(s) left"))
+        }
+        SliceMenuRequest::Divide(divide) => {
+            let Some((rects, removed)) = divide.result() else {
+                return Some(Err("These settings make no cut".to_string()));
+            };
+            let mut options = editor.slices.options(id).to_vec();
+            if let Some(i) = removed {
+                options.remove(i);
+            }
+            let added = rects.len() - options.len();
+            let mut number = options.len();
+            while options.len() < rects.len() {
+                number += 1;
+                let name = default_slice_name(number);
+                if options.iter().all(|o| o.name != name) {
+                    options.push(SliceOptions::named(name));
+                }
+            }
+            editor.slices.remember_with(id, rects, options);
+            persist_slices(editor);
+            let total = editor.slices.get(id).len();
+            Ok(format!("Divided into {added} slices; {total} slice(s)"))
+        }
+    })
 }
 
 /// W10-A: Slice Options: replace slice `index`'s name, URL and alt text on

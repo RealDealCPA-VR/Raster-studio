@@ -175,6 +175,13 @@ pub(crate) mod select_w16;
 #[cfg(test)]
 #[path = "tool_input_w16c_tests.rs"]
 mod w16c_tests;
+// W18-F: the options bar's Cancel cross, Crop by, pattern pick, view
+// toggles and clone source picks, and the held edit the bar is told about.
+#[path = "options_w18.rs"]
+pub mod options_w18;
+#[cfg(test)]
+#[path = "options_w18_tests.rs"]
+mod options_w18_tests;
 // The tests read tile bytes back; the lib reads them through `NarrowedReads`.
 #[cfg(test)]
 use compositor::TileSource;
@@ -1132,6 +1139,11 @@ pub fn request_free_transform(previous: ToolId) {
 
 impl ToolPointer {
     pub fn new() -> Self {
+        // W18-F: a new pointer holds nothing, and inherits no request the
+        // bar posted for the old one.
+        tools::registry::bar_w18::publish_pending(None);
+        let _ = tools::registry::bar_w18::take_cancel();
+        let _ = tools::registry::bar_w18::take_crop_by();
         Self::default()
     }
 
@@ -1254,6 +1266,8 @@ impl ToolPointer {
     /// pointer claim (it commits on Enter, not on release), so the association
     /// outlives the claim too.
     pub fn live_geometry(&mut self) -> Option<(DocumentId, tools::SessionGeometry)> {
+        // W18-F: the bar's Cancel / Commit pair follows the held edit.
+        options_w18::publish_pending(self);
         let geometry = self
             .current
             .as_ref()
@@ -2265,7 +2279,8 @@ impl ToolPointer {
         if self.router.is_gesture_active() {
             return false;
         }
-        let mut changed = false;
+        // W18-F: what the options bar posted (Cancel, Crop by, a pattern).
+        let mut changed = options_w18::drain(self, editor, settings);
         if let Some(previous) = PENDING_TRANSFORM.with(|slot| slot.take()) {
             changed |= self.begin_transform(editor, previous, settings);
         }
@@ -2532,6 +2547,12 @@ impl ToolPointer {
         let edit_target_is_mask = editor.edit_target_is_mask();
         let filter_mask = editor.edit_target_filter_mask();
 
+        // W18-F: the Zoom bar's Zoom Out and the clone tools' source picks.
+        let input = options_w18::adjust_input(effective, input);
+        let before = editor
+            .active()
+            .map(|doc| (doc.camera.zoom, doc.camera.center))
+            .unwrap_or((1.0, Vec2::ZERO));
         let (dispatch, viewport) = {
             let doc = editor.active_mut().expect("checked immediately above");
             let viewport = canvas_viewport(&doc.camera);
@@ -2568,6 +2589,10 @@ impl ToolPointer {
             }
             Dispatch::Navigated { route, .. } => {
                 out.route = Some(route);
+                // W18-F: the Zoom and Hand bars' All Documents.
+                if out.view_changed {
+                    options_w18::follow_all_documents(editor, route, before);
+                }
                 return out;
             }
             Dispatch::ToTool(routed) => routed,
@@ -3130,6 +3155,9 @@ impl ToolPointer {
         // W10-H: a paint stroke may keep a 32-bit layer's clipped HDR pixels.
         crate::depth32::with_in_place_stroke(crate::depth32::in_place_tool(id), || {
             for command in commands {
+                // W18-C: a stroke writes only the Channels panel's selected
+                // colour components.
+                let command = crate::edit_target::channel_edit_w18::masked(editor, command);
                 editor.apply_command(command);
             }
         });

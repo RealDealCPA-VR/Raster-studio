@@ -84,6 +84,71 @@ pub mod ids {
     pub fn last_state() -> egui::Id {
         crate::panels::panel_menus_w16::ids::last_state_row()
     }
+    /// W18-I: the name field comp `index` shows while it is being renamed
+    /// (a double-click on its row opens it).
+    pub fn rename(index: usize) -> egui::Id {
+        egui::Id::new(("raster-layer-comps-rename", index))
+    }
+}
+
+/// W18-I: the comp being renamed in place, if any.
+fn renaming_key() -> egui::Id {
+    egui::Id::new("raster-layer-comps-renaming")
+}
+
+/// W18-I: the comp row the last single click landed on, so a double-click
+/// renames only when both clicks hit the same row.
+fn last_click_key() -> egui::Id {
+    egui::Id::new("raster-layer-comps-last-click")
+}
+
+/// W18-I: Layer Comps: rename comp `index` to `name` (trimmed), one undo
+/// step. `None` for an empty name, the name it already has, or a comp that
+/// is gone.
+pub fn rename_comp(doc: &Document, index: usize, name: &str) -> Option<Command> {
+    let name = name.trim();
+    let comp = doc.extras.layer_comps.get(index)?;
+    if name.is_empty() || comp.name == name {
+        return None;
+    }
+    let name = name.to_string();
+    Some(extras::edit_extras(doc, move |x| {
+        x.layer_comps[index].name = name;
+    }))
+}
+
+/// W18-I: what one frame of an in-place rename field produced.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum InlineRename {
+    /// Still typing.
+    Editing,
+    /// Enter or focus loss: the text to commit.
+    Commit(String),
+    /// Escape: the edit is thrown away.
+    Cancel,
+}
+
+/// W18-I: the in-place rename field Photopea opens on a double-clicked
+/// name (a channel, a layer comp): seeded with `current`, focused as it
+/// opens, committed on Enter or focus loss and dropped on Escape. Built on
+/// [`crate::view::text_field_sized`], so a keystroke survives the frame.
+pub(crate) fn inline_rename_field(ui: &mut Ui, id: egui::Id, current: &str) -> InlineRename {
+    let t = current_tokens(ui);
+    let width =
+        (ui.available_width() - t.metrics.min_hit_target * 3.0).max(t.metrics.numeric_field_width);
+    let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    let edit = crate::view::text_field_sized(ui, id, current, width);
+    if !edit.response.has_focus() && !edit.editing && edit.committed.is_none() {
+        // The frame the field opens: take the keyboard.
+        edit.response.request_focus();
+    }
+    if escape {
+        InlineRename::Cancel
+    } else if let Some(text) = edit.committed {
+        InlineRename::Commit(text)
+    } else {
+        InlineRename::Editing
+    }
 }
 
 /// `Layer Comp <n>` for the lowest `n` from one past the comp count that no
@@ -284,10 +349,17 @@ pub(crate) fn layer_comps_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     if comps.is_empty() {
         ui.label(hint(ui, tr(NO_COMPS)));
     }
+    let renaming: Option<usize> = ui.data(|d| d.get_temp(renaming_key()));
     for (index, comp) in comps.iter().enumerate() {
         let mut flip: Option<usize> = None;
+        let mut rename: Option<InlineRename> = None;
         let row = list_row_layout(ui, ids::row(index), applied == Some(index), |ui| {
             marker(ui, applied == Some(index));
+            // W18-I: a double-clicked comp's name becomes a field in place.
+            if renaming == Some(index) {
+                rename = Some(inline_rename_field(ui, ids::rename(index), &comp.name));
+                return;
+            }
             ui.label(body(ui, comp.name.clone()));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.add_space(Space::XSmall.pt());
@@ -318,12 +390,36 @@ pub(crate) fn layer_comps_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             }
             continue;
         }
+        match rename {
+            Some(InlineRename::Editing) => continue,
+            Some(outcome) => {
+                ui.data_mut(|d| d.remove::<usize>(renaming_key()));
+                if let InlineRename::Commit(text) = outcome {
+                    if let Some(command) = rename_comp(doc, index, &text) {
+                        w.emit(Intent::Document(command));
+                    }
+                }
+                continue;
+            }
+            None => {}
+        }
         let response = row.response.on_hover_text(if comp.comment.is_empty() {
             comp.name.clone()
         } else {
             comp.comment.clone()
         });
-        if response.clicked() {
+        // W18-I: Photopea renames a comp on a double-click of its name (the
+        // first click has already applied it, as any click does). egui
+        // reports a double-click for any second click in its window, so
+        // both clicks must have landed on this row.
+        let first_click: Option<usize> = ui.data(|d| d.get_temp(last_click_key()));
+        if response.double_clicked() && first_click == Some(index) {
+            ui.data_mut(|d| {
+                d.remove::<usize>(last_click_key());
+                d.insert_temp(renaming_key(), index);
+            });
+        } else if response.clicked() {
+            ui.data_mut(|d| d.insert_temp(last_click_key(), index));
             if let Some(command) = apply_comp(doc, index) {
                 w.emit(Intent::Document(command));
             }

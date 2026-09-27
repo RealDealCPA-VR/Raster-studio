@@ -573,3 +573,177 @@ mod tests {
         assert!(project(&t, &[0], &cam(), &collapsed).is_empty());
     }
 }
+
+// ---------------------------------------------------------------------------
+// W18-E: a committed path's outline and the path tools' selection
+// ---------------------------------------------------------------------------
+
+/// W18-E: which parts of a committed path are drawn selected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathShown<'a> {
+    /// The outline alone: a selected shape layer (Photopea: "We will see the
+    /// outlines of paths after that").
+    Outline,
+    /// Path Select: these components (subpath indices), every knot filled.
+    Components(&'a [usize]),
+    /// Direct Selection: every knot of the path hollow, these
+    /// `(subpath, knot)` filled with their handles.
+    Knots(&'a [(usize, usize)]),
+}
+
+/// W18-E: a committed path projected to the screen: its outline polylines
+/// and its knot furniture.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CommittedPathOverlay {
+    /// One polyline per subpath, closed ones repeating their first point.
+    pub outline: Vec<Vec<Vec2>>,
+    /// Knots (filled when selected), handles and direction lines.
+    pub furniture: PathOverlay,
+}
+
+/// How finely a committed outline is flattened, in document pixels.
+const OUTLINE_TOLERANCE: f64 = 0.25;
+
+/// W18-E: project `path` (document space) with `shown` selected. The knots
+/// are read with [`vector::anchors::from_path`], the same reading Path Select
+/// and Direct Selection hit-test with, so a knot is drawn where a click
+/// grabs it (a curved closing segment does not add a duplicate knot).
+pub fn committed_overlay(
+    path: &Path,
+    shown: PathShown<'_>,
+    camera: &CanvasCamera,
+    viewport: &Viewport,
+) -> CommittedPathOverlay {
+    let mut out = CommittedPathOverlay::default();
+    if viewport.is_degenerate() {
+        return out;
+    }
+    let to_screen = |p: Point| camera.screen_pt_of(viewport, v(p));
+    for line in path.flatten(OUTLINE_TOLERANCE) {
+        let mut pts: Vec<Vec2> = line.points.iter().map(|p| to_screen(*p)).collect();
+        if line.closed {
+            if let Some(first) = pts.first().copied() {
+                pts.push(first);
+            }
+        }
+        if pts.len() > 1 && pts.iter().all(|p| p.is_finite()) {
+            out.outline.push(pts);
+        }
+    }
+    let subpaths = vector::anchors::from_path(path);
+    for (s, sp) in subpaths.iter().enumerate() {
+        let (drawn, all_filled) = match shown {
+            PathShown::Outline => (false, false),
+            PathShown::Components(picked) => (picked.contains(&s), true),
+            PathShown::Knots(_) => (true, false),
+        };
+        if !drawn {
+            continue;
+        }
+        for (i, a) in sp.anchors.iter().enumerate() {
+            let selected =
+                all_filled || matches!(shown, PathShown::Knots(knots) if knots.contains(&(s, i)));
+            let at = to_screen(a.pos);
+            if !at.is_finite() {
+                continue;
+            }
+            out.furniture.anchors.push((at, selected));
+            if !selected || all_filled {
+                continue;
+            }
+            for handle in [a.handle_in, a.handle_out] {
+                if handle == Point::ZERO {
+                    continue;
+                }
+                let h = to_screen(a.pos + handle);
+                if h.is_finite() {
+                    out.furniture.controls.push(h);
+                    out.furniture.direction_lines.push([at, h]);
+                }
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod w18e_tests {
+    use super::*;
+    use crate::canvas::viewport::PanelInsets;
+    use vector::point;
+
+    fn vp() -> Viewport {
+        Viewport::new(Vec2::new(800.0, 600.0), PanelInsets::uniform(0.0), 1.0)
+    }
+
+    fn two_squares() -> Path {
+        let mut p = Path::from_polyline(
+            &[
+                point(10.0, 10.0),
+                point(20.0, 10.0),
+                point(20.0, 20.0),
+                point(10.0, 20.0),
+            ],
+            true,
+        );
+        p.extend(&Path::from_polyline(
+            &[
+                point(40.0, 40.0),
+                point(50.0, 40.0),
+                point(50.0, 50.0),
+                point(40.0, 50.0),
+            ],
+            true,
+        ));
+        p
+    }
+
+    #[test]
+    fn the_outline_is_drawn_and_only_the_selected_parts_get_knots() {
+        let (c, v) = (CanvasCamera::default(), vp());
+        let path = two_squares();
+        let outline = committed_overlay(&path, PathShown::Outline, &c, &v);
+        assert_eq!(outline.outline.len(), 2);
+        assert_eq!(
+            outline.outline[0].len(),
+            5,
+            "a closed ring repeats its start"
+        );
+        assert!(outline.furniture.anchors.is_empty());
+        // Path Select: the second component's four knots, all filled.
+        let comp = committed_overlay(&path, PathShown::Components(&[1]), &c, &v);
+        assert_eq!(comp.furniture.anchors.len(), 4);
+        assert!(comp.furniture.anchors.iter().all(|(_, filled)| *filled));
+        assert_eq!(
+            comp.furniture.anchors[0].0,
+            c.screen_pt_of(&v, Vec2::new(40.0, 40.0))
+        );
+        // Direct Selection: every knot, one of them filled.
+        let knots = committed_overlay(&path, PathShown::Knots(&[(0, 1)]), &c, &v);
+        assert_eq!(knots.furniture.anchors.len(), 8);
+        let filled: Vec<Vec2> = knots
+            .furniture
+            .anchors
+            .iter()
+            .filter(|(_, f)| *f)
+            .map(|(p, _)| *p)
+            .collect();
+        assert_eq!(filled, vec![c.screen_pt_of(&v, Vec2::new(20.0, 10.0))]);
+    }
+
+    #[test]
+    fn a_selected_curved_knot_shows_its_handles() {
+        let (c, v) = (CanvasCamera::default(), vp());
+        let path = Path::from_elements(vec![
+            PathEl::MoveTo(point(0.0, 0.0)),
+            PathEl::CurveTo(point(10.0, -20.0), point(30.0, -20.0), point(40.0, 0.0)),
+        ]);
+        let o = committed_overlay(&path, PathShown::Knots(&[(0, 0)]), &c, &v);
+        assert_eq!(o.furniture.anchors.len(), 2);
+        assert_eq!(
+            o.furniture.controls,
+            vec![c.screen_pt_of(&v, Vec2::new(10.0, -20.0))]
+        );
+        assert_eq!(o.furniture.direction_lines.len(), 1);
+    }
+}
