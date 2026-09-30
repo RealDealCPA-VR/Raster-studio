@@ -147,7 +147,7 @@ mod tests {
             height: 2,
             rgba8: vec![255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 9, 9, 9, 0],
         };
-        let bytes = write_asl_library(&[("Shade", "s-1", &styl)], &[pattern.clone()]);
+        let bytes = write_asl_library(&[("Shade", "s-1", &styl)], std::slice::from_ref(&pattern));
         let lib = super::super::parse_asl(&bytes).unwrap();
         assert_eq!(lib.styles.len(), 1);
         assert_eq!(lib.styles[0].name, "Shade");

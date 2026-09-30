@@ -10,11 +10,16 @@
 //! * **Each layer's `shmd` metadata** holds a `cmls` item: `u32 16` then a
 //!   descriptor with the layer's `LyrI` and `layerSettings`, one entry per
 //!   comp the layer is recorded in: `compList` (the comp ids the entry is
-//!   for), `enab` (visible), `Ofst` (`Hrzn`/`Vrtc`: the layer's top-left in
-//!   that comp), `blendOptions` (`Md  ` blend mode, `Opct` and
-//!   `fillOpacity` percentages) and `Lefx` (the layer style). An entry that
-//!   omits a key inherits it from the entries before it. Comp id 0 is
-//!   Photoshop's "Last Document State".
+//!   for), `enab` (visible), `Ofst` (`Hrzn`/`Vrtc`: how far the layer sits
+//!   in that comp from where it sits in the saved document — Photopea adds
+//!   each layer's position to it on open and takes it off again on save),
+//!   `FXRefPoint` (the layer's top-left in that comp), `blendOptions` (`Md  `
+//!   blend mode, `Opct` and `fillOpacity` percentages) and `Lefx` (the layer
+//!   style). An entry that omits a key inherits it from the entries before
+//!   it; a first entry without `enab` / `Ofst` is visible and unmoved (as
+//!   Photopea reads it). Comp id 0 is Photoshop's "Last Document State".
+//!
+//! The 1065 descriptor's class is `CompList`, as Photopea writes it.
 //!
 //! Every count here is bounded ([`MAX_COMPS`], the descriptor reader's own
 //! ceilings) and nothing indexes on a file-supplied number.
@@ -62,7 +67,8 @@ pub struct PsdLayerComps {
 pub struct PsdCompLayerState {
     pub comp_id: i32,
     pub visible: Option<bool>,
-    /// `Ofst`: the layer's top-left, document pixels.
+    /// `Ofst`: how far the layer is moved in this comp from its place in
+    /// the saved document, document pixels.
     pub offset: Option<(i32, i32)>,
     pub blend_mode: Option<BlendMode>,
     /// `0.0..=1.0`.
@@ -173,7 +179,7 @@ pub fn resource(comps: &PsdLayerComps) -> PsdResult<ImageResource> {
         }
         list.push(Value::Descriptor(d));
     }
-    let mut d = Descriptor::new("null");
+    let mut d = Descriptor::new("CompList");
     d.push("list", Value::List(list))?;
     if let Some(id) = comps.last_applied {
         d.push("lastAppliedComp", Value::Integer(id))?;
@@ -292,7 +298,13 @@ pub fn layer_states(layer: &PsdLayer, opts: &ReadOptions) -> PsdResult<Vec<PsdCo
         return Ok(Vec::new());
     };
     let mut out = Vec::new();
-    let mut acc = PsdCompLayerState::new(0);
+    // A first entry that states no visibility or offset is visible and
+    // unmoved (Photopea's reading).
+    let mut acc = PsdCompLayerState {
+        visible: Some(true),
+        offset: Some((0, 0)),
+        ..PsdCompLayerState::new(0)
+    };
     for entry in entries.iter().take(MAX_COMPS) {
         let Value::Descriptor(e) = entry else {
             continue;
@@ -342,7 +354,9 @@ pub fn layer_states(layer: &PsdLayer, opts: &ReadOptions) -> PsdResult<Vec<PsdCo
     Ok(out)
 }
 
-fn entry(state: &PsdCompLayerState) -> PsdResult<Descriptor> {
+/// One `layerSettings` entry; `origin` is the layer's top-left in the saved
+/// document (the `FXRefPoint` is the offset from it).
+fn entry(state: &PsdCompLayerState, origin: (i32, i32)) -> PsdResult<Descriptor> {
     let mut e = Descriptor::new("null");
     e.push("compList", Value::List(vec![Value::Integer(state.comp_id)]))?;
     if let Some(v) = state.visible {
@@ -352,8 +366,11 @@ fn entry(state: &PsdCompLayerState) -> PsdResult<Descriptor> {
         let mut o = Descriptor::new("null");
         o.push("Hrzn", Value::Integer(x))?;
         o.push("Vrtc", Value::Integer(y))?;
-        e.push("Ofst", Value::Descriptor(o.clone()))?;
-        e.push("FXRefPoint", Value::Descriptor(o))?;
+        e.push("Ofst", Value::Descriptor(o))?;
+        let mut r = Descriptor::new("null");
+        r.push("Hrzn", Value::Integer(origin.0.saturating_add(x)))?;
+        r.push("Vrtc", Value::Integer(origin.1.saturating_add(y)))?;
+        e.push("FXRefPoint", Value::Descriptor(r))?;
     }
     let pct = |v: f64| Value::UnitFloat {
         unit: *b"#Prc",
@@ -404,7 +421,8 @@ pub fn set_layer_states(layer: &mut PsdLayer, states: &[PsdCompLayerState]) -> P
         }
         let mut list = Vec::with_capacity(states.len().min(MAX_COMPS));
         for s in states.iter().take(MAX_COMPS) {
-            list.push(Value::Descriptor(entry(s)?));
+            let origin = (layer.bounds.left, layer.bounds.top);
+            list.push(Value::Descriptor(entry(s, origin)?));
         }
         d.push("layerSettings", Value::List(list))?;
         items.push(MetaItem {
@@ -483,6 +501,8 @@ mod tests {
     fn resource_1065_round_trips() {
         let r = resource(&comps()).unwrap();
         assert_eq!(r.id, ID_LAYER_COMPS);
+        let d = versioned_descriptor(&r.data, &ReadOptions::default()).unwrap();
+        assert_eq!(d.class_id, "CompList", "Photopea's class for 1065");
         let back = layer_comps(&[r], &ReadOptions::default()).unwrap().unwrap();
         assert_eq!(back, comps());
     }
@@ -623,6 +643,42 @@ mod tests {
         assert_eq!(states[1].comp_id, 1002);
         assert_eq!(states[1].visible, Some(false));
         assert_eq!(states[1].offset, Some((40, 50)));
+    }
+
+    /// `Ofst` is the move from the saved document's position (Photopea
+    /// adds the layer's place on open and takes it off on save), and
+    /// `FXRefPoint` is the place itself; a first entry that states neither
+    /// visibility nor offset is visible and unmoved.
+    #[test]
+    fn ofst_is_the_move_and_fxrefpoint_the_place() {
+        let mut layer = PsdLayer::raster("L", Rect::new(30, 40, 32, 42));
+        let moved = PsdCompLayerState {
+            offset: Some((5, -6)),
+            ..PsdCompLayerState::new(4)
+        };
+        set_layer_states(&mut layer, &[moved]).unwrap();
+        let shmd = layer.extra.iter().find(|b| &b.key == b"shmd").unwrap();
+        let items = read_shmd(&shmd.data).unwrap();
+        let d = versioned_descriptor(&items[0].data, &ReadOptions::default()).unwrap();
+        let Some(Value::List(list)) = d.get("layerSettings") else {
+            panic!("no layerSettings");
+        };
+        let Value::Descriptor(e) = &list[0] else {
+            panic!("not an entry");
+        };
+        let at = |k: &str| {
+            let o = e.descriptor(k).unwrap();
+            (o.number("Hrzn").unwrap(), o.number("Vrtc").unwrap())
+        };
+        assert_eq!(at("Ofst"), (5.0, -6.0), "the move, not the place");
+        assert_eq!(at("FXRefPoint"), (35.0, 34.0), "the place");
+
+        // Nothing stated: visible and unmoved.
+        let mut bare = PsdLayer::raster("B", Rect::new(30, 40, 32, 42));
+        set_layer_states(&mut bare, &[PsdCompLayerState::new(9)]).unwrap();
+        let back = layer_states(&bare, &ReadOptions::default()).unwrap();
+        assert_eq!(back[0].visible, Some(true));
+        assert_eq!(back[0].offset, Some((0, 0)));
     }
 
     #[test]

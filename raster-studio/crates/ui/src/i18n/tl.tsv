@@ -1,0 +1,1678 @@
+# Raster Studio interface strings, tl. One row per line: the English source, a TAB,
+# the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
+# Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
+@name	Tagalog
+ fps	 fps
+ frames	 frame
+ ms	 ms
+ px	 px
+0 bytes	0 byte
+16 Bits/Channel	16 Bit/Channel
+16 bit	16 bit
+32 Bits/Channel	32 Bit/Channel
+3D	3D
+50% Grey	50% Abo
+50% Threshold	50% Bungad
+8 Bits/Channel	8 Bit/Channel
+8 bit	8 bit
+90° Clockwise	90° Pakanan
+90° Counter Clockwise	90° Pakaliwa
+A CSV row has the wrong number of fields, at line	May maling bilang ng field ang isang hanay ng CSV, sa linya
+A blank canvas at any size	Isang blangkong canvas sa anumang laki
+A colour channel cannot be deleted	Hindi maaaring alisin ang isang channel ng kulay
+A layered raster editor	Isang raster editor na may mga layer
+A palette holds 2 to 256 colours	Ang isang paleta ay may 2 hanggang 256 na kulay
+A saved selection already has that name	May naka-save nang pagpipili na may ganyang pangalan
+A saved selection: click to open Select > Load Selection, then choose it by name there	Isang naka-save na pagpipili: i-click upang buksan ang Piliin > I-load ang Pagpipili, saka piliin ito roon ayon sa pangalan
+A slice needs a name	Kailangan ng pangalan ang isang hiwa
+AV1 (smaller, newer players)	AV1 (mas maliit, mas bagong player)
+About Raster Studio	Tungkol sa Raster Studio
+Absolute Colorimetric	Absolutong Colorimetric
+Action sets	Mga set ng pagkilos
+Actions	Mga Pagkilos
+Adaptive (median cut)	Adaptibo (median cut)
+Add "copy" to copied layers	Idagdag ang "kopya" sa mga kinopyang layer
+Add Artboard Above	Magdagdag ng Artboard sa Itaas
+Add Artboard Below	Magdagdag ng Artboard sa Ibaba
+Add Artboard Left	Magdagdag ng Artboard sa Kaliwa
+Add Artboard Right	Magdagdag ng Artboard sa Kanan
+Add Filter Mask	Idagdag ang Maskara ng Pansala
+Add Media	Magdagdag ng Media
+Add Noise…	Idagdag ang Ingay…
+Add a layer mask	Magdagdag ng maskara ng layer
+Add a smart filter mask	Magdagdag ng maskara ng smart filter
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Maglagay ng file ng larawan o video (File > Ilagay nang Naka-embed); ang video ay nagiging video layer sa playhead
+Add an adjustment layer	Magdagdag ng layer ng pagsasaayos
+Add another instance of this effect	Magdagdag ng isa pang instance ng epektong ito
+Add current colour	Idagdag ang kasalukuyang kulay
+Add export	Magdagdag ng export
+Add frame	Magdagdag ng frame
+Add or remove room around the image. Pixels are not resampled.	Magdagdag o mag-alis ng espasyo sa paligid ng larawan. Hindi nire-resample ang mga pixel.
+Add shortcut	Magdagdag ng shortcut
+Add to Selection	Idagdag sa Pagpipili
+Adds one guide at a document coordinate, in pixels.	Nagdadagdag ng isang gabay sa isang coordinate ng dokumento, sa pixel.
+Adjustment	Pagsasaayos
+Adjustments	Mga Pagsasaayos
+Advanced	Advanced
+Again	Ulitin
+Again with Copy	Ulitin nang may Kopya
+Aliased (pencil)	Aliased (lapis)
+Align	Ihanay
+Align the bottom edge to the canvas	Ihanay ang ibabang gilid sa canvas
+Align the left edge to the canvas	Ihanay ang kaliwang gilid sa canvas
+Align the right edge to the canvas	Ihanay ang kanang gilid sa canvas
+Align the top edge to the canvas	Ihanay ang itaas na gilid sa canvas
+Align with layer	Ihanay sa layer
+All	Lahat
+All Caps	Lahat Malalaking Titik
+All Caps shapes every lowercase letter as its capital; Small Caps shapes it as a capital at 70 % size. The stored text keeps the case you typed.	Ginagawang malaking titik ng Lahat Malalaking Titik ang bawat maliit na titik; ginagawa itong malaking titik sa 70 % na laki ng Maliliit na Malaking Titik. Pinananatili ng naka-imbak na teksto ang case na itinype mo.
+All Layers	Lahat Ng Layer
+Alpha	Alpha
+Already used by	Ginagamit na ng
+Alt Tag	Alt Tag
+Amount	Halaga
+An export needs at least one output	Kailangan ng export ng kahit isang output
+An image or project from this computer	Isang larawan o proyekto mula sa computer na ito
+Angle	Anggulo
+Angle (degrees)	Anggulo (degree)
+Angle jitter	Pag-uga ng anggulo
+Animation	Animasyon
+Another slice already has this name	May ibang hiwa nang may ganitong pangalan
+Appearance	Hitsura
+Applied	Nailapat
+Apply	Ilapat
+Apply Guides	Ilapat ang mga Gabay
+Apply Image	Ilapat ang larawan
+Apply Image…	Ilapat ang larawan…
+Apply Mask	Ilapat ang Maskara
+Apply Style	Ilapat ang Estilo
+Apply Style 1	Ilapat ang Estilo 1
+Apply Style Preset…	Ilapat ang Preset ng Estilo…
+Apply the next comp	Ilapat ang susunod na komposisyon
+Apply the previous comp	Ilapat ang nakaraang komposisyon
+Apply this mask	Ilapat ang maskarang ito
+Approximate. The composited result is what the canvas shows.	Tinatayang halaga. Ang pinagsamang resulta ang ipinapakita ng canvas.
+Arbitrary…	Arbitraryo…
+Arc	Arc
+Arc Lower	Arc na Ibaba
+Arc Upper	Arc na Itaas
+Arch	Arch
+Arrange	Ayusin
+Artboard	Artboard
+Artboard from Layers	Artboard mula sa mga Layer
+Artboards in one document	Mga artboard sa iisang dokumento
+Artboards to Files…	Mga Artboard sa mga File…
+Assign Profile	Magtalaga ng Profile
+Assigned {name}: the pixel numbers are unchanged, so the colours look different	Naitalaga ang {name}: hindi nagbago ang mga numero ng pixel, kaya iba ang hitsura ng mga kulay
+Author	May-akda
+Auto Color	Awtomatikong Kulay
+Auto Contrast	Awtomatikong Kaibahan
+Auto Tone	Awtomatikong Tono
+Auto leading	Awtomatikong leading
+Auto-Align Layers…	Awtomatikong Ihanay ang mga Layer…
+Auto-Blend Layers…	Awtomatikong I-blend ang mga Layer…
+Automate	Automate
+Autosaves of never-saved documents go here; empty uses the default	Dito napupunta ang mga autosave ng mga dokumentong hindi pa na-save; kapag walang laman, ang default ang ginagamit
+Average	Average
+BMP…	BMP…
+Back to the colour this opened on	Bumalik sa kulay kung saan ito binuksan
+Background — double-click for the picker	Background — i-double-click para sa pamili
+Based On	Batay sa
+Baseline shift	Shift ng Baseline
+Baseline to baseline. Auto leading follows the type size.	Mula baseline hanggang baseline. Sumusunod sa laki ng type ang awtomatikong leading.
+Batch	Batch
+Batch…	Batch…
+Bend	Baliin
+Bevel	Bevel
+Bevel & Emboss	Bevel at Emboss
+Bevel & Emboss…	Bevel at Emboss…
+Bind a text replacement variable to a text layer, or a visibility variable to any layer.	Magtali ng variable ng pagpapalit ng teksto sa isang text layer, o ng variable ng pagkakita sa anumang layer.
+Bitmap	Bitmap
+Bitmap…	Bitmap…
+Black	Itim
+Black & White	Itim & Puti
+Black & White…	Itim & Puti…
+Black to Transparent	Itim hanggang Transparent
+Black to White	Itim hanggang Puti
+Black to white through the inks	Itim hanggang puti sa pamamagitan ng mga tinta
+Blacks	Mga Itim
+Blend If	I-blend Kung
+Blend Mode: Color	Blend Mode: Kulay
+Blend Mode: Color Burn	Blend Mode: Sunog ng Kulay
+Blend Mode: Color Dodge	Blend Mode: Dodge ng Kulay
+Blend Mode: Darken	Blend Mode: Kadiliman
+Blend Mode: Difference	Blend Mode: Kakaibahan
+Blend Mode: Dissolve	Blend Mode: Ibawas-solba
+Blend Mode: Exclusion	Blend Mode: Bawas-Pagkakabilang
+Blend Mode: Hard Light	Blend Mode: Matigasang Liwanag
+Blend Mode: Hard Mix	Blend Mode: Matigasang Haluhan
+Blend Mode: Hue	Blend Mode: Hue
+Blend Mode: Lighten	Blend Mode: Magaan
+Blend Mode: Linear Burn	Blend Mode: Sunog ng Linear
+Blend Mode: Linear Dodge (Add)	Blend Mode: Linear Dodge (Dagdag)
+Blend Mode: Linear Light	Blend Mode: Linear na Liwanag
+Blend Mode: Luminosity	Blend Mode: Luminosidad
+Blend Mode: Multiply	Blend Mode: Maramihan
+Blend Mode: Normal	Blend Mode: Normal
+Blend Mode: Overlay	Blend Mode: Overlay
+Blend Mode: Pin Light	Blend Mode: Pin na Liwanag
+Blend Mode: Saturation	Blend Mode: Pagbababad
+Blend Mode: Screen	Blend Mode: Tabing
+Blend Mode: Soft Light	Blend Mode: Malambotang Liwanag
+Blend Mode: Vivid Light	Blend Mode: Vivid na Liwanag
+Blending	Pagbe-blend
+Blending Options	Mga Opsyon ng Pagbe-blend
+Blending Options…	Mga Opsyon ng Pagbe-blend…
+Blending options	Mga opsyon ng pagbe-blend
+Blends a source document, layer or channel into the active layer as one step.	Ibe-blend ang isang pinagmulang dokumento, layer o channel sa aktibong layer bilang isang hakbang.
+Blends one channel of each of two sources into a new channel, a selection or a new document.	Ibe-blend ang isang channel ng bawat isa sa dalawang pinagmulan tungo sa bagong channel, pagpipili o bagong dokumento.
+Blue	Bughaw
+Blues	Mga Bughaw
+Blur	Labuhan
+Blur Gallery	Galeriya ng Labuha
+Blur More	Labuhin pa
+Bold	Makapal
+Border Selection	Pagpipili sa Hangganan
+Border…	Hangganan…
+Both axes	Parehong axis
+Bottom	Bottom
+Bottom Edges	Mga Ibabang Gilid
+Bottom Left	Bottom Left
+Bottom Right	Bottom Right
+Bottom Right Pixel Color	Kulay ng Pixel sa Kanang Ibaba
+Bottom left	Kaliwang ibaba
+Bottom right	Kanang ibaba
+Box Blur…	Labuhang Pangkahon…
+Box height	Taas ng kahon
+Brightness	Kaliwanagan
+Brightness jitter	Pag-uga ng kaliwanagan
+Brightness/Contrast	Kaliwanagan/Kaibahan
+Brightness/Contrast…	Kaliwanagan/Kaibahan…
+Bring Forward	Dalhin pasulong
+Bring to Front	Dalhin sa Harap
+Brush Editor	Editor ng Brush
+Brush: Background	Brush: Background
+Brush: Foreground	Brush: Foreground
+Brushes	Mga Brush
+Bulge	Umbok
+Butt	Patag
+CMYK Color	Kulay CMYK
+Calculations	Mga Kalkulasyon
+Calculations…	Mga Kalkulasyon…
+Camera Raw…	Camera Raw…
+Canvas Size	Laki ng Canvas
+Canvas Size…	Laki ng Canvas…
+Canvas extension	Pagpapalawak ng canvas
+Caps	Mga Cap
+Carries the XMP; the source's EXIF goes into JPEG only	Dala ang XMP; sa JPEG lamang napupunta ang EXIF ng pinagmulan
+Cell size (pixels)	Laki ng cell (pixel)
+Center	Gitna
+Center horizontally on the canvas	Igitna nang pahalang sa canvas
+Center vertically on the canvas	Igitna nang patayo sa canvas
+Centimeters	Sentimetro
+Centre	Gitna
+Centre the view on this note	Igitna ang view sa talang ito
+Change Bit Depth	Palitan ang Bit Depth
+Change Colour Mode	Palitan ang Mode ng Kulay
+Change Layer Properties	Palitan ang mga Katangian ng Layer
+Change how many pixels the document has, or how large it prints.	Palitan kung ilang pixel mayroon ang dokumento, o kung gaano ito kalaki kapag inilimbag.
+Channel	Channel
+Channel Mixer	Panghalo ng Channel
+Channel Mixer…	Panghalo ng Channel…
+Channel thumbnail	Thumbnail ng channel
+Channels	Mga Channel
+Character	Karakter
+Character Style	Estilo ng Karakter
+Character Styles	Mga Estilo ng Karakter
+Checkerboard	Tablero
+Choose 2 to 256 colours	Pumili ng 2 hanggang 256 na kulay
+Choose a colour profile	Pumili ng profile ng kulay
+Choose a destination folder	Pumili ng folder na patutunguhan
+Choose a source folder	Pumili ng folder na pinagmulan
+Choose at least one page to open	Pumili ng kahit isang pahinang bubuksan
+Choose at least one side to trim	Pumili ng kahit isang gilid na gugupitin
+Choose the Action to play	Piliin ang Pagkilos na ipe-play
+Choose the open grayscale document each channel of the new RGB document comes from.	Piliin ang bukas na grayscale na dokumento na pagmumulan ng bawat channel ng bagong RGB na dokumento.
+Choose the pages to open, their resolution and how they open.	Piliin ang mga pahinang bubuksan, ang resolusyon nila at kung paano sila bubuksan.
+Choose the source and the destination folders.	Piliin ang pinagmulan at patutunguhang folder.
+Choose…	Pumili…
+Clear	Burahin
+Clear All	Burahin Lahat
+Clear Guides	Alisin ang mga Panggabay
+Clear History	Burahin ang Kasaysayan
+Clear Layer Style	Burahin ang Estilo ng Layer
+Clear Slices	Alisin ang mga Hiwa
+Clear Strokes	Burahin ang mga Stroke
+Clear existing guides	Burahin ang mga kasalukuyang gabay
+Clear the {noun} from the active text layer	Burahin ang {noun} mula sa aktibong text layer
+Cleared {n} slice(s)	Nabura ang {n} hiwa
+Click an item in the panel first	Mag-click muna ng item sa panel
+Click anywhere to sample a colour	Mag-click kahit saan upang kumuha ng kulay
+Click anywhere to sample a colour, or press Escape.	Mag-click kahit saan upang kumuha ng kulay, o pindutin ang Escape.
+Click the graph to add a point, drag a point to bend the curve, drag it off the graph to remove it	I-click ang graph upang magdagdag ng punto, i-drag ang punto upang baluktutin ang kurba, i-drag ito palabas ng graph upang alisin
+Click the preview to sample a colour from it	I-click ang preview upang kumuha ng kulay mula rito
+Click the preview to sample the colour to replace	I-click ang preview upang kunin ang kulay na papalitan
+Click the ramp to edit its stops.	I-click ang ramp upang i-edit ang mga stop nito.
+Clip to layer below	I-clip sa layer sa ibaba
+Clipboard	Clipboard
+Clipping	Pag-clip
+Close	Isara
+Close All	Isara Lahat
+Close Alpha Channel	Isara ang Alpha Channel
+Close Others	Isara ang Iba
+Close panel	Isara ang panel
+Clouds	Mga Ulap
+Codec	Codec
+Color	Kulay
+Color Balance	Balanse ng Kulay
+Color Balance…	Balanse ng Kulay…
+Color Burn	Sunog ng Kulay
+Color Dodge	Dodge ng Kulay
+Color Dynamics	Mga Dinamika ng Kulay
+Color Halftone…	Halftone ng Kulay…
+Color Intensity	Tindi ng Kulay
+Color Label	Label ng Kulay
+Color Lookup	Hanap-Kulay
+Color Lookup Tables…	Mga Talahanayan ng Hanap-Kulay…
+Color Lookup…	Hanap-Kulay…
+Color Overlay	Overlay ng Kulay
+Color Overlay…	Overlay ng Kulay…
+Color Picker	Pamili ng Kulay
+Color Range	Saklaw ng Kulay
+Color Range…	Saklaw ng Kulay…
+Color fringe cleanup: pulls the boundary pixels' color toward the nearby interior ink — a separate edit from mask refinement.	Paglilinis ng color fringe: hinihila ang kulay ng mga pixel sa hangganan patungo sa kalapit na panloob na tinta — hiwalay na edit mula sa pagpino ng maskara.
+Color to Alpha…	Kulay sa Alpha…
+Colors	Kulay
+Colour	Kulay
+Colour varies once per stroke.	Nag-iiba ang kulay minsan bawat stroke.
+Colours	Mga Kulay
+Colours must be 1 to 64, the tolerance above 0 and the corner length at least 1	Dapat 1 hanggang 64 ang mga kulay, lampas sa 0 ang pagpaparaya at kahit 1 ang haba ng sulok
+Columns	Mga Hanay
+Columns and rows with gutters between them, inside optional margins, in pixels.	Mga hanay at hilera na may gutter sa pagitan, sa loob ng opsyonal na margin, sa pixel.
+Combine Shapes	Pagsamahin ang mga Hugis
+Commit (Enter)	Ikumpirma (Enter)
+Commit Contents	Ikumpirma ang Nilalaman
+Composite	Composite
+Condensed	Siksik
+Cone	Kono
+Constant	Palagian
+Constrain proportions	Panatilihin ang proporsyon
+Content-Aware	Nilalaman-Damay
+Content-Aware Scale	Sukat ng Nilalaman-Damay
+Contour	Tabas
+Contract Selection	Paikliin ang Pagpipili
+Contract by	Paikliin nang
+Contract…	Paikliin…
+Contrast	Kaibahan
+Conversion Options	Mga Opsyon sa Pag-convert
+Convert Formats	I-convert ang mga Format
+Convert Formats…	I-convert ang mga Format…
+Convert for Smart Filters	I-convert para sa mga Smart Filter
+Convert to Layers	I-convert sa mga Layer
+Convert to Linked…	I-convert sa Naka-link…
+Convert to Paragraph Text	Ikomberto sa Talatang Teksto
+Convert to Point Text	Ikomberto sa Puntong Teksto
+Convert to Profile	I-convert sa Profile
+Convert to Profile works on 8- and 16-bit documents	Gumagana ang I-convert sa Profile sa mga dokumentong 8- at 16-bit
+Convert to Profile…	I-convert sa Profile…
+Convert to Shape	Ikomberto sa Hugis
+Convert to Smart Object	Ikomberto sa Smart Object
+Converted to {name} ({intent}): the numbers changed so the colours look the same	Na-convert sa {name} ({intent}): nagbago ang mga numero kaya pareho ang hitsura ng mga kulay
+Cool	Malamig
+Copper	Tanso
+Copy	Sipiin
+Copy Layer Style	Kopyahin ang Estilo ng Layer
+Copy Merged	Kopyahin at Pagsamahin
+Copyright Notice	Paunawa ng Copyright
+Corner length	Haba ng sulok
+Corner radius	Radius ng sulok
+Corner radius applies to rectangles; this path has no corners to round	Sa mga parihaba lamang ang radius ng sulok; walang sulok ang daang ito na mapapabilog
+Corners	Mga Sulok
+Count jitter	Pag-uga ng bilang
+Create Clipping Mask	Gumawa ng Clipping Mask
+Create Layer	Gumawa ng Layer
+Create Layers	Gumawa ng mga Layer
+Crop	I-crop
+Crop and Straighten Photos	I-crop at Ituwid ang mga Larawan
+Crops the canvas to the content, judged by the basis below.	Ina-crop ang canvas sa nilalaman, ayon sa batayan sa ibaba.
+Crystallize…	Kristalisahin…
+Current Layer	Kasalukuyang Layer
+Current Path	Kasalukuyang Path
+Curve tolerance	Pagpaparaya ng kurba
+Curves	Mga Kurba
+Curves…	Mga Kurba…
+Custom	Custom
+Custom Brush	Custom na Brush
+Custom: with the Move tool, drag the 16 mesh handles on the canvas	Custom: gamit ang Igalaw na kasangkapan, i-drag ang 16 na hawakan ng mesh sa canvas
+Custom…	Custom…
+Cut	Putulin
+Cyan	Cyan
+Cyan / Red	Cyan / Pula
+Cyans	Mga Cyan
+DDS…	DDS…
+DXF…	DXF…
+Dark	Madilim
+Dark Blue	Madilim na Bughaw
+Dark Grey	Madilim na Abo
+Darken	Kadiliman
+Darker Color	Mas Madilimang Kulay
+Dash	Gitling
+Data Set	Set ng Data
+Data Sets	Mga Set ng Data
+Data Sets…	Mga Set ng Data…
+Default	Default
+Default colours  (D)	Mga default na kulay  (D)
+Default colours (D)	Mga default na kulay (D)
+Define	Itakda
+Define Brush Preset…	Itakda ang Preset ng Brush…
+Define Custom Shape…	Itakda ang Custom na Hugis…
+Define New	Magtakda ng Bago
+Define Pattern…	Itakda ang Pattern…
+Define…	Itakda…
+Delete	Alisin
+Delete Filter Mask	Alisin ang Maskara ng Pansala
+Delete Layer	Tanggalin ang Layer
+Delete Mask	Alisin ang Maskara
+Delete Vector Mask	Alisin ang Maskara ng Vector
+Delete action	Alisin ang pagkilos
+Delete channel	Alisin ang channel
+Delete frame	Alisin ang frame
+Delete path	Alisin ang daan
+Delete selected layers	Alisin ang mga napiling layer
+Delete set and its actions	Alisin ang set at ang mga pagkilos nito
+Delete stop	Alisin ang stop
+Delete the applied comp	Alisin ang nailapat na komposisyon
+Delete the selected keyframe	Alisin ang napiling keyframe
+Delete the selected tool preset	Alisin ang napiling preset ng kasangkapan
+Delete the selected {noun}	Alisin ang napiling {noun}
+Delete the smart filter mask	Alisin ang maskara ng smart filter
+Delete this note	Alisin ang talang ito
+Delete this smart filter	Alisin ang smart filter na ito
+Delete this spot channel	Alisin ang spot channel na ito
+Density	Densidad
+Dents…	Mga Yupi…
+Desaturate	Magbawas-babad
+Description	Paglalarawan
+Deselect	Alisin sa pagkakapili
+Deselect Layers	Alisin sa Pagkakapili ang mga Layer
+Despeckle	Despeckle
+Destination	Patutunguhan
+Destination Space	Espasyong Patutunguhan
+Detail	Detalye
+Detail scales	Mga sukat ng detalye
+Diamond	Diyamante
+Difference	Kakaibahan
+Difference Clouds	Kakaibahan ng mga Ulap
+Diffuse…	Pakalatin…
+Diffusion	Pagkalat
+Diffusion Dither	Dither na Pagkalat
+Disable / Enable Filter Mask	Huwag Paganahin / Paganahin ang Maskara ng Pansala
+Disable / Enable Mask	Huwag Paganahin / Paganahin ang Maskara
+Disable / Enable Vector Mask	Huwag Paganahin / Paganahin ang Maskara ng Vector
+Disable Mask	Huwag Paganahin ang Maskara
+Disable Vector Mask	Huwag Paganahin ang Maskara ng Vector
+Displace…	Lumipat…
+Dissolve	Ibawas-solba
+Distance	Distansya
+Distort	Baluktot
+Distribute	Ipamahagi
+Dither	Dither
+Dither…	Dither…
+Divide	Divide
+Dock this panel here	Idaong dito ang panel na ito
+Document	Dokumento
+Document Bounds	Mga Hangganan ng Dokumento
+Document Info	Impormasyon ng Dokumento
+Document Title	Pamagat ng Dokumento
+Document size	Laki ng dokumento
+Double-click to edit in Layer Style; drag to the trash to delete	I-double-click upang i-edit sa Estilo ng Layer; i-drag sa basurahan upang alisin
+Double-click to edit this filter's settings	I-double-click upang i-edit ang mga setting ng pansalang ito
+Double-click to rename	I-double-click upang palitan ang pangalan
+Drag a line with the Ruler first	Gumuhit muna ng linya gamit ang Panukat
+Drag to zoom the view	I-drag upang i-zoom ang view
+Drop Shadow	Aninong Pang-drop
+Drop Shadow…	Aninong Pang-drop…
+Duotone	Duotone
+Duotone Options	Mga Opsyon ng Duotone
+Duotone…	Duotone…
+Duplicate	Kopyahin
+Duplicate Layer	Kopyahin ang Layer
+Duplicate Layer…	Kopyahin ang Layer…
+Duplicate frame	Kopyahin ang frame
+Dust & Scratches…	Alikabok & Gasgas…
+EMF…	EMF…
+EXIF and XMP writing is not implemented — only ICC is embedded	Hindi pa naipapatupad ang pagsulat ng EXIF at XMP — ICC lamang ang naka-embed
+EXR…	EXR…
+Ease In	Dahan-dahang Pagpasok
+Ease Out	Dahan-dahang Paglabas
+Edge Glow	Kinang ng Gilid
+Edge refinement: feather, shift, smooth, and contrast over the mask's existing coverage — not subject recognition.	Pagpino ng gilid: feather, paglipat, pagpapakinis at kaibahan sa kasalukuyang saklaw ng maskara — hindi pagkilala sa paksa.
+Edges	Mga Gilid
+Edit	I-edit
+Edit Adjustment	I-edit ang Pagsasaayos
+Edit Adjustment…	I-edit ang Pagsasaayos…
+Edit Alpha Channel	I-edit ang Alpha Channel
+Edit Contents…	I-edit ang Nilalaman…
+Edit Document Records	I-edit ang mga Tala ng Dokumento
+Edit Fill	I-edit ang Punan
+Edit Filter Mask	I-edit ang Maskara ng Pansala
+Edit Generator	I-edit ang Generator
+Edit Group	I-edit ang Pangkat
+Edit Guides	I-edit ang mga Gabay
+Edit Raster	I-edit ang Raster
+Edit Saved Selection	I-edit ang Naka-save na Pagpipili
+Edit Shape	I-edit ang Hugis
+Edit Slices	I-edit ang mga Hiwa
+Edit Smart object	I-edit ang Smart object
+Edit Text	I-edit ang Teksto
+Edit Timeline	I-edit ang Timeline
+Edit brush…	I-edit ang brush…
+Edit fill	I-edit ang punan
+Edit gradient stops — click to open the editor	I-edit ang mga stop ng gradient — i-click upang buksan ang editor
+Edit in Quick Mask Mode	I-edit sa Quick Mask Mode
+Edit this ramp	I-edit ang ramp na ito
+Effects	Mga Epekto
+Effects apply to the whole layer and undo as one step.	Nalalapat ang mga epekto sa buong layer at naa-undo bilang isang hakbang.
+Embed EXIF and XMP	I-embed ang EXIF at XMP
+Embed Linked	I-embed ang Naka-link
+Embed colour profile	I-embed ang profile ng kulay
+Embedded source	Naka-embed na pinagmulan
+Emboss…	Emboss…
+Enable / disable the smart filter mask	Paganahin / huwag paganahin ang maskara ng smart filter
+Enable Mask	Paganahin ang Maskara
+Enable Vector Mask	Paganahin ang Maskara ng Vector
+Enable at least one export	Paganahin ang kahit isang export
+Enabled	Naka-enable
+Enlarge smaller images	Palakihin ang mas maliliit na larawan
+Enter a colour like #3366CC	Maglagay ng kulay tulad ng #3366CC
+Entropy	Entropiya
+Equalize	Pantayin
+Essentials	Mga Pangunahin
+Every enabled row is written when you export.	Isinusulat ang bawat naka-enable na hilera kapag nag-export ka.
+Every image in the source folder is fitted into the box and written to the destination folder in its own format.	Bawat larawan sa folder na pinagmulan ay pinagkakasya sa kahon at isinusulat sa folder na patutunguhan sa sarili nitong format.
+Every parameter is at its neutral value — there is nothing to clean	Nasa neutral na halaga ang bawat parameter — walang lilinisin
+Every parameter is at its neutral value — there is nothing to refine	Nasa neutral na halaga ang bawat parameter — walang pipinuhin
+Every variable needs a name	Kailangan ng pangalan ang bawat variable
+Exact	Eksakto
+Exclude Overlapping Shapes	Huwag Isama ang Nagsasanib na mga Hugis
+Exclusion	Bawas-Pagkakabilang
+Expand Selection	Palawakin ang Pagpipili
+Expand by	Palawakin nang
+Expand the dock	Palawakin ang dock
+Expanded	Pinalawak
+Expand…	Palawakin…
+Export	I-export
+Export As	I-export Bilang
+Export Color Lookup	I-export ang Hanap-Kulay
+Export Contents…	I-export ang Nilalaman…
+Export Diagnostics…	I-export ang Diagnostics…
+Export Layers…	I-export ang mga Layer…
+Export PDF	I-export ang PDF
+Export as .ABR…	I-export bilang .ABR…
+Export as .ACO…	I-export bilang .ACO…
+Export as .ASL…	I-export bilang .ASL…
+Export set as .atn	I-export ang set bilang .atn
+Export…	I-export…
+Exposure	Pagkakalantad
+Exposure…	Pagkakalantad…
+Extra Bold	Napakakapal
+Extra Condensed	Napakasiksik
+Extra Expanded	Napakalapad
+Extra Light	Napakanipis
+Extras	Mga Extra
+Extrude…	I-extrude…
+Eyedropper	Panggota
+Face	Mukha
+Facet	Facet
+Fade	Pakupasin
+Fade…	Pakupasin…
+Family	Pamilya
+Feather	Balbunin
+Feather Selection	Balbunin ang Pagpipili
+Feather radius	Radius ng balbon
+Feather…	Balbunin…
+Fibers…	Mga Hibla…
+Field Blur…	Labuhang Patlang…
+File	File
+File Info	Info ng file
+File Info…	Info ng file…
+File name	Pangalan ng file
+Files that fail are listed in batch-errors.txt in the destination.	Nakalista sa batch-errors.txt sa patutunguhan ang mga file na nabigo.
+Fill	Punan
+Fill Filter Mask	Punan ang Maskara ng Pansala
+Fill Layer	Layer ng Punan
+Fill Mask	Punan ang Maskara
+Fill Screen	Punuin ang Screen
+Fill in File Info, or open a file that has EXIF, to embed metadata	Punan ang Info ng file, o magbukas ng file na may EXIF, upang mag-embed ng metadata
+Fill path with the foreground colour, on a new shape layer	Punan ang daan ng kulay ng foreground, sa isang bagong shape layer
+Fill type	Uri ng punan
+Fills the active selection with the chosen contents.	Pinupunan ang aktibong pagpipili ng napiling nilalaman.
+Fill…	Punan…
+Filter	Salain
+Filter Gallery	Salain ang Galeriya
+Filter Gallery…	Salain ang Galeriya…
+Find Edges	Hanapin ang mga Gilid
+First line	Unang linya
+Fish	Isda
+Fisheye	Mata ng Isda
+Fit The Area	Pakasyahin ang Lugar
+Fit on Screen	Pagkasyahin sa Screen
+Fit the whole image in the window	Pagkasyahin ang buong larawan sa bintana
+Fixed height	Nakapirming taas
+Flag	Bandila
+Flame…	Apoy…
+Flat Angled 40	Flat Angled 40
+Flatten Image	Patagin ang Larawan
+Flip Canvas Horizontal	I-flip ang Canvas nang Pahalang
+Flip Canvas Vertical	I-flip ang Canvas nang Patayo
+Flip Horizontal	I-flip nang Pahalang
+Flip Vertical	I-flip nang Patayo
+Flip View Horizontal	I-flip ang View nang Pahalang
+Flip View Vertical	I-flip ang View nang Patayo
+Flow jitter	Pag-uga ng daloy
+Folders	Mga Folder
+Font: 	Font: 
+Foreground strokes mark what to keep, background strokes what to drop; Preview shows the cut.	Minamarkahan ng mga stroke ng foreground ang itatago, ng mga stroke ng background ang itatapon; ipinapakita ng Preview ang gupit.
+Foreground — double-click for the picker	Foreground — i-double-click para sa pamili
+Foreground/background jitter	Pag-uga ng foreground/background
+Format	Format
+Fourier	Fourier
+Fourier Transform	Transpormasyong Fourier
+Fragment	Fragment
+Frame	Frame
+Frames	Mga Frame
+Free Transform	Malayang magiba ng anyo
+Free Transform a Copy	Malayang Baguhin ang Anyo ng Kopya
+From Transparency	Mula Transparency
+Fullscreen	Buong screen
+Fuzziness	Pagkalabo
+GIF…	GIF…
+Gamma	Gamma
+Gamut Warning	Babala sa Gamut
+Gaussian	Gaussian
+Gaussian Blur…	Labuhang Gaussian…
+Generate Mockups	Bumuo ng mga Mockup
+Generate Mockups…	Bumuo ng mga Mockup…
+Give the brush a name	Bigyan ng pangalan ang brush
+Give the export a file name	Bigyan ng pangalan ng file ang export
+Glass Menus	Mga Salaming Menu
+Global light	Pandaigdigang ilaw
+Glyphs	Mga Glyph
+Gradient	Gradient
+Gradient Editor	Editor ng Gradient
+Gradient Map	Mapa ng Gradient
+Gradient Map…	Mapa ng Gradient…
+Gradient Overlay	Overlay ng Gradient
+Gradient Overlay…	Overlay ng Gradient…
+Gradient…	Gradient…
+Gray	Malamaya
+Grayscale	Grayscale
+Green	Berde
+Greens	Mga Berde
+Grid	Parilya
+Grid points	Mga punto ng parilya
+Group	Pangkat
+Group Layers	Pangkatin ang mga Layer
+Grow	Palakihin
+Guide Guy	Guide Guy
+Guides	Mga Gabay
+Gutter	Pagitan
+H	H
+H.264 (plays everywhere)	H.264 (tumatakbo kahit saan)
+HDR Toning	HDR Toning
+HDR Toning…	HDR Toning…
+HSB/HSL…	HSB/HSL…
+Halftone Screen	Halftone na Screen
+Hard Light	Matigasang Liwanag
+Hard Mix	Matigasang Haluhan
+Hard Round 24	Hard Round 24
+Hard Round 4	Hard Round 4
+Hard edges, no blending. Pixel art only — it aliases on downscale.	Matitigas na gilid, walang pagbe-blend. Para sa pixel art lamang — nagiging aliased ito kapag pinaliit.
+Harder Brush	Mas Matigas na Brush
+Height	Taas
+Height to 110%	Taas sa 110%
+Height to 125%	Taas sa 125%
+Height to 80%	Taas sa 80%
+Height to 90%	Taas sa 90%
+Help	Tulong
+Hide All	Itago Lahat
+Hide Layers	Itago ang mga Layer
+Hide Selection	Itago ang Pagpipili
+Hide the source layer	Itago ang pinagmulang layer
+High Contrast	Mataas na Kaibahan
+High Pass…	Taas Pasa…
+Highlights	Mga Highlight
+Histogram	Istograma
+Histories	Mga Kasaysayan
+History	Kasaysayan
+Hold	Hawakan
+Horizontal Centers	Mga Pahalang na Gitna
+Horizontal Distortion	Pahalang na Pagbaluktot
+Horizontal center guide	Pahalang na gabay sa gitna
+Horizontal scale, in percent: widens or narrows the glyphs and their spacing	Pahalang na sukat, sa porsiyento: pinalalapad o pinakikitid ang mga glyph at ang puwang nila
+Horizontally	Pahiga
+Hue	Hue
+Hue jitter	Pag-uga ng hue
+Hue/Saturation	Hue/Pagbababad
+Hue/Saturation…	Hue/Pagbababad…
+ICC profile	Profile ng ICC
+ICO…	ICO…
+Image	Larawan
+Image Options	Mga Opsyon ng Larawan
+Image Rotation	Pag-ikot ng Larawan
+Image Size	Laki ng larawan
+Image Size…	Laki ng larawan…
+Image size	Laki ng larawan
+Import CSV…	Mag-import ng CSV…
+Import PDF	Mag-import ng PDF
+Import a CSV of data sets first	Mag-import muna ng CSV ng mga set ng data
+Import a CSV: the first row names the variables, every further row is one data set.	Mag-import ng CSV: pinapangalanan ng unang hilera ang mga variable, bawat susunod na hilera ay isang set ng data.
+In use	Ginagamit
+Inches	Pulgada
+Indexed Color	Indexed na Kulay
+Indexed Color…	Indexed na Kulay…
+Inflate	Palobohin
+Info	Impormasyon
+Ink	Tinta
+Ink Color	Kulay ng Tinta
+Ink printed at 0, 25, 50, 75 and 100% tint	Tintang inilimbag sa 0, 25, 50, 75 at 100% na tint
+Inner Glow	Kamamulahang Panloob
+Inner Glow…	Kamamulahang Panloob…
+Inner Radius	Panloobang Radius
+Inner Shadow	Aninong Panloob
+Inner Shadow…	Aninong Panloob…
+Inside	Looban
+Intent	Layunin
+Intersect Shape Areas	Pagsalubungin ang mga Lugar ng Hugis
+Intersect with Selection	Pagsalubungin sa Pagpipili
+Inverse	Baligtarin
+Inverse Fourier Transform	Kabaligtarang Transpormasyong Fourier
+Invert	Baligtarin
+Invert coverage	Baligtarin ang saklaw
+Invert has no parameters	Walang parameter ang Baligtarin
+Iris Blur…	Labuhang Iris…
+Italic	Italiko
+JPEG carries the XMP and the source's EXIF	Dala ng JPEG ang XMP at ang EXIF ng pinagmulan
+JPG…	JPG…
+Justify	Ihanay nang pantay
+Kaleidoscope…	Kaleidoscope…
+Keep as it was	Panatilihin gaya ng dati
+Kept when a comp is first applied	Pinananatili kapag unang inilapat ang isang komposisyon
+Kerning	Kerning
+Keyboard Shortcut Sheet…	Talaan ng mga Shortcut ng Keyboard…
+Keyboard Shortcuts…	Mga Shortcut ng Keyboard…
+Keywords	Mga Keyword
+Kind	Uri
+Kurtosis	Kurtosis
+Lab Color	Kulay Lab
+Landscape	Pahiga
+Language	Wika
+Large	Malaki
+Last Document State	Huling Estado ng Dokumento
+Last Filter	Huling Pansala
+Last line	Huling linya
+Layer	Layer
+Layer Comps	Mga Komposisyon ng Layer
+Layer Edges	Mga Gilid ng Layer
+Layer Mask	Maskara ng Layer
+Layer Properties	Mga Katangian ng Layer
+Layer Style	Estilo ng Layer
+Layer knocks out drop shadow	Tinatanggal ng layer ang aninong pang-drop
+Layer via Copy	Layer sa pamamagitan ng Kopya
+Layer via Cut	Layer sa pamamagitan ng Putol
+Layers	Mga Layer
+Layers panel options	Mga opsyon ng panel ng mga Layer
+Left	Left
+Left Edges	Mga Kaliwang Gilid
+Left indent	Kaliwang indent
+Length	Haba
+Lens Blur…	Labuhang Lens…
+Lens Correction…	Pagwawasto ng Lens…
+Lens Flare…	Flare ng Lens…
+Level	Antas
+Levels	Mga Antas
+Levels…	Mga Antas…
+Light	Ilaw
+Light Grey	Mapusyaw na Abo
+Lighten	Magaan
+Lighter Color	Mas Maliwanagang Kulay
+Lighting Effects…	Mga Epekto ng Ilaw…
+Lightness	Kapusyan
+Line	Linya
+Linear	Linear
+Linear Burn	Sunog ng Linear
+Linear Dodge (Add)	Linear Dodge (Dagdag)
+Linear Light	Linear na Liwanag
+Link / Unlink Mask	I-link / I-unlink ang Maskara
+Link Layers	Kawingin ang mga Layer
+Link selected layers	Kawingin ang mga napiling layer
+Link with layer	Kawingin sa layer
+Linked	Naka-link
+Linked file	Naka-link na file
+Liquify…	I-liquify…
+Live Shape	Live Na Hugis
+Live preview	Live na preview
+Live preview is off.	Naka-off ang live na preview.
+Load	I-load
+Load .atn	I-load ang .atn
+Load .cube file…	I-load ang .cube na file…
+Load Selection	I-load ang Pagpipili
+Load Selection…	I-load ang Pagpipili…
+Load actions	I-load ang mga pagkilos
+Load channel as selection	I-load ang channel bilang pagpipili
+Load path as a selection	I-load ang daan bilang pagpipili
+Loaded file	Na-load na file
+Lock	Kandado
+Lock All	Ikandado Lahat
+Lock Guides	Ikandado ang mga Panggabay
+Lock Image Pixels	Ikandado ang mga Pixel ng Larawan
+Lock Position	Ikandado ang Posisyon
+Lock Transparent Pixels	Ikandado ang mga Transparent na Pixel
+Lock all	Ikandado lahat
+Lock pixels	Ikandado ang mga pixel
+Lock position	Ikandado ang posisyon
+Lock transparent pixels	Ikandado ang mga transparent na pixel
+Long-tap as a right click	Matagal na pindot bilang right click
+Lookup table	Talahanayan ng paghahanap
+Luminance	Luminansya
+Luminance of the preview source; the markers are the black and white points.	Luminance ng pinagmulan ng preview; ang mga marker ay ang itim at puting punto.
+Luminosity	Luminosidad
+MP4…	MP4…
+Magenta	Magenta
+Magenta / Green	Magenta / Berde
+Magentas	Mga Magenta
+Magic Cut	Pansalamangkang Gupit
+Magic Cut…	Pansalamangkang Gupit…
+Make Frames	Gumawa ng mga Frame
+Make a selection first	Gumawa muna ng pagpipili
+Make work path from selection	Gumawa ng work path mula sa pagpipili
+Manual	Mano-mano
+Maps every colour onto one palette. The document keeps RGBA pixels; GIF and PNG export write this palette.	Itinatapat ang bawat kulay sa iisang paleta. Pinananatili ng dokumento ang mga RGBA pixel; isinusulat ng export ng GIF at PNG ang paletang ito.
+Maps the active layer onto a palette as one undo step; the document stays RGB.	Itinatapat ang aktibong layer sa isang paleta bilang isang hakbang ng undo; nananatiling RGB ang dokumento.
+Margins	Mga Margin
+Mark this state so you can come back to it	Markahan ang estadong ito upang makabalik ka rito
+Mask	Maskara
+Mask Properties	Mga Katangian ng Maskara
+Mask source	Pinagmulan ng maskara
+Match Color	Itugma ang Kulay
+Match Color…	Itugma ang Kulay…
+Matting	Matting
+Maximum	Pinakamataas
+Maximum…	Pinakamataas…
+Mean	Mean
+Median	Median
+Median…	Median…
+Medium	Katamtaman
+Memory	Memorya
+Menu Bar and Canvas	Menu Bar at Canvas
+Merge	Pagsamahin
+Merge Channels	Pagsamahin ang mga Channel
+Merge Channels…	Pagsamahin ang mga Channel…
+Merge Down	Ipagsamahin Pababa
+Merge Layers	Ipagsamahin ang mga Layer
+Merge Visible	Pagsamahin ang Nakikita
+Merged	Pinagsama
+Method	Paraan
+Metrics	Metrics
+Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.	Ginagamit ng Metrics ang sariling pair kerning ng font; pinapatay ng 0 ang kerning; naglalagay ang Mano-mano ng iisang halaga (1/1000 em) sa pagitan ng bawat pares ng teksto gaya ng ngayon, at ang mga karakter na itinype pagkatapos ay nagsisimulang walang kerning; kailangan nito ng kahit dalawang karakter, kaya hindi ito iniaalok para sa mas maikling teksto at sa mga default ng Type tool. Walang optical kerning ang shaper, kaya hindi iniaalok ang mode na iyon.
+Mezzotint…	Mezzotint…
+Midtones	Mga Midtone
+Millimeters	Milimetro
+Min diameter	Pinakamaliit na diyametro
+Min roundness	Pinakamaliit na kabilugan
+Min size	Pinakamaliit na laki
+Minimal	Pinakakaunti
+Minimum	Pinakamababa
+Minimum size only applies when pressure controls size.	Nalalapat lamang ang pinakamaliit na laki kapag kinokontrol ng presyon ang laki.
+Minimum…	Pinakamababa…
+Miter	Miter
+Mode	Mode
+Modify	Baguhin
+Monochrome	Iisang Kulay
+Monotone	Monotone
+More readouts	Higit pang pagbasa
+More tabs	Higit pang tab
+Mosaic…	Mosaic…
+Motion Blur…	Labuhang Mosyon…
+Move Layer	Igalaw ang Layer
+Move a control first: these settings would change nothing	Igalaw muna ang isang kontrol: walang babaguhin ang mga setting na ito
+Move this panel	Igalaw ang panel na ito
+Move this panel within its dock	Igalaw ang panel na ito sa loob ng dock nito
+Move to	Igalaw sa
+Move with the layer	Sumabay sa layer
+Multiply	Maramihan
+Name	Pangalan
+Name Change	Pagpapalit ng Pangalan
+Name the channel first.	Pangalanan muna ang channel.
+Navigator	Nabigador
+Nearest Neighbour	Pinakamalapit na Kapitbahay
+Neutralize	I-neutralize
+Neutrals	Mga Neutral
+New	Bago
+New Adjustment Layer	Bagong Layer ng Pagsasaayos
+New Channel	Bagong Channel
+New Document	Bagong Dokumento
+New Fill Layer	Bagong Layer ng Punan
+New Folder	Bagong Folder
+New Guide	Bagong Gabay
+New Guide Layout	Bagong Layout ng Gabay
+New Guide Layout…	Bagong Layout ng Gabay…
+New Guide…	Bagong Gabay…
+New Layer	Bagong Layer
+New Layer Based Slice	Bagong Hiwa Batay sa Layer
+New Selection	Bagong Pagpipili
+New Smart Object via Copy	Bagong Smart Object sa pamamagitan ng Kopya
+New Snapshot	Bagong Snapshot
+New Spot Channel	Bagong Spot Channel
+New Spot Channel…	Bagong Spot Channel…
+New Style Preset	Bagong Preset ng Estilo
+New Video Group	Bagong Video Group
+New channel	Bagong channel
+New folder	Bagong folder
+New group	Bagong pangkat
+New layer	Bagong layer
+New layer comp	Bagong komposisyon ng layer
+New note at the centre of the view	Bagong tala sa gitna ng view
+New path (saves the Work Path when it is selected)	Bagong daan (sine-save ang Work Path kapag ito ay napili)
+New set	Bagong set
+New size	Bagong laki
+New style from the active layer	Bagong estilo mula sa aktibong layer
+New tool preset from the active tool	Bagong preset ng kasangkapan mula sa aktibong kasangkapan
+New {noun} from the active text layer	Bagong {noun} mula sa aktibong text layer
+New…	Bago…
+Next Blend Mode	Susunod na Blend Mode
+No Color	Walang Kulay
+No character styles yet. New records the active text layer's font, size and look.	Wala pang estilo ng karakter. Itinatala ng Bago ang font, laki at hitsura ng aktibong text layer.
+No command loads a channel as the selection in this build; the Select menu's Load Selection restores a saved selection instead	Walang utos sa build na ito na naglo-load ng channel bilang pagpipili; sa halip, ibinabalik ng I-load ang Pagpipili sa menu na Piliin ang isang naka-save na pagpipili
+No commands to bind	Walang utos na maitatali
+No document	Walang dokumento
+No document is open	Walang bukas na dokumento
+No export selected	Walang napiling export
+No faces listed for this family name	Walang nakalistang mukha para sa pangalan ng pamilyang ito
+No frames yet. Add frame makes an _a_ layer: each one is a frame, bottom first.	Wala pang frame. Gumagawa ang Magdagdag ng frame ng isang _a_ layer: bawat isa ay isang frame, simula sa ibaba.
+No guide crosses the canvas	Walang gabay na tumatawid sa canvas
+No installed family matches	Walang tugmang naka-install na pamilya
+No layer comps yet. New Layer Comp records every layer's visibility, position and appearance.	Wala pang komposisyon ng layer. Itinatala ng Bagong Komposisyon ng Layer ang pagkakita, posisyon at hitsura ng bawat layer.
+No layers yet. Add one with the + button below.	Wala pang layer. Magdagdag ng isa gamit ang + na button sa ibaba.
+No layers yet: each top-level layer gets a bar on the timeline.	Wala pang layer: bawat layer sa pinakamataas na antas ay may bar sa timeline.
+No notes yet. Click the canvas with the Note tool (I), or New Note pins one at the centre of the view; notes are saved with the document and never exported.	Wala pang tala. I-click ang canvas gamit ang Tala na kasangkapan (I), o maglalagay ang Bagong Tala ng isa sa gitna ng view; sine-save ang mga tala kasama ng dokumento at hindi kailanman ine-export.
+No open document is the same size as this one	Walang bukas na dokumento na kasinlaki nito
+No paragraph styles yet. New records the active text layer's alignment, indents and spacing.	Wala pang estilo ng talata. Itinatala ng Bago ang pagkakahanay, mga indent at puwang ng aktibong text layer.
+No pattern chosen — the overlay paints nothing.	Walang napiling pattern — walang ipinipinta ang overlay.
+No patterns are defined yet	Wala pang natukoy na pattern
+No profile file was chosen	Walang napiling file ng profile
+No recent files yet	Wala pang kamakailang file
+No selection has been saved	Walang na-save na pagpipili
+No source recorded for this object	Walang naitalang pinagmulan para sa bagay na ito
+No stop selected	Walang napiling stop
+No style presets yet. Define one with Layer > Layer Style > Define Style Preset, or add a Photoshop library with File > Open (.asl).	Wala pang preset ng estilo. Magtakda ng isa gamit ang Layer > Estilo ng Layer > Itakda ang Preset ng Estilo, o magdagdag ng Photoshop library gamit ang File > Buksan (.asl).
+No styles yet. The + button saves the active layer's style; File > Open loads an .asl style library.	Wala pang estilo. Sine-save ng + na button ang estilo ng aktibong layer; naglo-load ang File > Buksan ng .asl na library ng estilo.
+No such command	Walang ganyang utos
+No tool presets yet. New Tool Preset saves the active tool with its current options.	Wala pang preset ng kasangkapan. Sine-save ng Bagong Preset ng Kasangkapan ang aktibong kasangkapan kasama ang kasalukuyang mga opsyon nito.
+Noise	Ingay
+None	Walang Kulay
+Normal	Normal
+Normal Map…	Normal na Mapa…
+Not a hex colour	Hindi hex na kulay
+Not installed — shaping with	Hindi naka-install — hinuhubog gamit ang
+Not saved yet	Hindi pa na-save
+Notes	Mga Tandaan
+Nothing has changed	Walang nagbago
+Nothing in this submenu is available right now	Wala sa submenu na ito ang magagamit ngayon
+Nothing is left to learn the background from: paint over it with the background brush.	Wala nang natitirang mapag-aaralan ng background: pintahan ito ng brush ng background.
+Nothing to measure yet — paint or place something on this layer first	Wala pang masusukat — magpinta o maglagay muna ng isang bagay sa layer na ito
+Nothing to preview.	Walang mapi-preview.
+OK	OK
+Oblique	Pahilig
+Off: the wheel pans the view and Ctrl+wheel zooms	Naka-off: ini-scroll ng gulong ang view at nagzo-zoom ang Ctrl+gulong
+Offset…	Itabingi…
+Oil Paint…	Pinturang Panlangis…
+One page holding the flattened image; no vector content.	Isang pahina na may pinatag na larawan; walang vector na nilalaman.
+Onion skin	Balat ng sibuyas
+Only English is available in this build	Ingles lamang ang magagamit sa build na ito
+Only a mask channel can be loaded as a selection here	Maskarang channel lamang ang maaaring i-load bilang pagpipili dito
+Only web-safe colours	Mga kulay na ligtas sa web lamang
+Opacity	Kalabuan
+Opacity 10%	Kalabuan 10%
+Opacity 100%	Kalabuan 100%
+Opacity 20%	Kalabuan 20%
+Opacity 30%	Kalabuan 30%
+Opacity 40%	Kalabuan 40%
+Opacity 50%	Kalabuan 50%
+Opacity 60%	Kalabuan 60%
+Opacity 70%	Kalabuan 70%
+Opacity 80%	Kalabuan 80%
+Opacity 90%	Kalabuan 90%
+Opacity jitter	Pag-uga ng kalabuan
+Opacity key	Susi ng kalabuan
+Opacity must be between 0% and 100%	Dapat nasa pagitan ng 0% at 100% ang kalabuan
+Opacity scales the layer and its effects; Fill scales the layer's own pixels only.	Sinusukat ng Kalabuan ang layer at ang mga epekto nito; ang sariling mga pixel lamang ng layer ang sinusukat ng Punan.
+Opacity stops sit above the bar, colour stops below it.	Nasa itaas ng bar ang mga stop ng kalabuan, nasa ibaba ang mga stop ng kulay.
+Open	Buksan
+Open .ABR…	Buksan ang .ABR…
+Open .ACO…	Buksan ang .ACO…
+Open .ASL…	Buksan ang .ASL…
+Open Recent	Buksan ang Kamakailan
+Open a document first	Magbukas muna ng dokumento
+Open a document to animate it.	Magbukas ng dokumento upang i-animate ito.
+Open a document to apply styles to its layers.	Magbukas ng dokumento upang lagyan ng estilo ang mga layer nito.
+Open a document to insert glyphs into its text.	Magbukas ng dokumento upang maglagay ng mga glyph sa teksto nito.
+Open a document to keep text styles in it.	Magbukas ng dokumento upang mag-imbak ng mga estilo ng teksto rito.
+Open a document to lay guides out on it.	Magbukas ng dokumento upang maglatag ng mga gabay rito.
+Open a document to pin notes on it.	Magbukas ng dokumento upang magdikit ng mga tala rito.
+Open a document to record layer comps.	Magbukas ng dokumento upang magtala ng mga komposisyon ng layer.
+Open a document to see its CSS	Magbukas ng dokumento upang makita ang CSS nito
+Open a document to see its facts.	Magbukas ng dokumento upang makita ang mga detalye nito.
+Open a document to see its histogram	Magbukas ng dokumento upang makita ang istograma nito
+Open a document to see its history	Magbukas ng dokumento upang makita ang kasaysayan nito
+Open a document to see its properties	Magbukas ng dokumento upang makita ang mga katangian nito
+Open another document, or add another pixel layer, to match its colours.	Magbukas ng ibang dokumento, o magdagdag ng isa pang pixel layer, upang itugma ang mga kulay nito.
+Open as	Buksan bilang
+Open editor…	Buksan ang editor…
+Open or close the folder	Buksan o isara ang folder
+Open the Adjustments panel	Buksan ang panel ng Mga Pagsasaayos
+Open…	Buksan…
+Operation	Operasyon
+Orange	Kahel
+Other	Iba pa
+Out of gamut	Labas sa gamut
+Outer Glow	Kamamulahang Panlabas
+Outer Glow…	Kamamulahang Panlabas…
+Outline the path	Balangkasin ang daan
+Output	Output
+Output channel	Output na channel
+Outside	Labasan
+Overlay	Overlay
+PBM…	PBM…
+PDF Presentation…	PDF Presentation…
+PDF…	PDF…
+PGM…	PGM…
+PNG…	PNG…
+PPM…	PPM…
+Page	Pahina
+Page {n}	Pahina {n}
+Page {page} opens at {w} x {h} px	Bubukas ang pahina {page} sa {w} x {h} px
+Pages	Mga Pahina
+Paint	Pinta
+Paint Filter Mask	Pintahan ang Maskara ng Pansala
+Paint Mask	Pintahan ang Maskara
+Paint over the part to keep with the foreground brush first.	Pintahan muna ng brush ng foreground ang bahaging itatago.
+Paint over what to keep and over what to drop	Pintahan ang itatago at ang itatapon
+Paint the inside of the path	Pintahan ang loob ng daan
+Painting	Pagpipinta
+Paints a band along the active selection's border.	Nagpipinta ng banda sa kahabaan ng hangganan ng aktibong pagpipili.
+Pair kerning	Kerning ng pares
+Palette	Paleta
+Paragraph	Talataan
+Paragraph Style	Estilo ng Talata
+Paragraph Styles	Mga Estilo ng Talata
+Particles…	Mga Partikulo…
+Paste	Idikit
+Paste Into	Idikit sa Loob
+Paste Layer Style	Idikit ang Estilo ng Layer
+Paste Outside	Idikit sa Labas
+Paste Special	Espesyal na Pagdikit
+Paste in Place	Idikit sa Lugar
+Path	Daan
+Path Blur…	Labuhang Daan…
+Path editing lives in the Paths panel	Nasa panel ng Mga Tarundon ang pag-edit ng daan
+Paths	Mga Tarundon
+Pattern	Pattern
+Pattern Dither	Dither na Pattern
+Pattern Overlay	Overlay ng Pattern
+Pattern Overlay…	Overlay ng Pattern…
+Pattern Preview	Silipin ang Pattern
+Pattern…	Pattern…
+Pencil 1px	Lapis 1px
+Percent	Porsiyento
+Perceptual	Perseptwal
+Perspective	Pananaw
+Perspective Warp	Pagbaluktot ng Pananaw
+Photo Filter	Pansala ng Larawan
+Photo Filter…	Pansala ng Larawan…
+Photography	Potograpiya
+Picas	Picas
+Pick a filter; it applies at its default settings.	Pumili ng pansala; nalalapat ito sa mga default na setting nito.
+Pin Light	Pin na Liwanag
+Pinch…	Kurutin…
+Pixel Grid	Parilya ng Pixel
+Pixel dimensions	Mga dimensyon sa pixel
+Pixel mask	Maskara ng pixel
+Pixel to Pixel	Pixel sa Pixel
+Pixelate	I-pixelate
+Pixels	Mga Pixel
+Place Embedded…	Ilagay nang Naka-embed…
+Place Linked…	Ilagay nang Naka-link…
+Play	I-play
+Play from step	I-play mula sa hakbang
+Play selection	I-play ang pinili
+Play this step (unchecked steps are passed over)	I-play ang hakbang na ito (nilalaktawan ang mga hakbang na walang tsek)
+Plays a recorded Action on every image in the source folder and saves each result to the destination.	Pine-play ang isang naitalang Pagkilos sa bawat larawan sa folder na pinagmulan at sine-save ang bawat resulta sa patutunguhan.
+Pointer	Panturo
+Pointillize…	I-pointillize…
+Points	Mga Punto
+Polar Coordinates…	Mga Koordinadong Polar…
+Position	Posisyon
+Position is locked — unlock it in the Layers panel to move or resize	Naka-kandado ang posisyon — i-unlock ito sa panel ng Mga Layer upang igalaw o baguhin ang laki
+Position key	Susi ng posisyon
+Posterize	I-posterize
+Posterize…	I-posterize…
+Precise Cursor	Tumpak na Cursor
+Preferences…	Mga Kagustuhan…
+Preserve Transparency	Panatilihin Ang Transparency
+Preserve luminosity	Panatilihin ang luminosidad
+Preset Manager…	Manager ng Preset…
+Press a key…	Pumindot ng key…
+Pressure controls flow	Kinokontrol ng presyon ang daloy
+Pressure controls size	Kinokontrol ng presyon ang laki
+Preview	Preview
+Preview against	I-preview laban sa
+Preview is off.	Naka-off ang preview.
+Previewed on the active layer; applied to its pixels as one undoable step.	Pini-preview sa aktibong layer; inilalapat sa mga pixel nito bilang isang hakbang na maa-undo.
+Previous Blend Mode	Nakaraang Blend Mode
+Print Size	Laki sa Paglilimbag
+Print as PDF…	I-print bilang PDF…
+Print size	Laki sa paglilimbag
+Prints the grayscale image through one to four inks, each through its own curve. The inks are applied to the pixels when the mode changes.	Inililimbag ang grayscale na larawan sa isa hanggang apat na tinta, bawat isa sa sarili nitong kurba. Inilalapat ang mga tinta sa mga pixel kapag nagbago ang mode.
+Print…	I-print…
+Profile	Profile
+Profile from File…	Profile mula sa File…
+Profiles are assigned to RGB documents	Itinatalaga ang mga profile sa mga RGB na dokumento
+Profiles are converted between in RGB documents	Kinokonberte ang mga profile sa loob ng mga RGB na dokumento
+Profiles belong to RGB documents; convert to RGB first	Para sa mga RGB na dokumento ang mga profile; i-convert muna sa RGB
+Proof Colors	Subukan ang mga Kulay
+Properties	Mga Katangian
+Puppet Warp	Puppet Warp
+Purge	Linisin
+Purple	Morado
+Quadtone	Quadtone
+Quality	Kalidad
+Quick Export Layer as PNG…	Mabilisang I-export ang Layer bilang PNG…
+Quit	Lumabas
+RGB Color	Kulay RGB
+Radial Blur…	Labuhang Radial…
+Radius	Radius
+Radius (px)	Radius (px)
+Range	Abot-layo
+Raster Studio Help	Tulong sa Raster Studio
+Rasterize	I-rasterize
+Reassign anyway	Italaga pa rin
+Recent	Kamakailan
+Record	Mag-record
+Record Source Size	Itala ang Laki ng Pinagmulan
+Record an Action in the Actions panel first	Magtala muna ng Pagkilos sa panel ng Mga Pagkilos
+Record an edit, then replay the whole sequence on any document with at least as many layers.	Magtala ng edit, saka i-replay ang buong pagkakasunod sa anumang dokumento na may kahit ganoon karaming layer.
+Record into set	Itala sa set
+Recording: every edit is captured until Stop	Nagtatala: bawat edit ay nakukuha hanggang Ihinto
+Red	Pula
+Redefine the selected {noun} from the active text layer, restyling every layer that uses it	Muling itakda ang napiling {noun} mula sa aktibong text layer, binabago ang estilo ng bawat layer na gumagamit nito
+Redo	I-redo
+Reds	Mga Pula
+Reduce Colors	Bawasan ang mga Kulay
+Reduce Colors changed nothing: the layer already uses only colours of that palette	Walang binago ang Bawasan ang mga Kulay: mga kulay lamang ng paletang iyon ang ginagamit na ng layer
+Reduce Colors: the layer now uses at most {n} colours	Bawasan ang mga Kulay: gumagamit na ang layer ng hindi hihigit sa {n} kulay
+Reduce Colors…	Bawasan ang mga Kulay…
+Reduce Noise…	Bawasan ang Ingay…
+Reduces the grayscale image to pure black and white. The layers are flattened into one, over white.	Ginagawang purong itim at puti ang grayscale na larawan. Pinapatag ang mga layer tungo sa isa, sa ibabaw ng puti.
+Reference point: Bottom	Reference point: Ibaba
+Reference point: Bottom Left	Reference point: Kaliwang Ibaba
+Reference point: Bottom Right	Reference point: Kanang Ibaba
+Reference point: Centre	Reference point: Gitna
+Reference point: Left	Reference point: Kaliwa
+Reference point: Right	Reference point: Kanan
+Reference point: Top	Reference point: Itaas
+Reference point: Top Left	Reference point: Kaliwang Itaas
+Reference point: Top Right	Reference point: Kanang Itaas
+Refine	Pinuhin
+Refine Edge…	Pinuhin ang Gilid…
+Refine Mask	Pinuhin ang Maskara
+Refine Mask…	Pinuhin ang Maskara…
+Regular	Regular
+Relative	Relatibo
+Relative Colorimetric	Relatibong Colorimetric
+Release Clipping Mask	Bitawan ang Clipping Mask
+Release Notes	Mga Tala sa Paglabas
+Relink to File…	I-link Muli sa File…
+Remove Black Matte	Alisin ang Itim na Matte
+Remove Color Fringe	Alisin ang Color Fringe
+Remove Color Fringe…	Alisin ang Color Fringe…
+Remove Fringe	Alisin ang Fringe
+Remove White Matte	Alisin ang Puting Matte
+Remove export	Alisin ang export
+Remove this instance of the effect	Alisin ang instance na ito ng epekto
+Remove this shortcut	Alisin ang shortcut na ito
+Rename Layer	Palitan ang Pangalan ng Layer
+Rename Layer…	Palitan ang Pangalan ng Layer…
+Rename set	Palitan ang pangalan ng set
+Render	I-render
+Rendering the preview…	Nire-render ang preview…
+Repeat…	Ulit-ulitin…
+Replace Color	Ilagay muli ang Kulay
+Replace Color…	Ilagay muli ang Kulay…
+Replace Contents	Palitan ang Nilalaman
+Replace Contents…	Palitan ang Nilalaman…
+Replace existing guides	Palitan ang mga kasalukuyang gabay
+Replay	I-replay
+Report an Issue	Mag-ulat ng Isyu
+Reselect	Piliin Muli
+Reset	I-reset
+Reset Transform	I-reset ang Pagbabago ng Anyo
+Reset View Rotation	I-reset ang Pag-ikot ng View
+Reset all shortcuts	I-reset lahat ng shortcut
+Resize Canvas	Baguhin ang Laki ng Canvas
+Resize Images	Baguhin ang Laki ng mga Larawan
+Resize Images…	Baguhin ang Laki ng mga Larawan…
+Resolution	Resolusyon
+Resolution must be greater than zero	Dapat mas malaki sa zero ang resolusyon
+Restore Layer	Ibalik ang Layer
+Result	Resulta
+Return this tool to its defaults	Ibalik ang kasangkapang ito sa mga default nito
+Reveal All	Ilantad lahat
+Reveal Selection	Ihayag ang Pagpipili
+Reverse	Baligtarin
+Revert	Ibalik
+Rewrites every pixel layer's numbers so the picture looks the same under the destination profile, as one undo step.	Isinusulat muli ang mga numero ng bawat pixel layer upang pareho ang hitsura ng larawan sa ilalim ng patutunguhang profile, bilang isang hakbang ng undo.
+Right	Right
+Right (narrow)	Kanan (makitid)
+Right (wide)	Kanan (malapad)
+Right Edges	Mga Kanang Gilid
+Right indent	Kanang indent
+Right-click a swatch to remove it	I-right-click ang isang swatch upang alisin ito
+Ring	Singsing
+Ripple…	I-ripple…
+Rise	Bumangon
+Rotate	Ikutin
+Rotate 180°	Ikutin nang 180°
+Rotate 90° Clockwise	Ikutin nang 90° Pakanan
+Rotate 90° Counter Clockwise	Ikutin nang 90° Pakaliwa
+Rotate Canvas	Ikutin ang Canvas
+Rotate the active layer so the measured line is level (Enter)	Ikutin ang aktibong layer upang pumantay ang nasukat na linya (Enter)
+Rotates the canvas and every layer. Right angles are pixel-exact; other angles resample.	Iniikot ang canvas at bawat layer. Eksakto sa pixel ang mga tamang anggulo; nire-resample ang ibang anggulo.
+Rotation key	Susi ng pag-ikot
+Round	Bilog
+Round (computed)	Bilog (kinalkula)
+Rounded Steps	Mga Bilugang Hakbang
+Roundness jitter	Pag-uga ng kabilugan
+Rows	Mga Hilera
+Rulers	Mga Panukat
+Run	Patakbuhin
+SVG…	SVG…
+Same Radii	Pare-parehong mga Radius
+Sample a colour from the canvas	Kumuha ng kulay mula sa canvas
+Sample radius	Radius ng pagkuha
+Sampled	Kinuha
+Sampled colour	Kinuhang kulay
+Sampled tip not loaded; painting round	Hindi na-load ang kinuhang dulo; bilog ang pinipinta
+Satin…	Satin…
+Saturation	Pagbababad
+Saturation jitter	Pag-uga ng pagbababad
+Save	I-save
+Save As	I-save Bilang
+Save As…	I-save Bilang…
+Save Brush	I-save ang Brush
+Save Selection	I-save ang Pagpipili
+Save Selection…	I-save ang Pagpipili…
+Save actions	I-save ang mga pagkilos
+Save as PSD…	I-save bilang PSD…
+Save current brush	I-save ang kasalukuyang brush
+Save selection as channel	I-save ang pagpipili bilang channel
+Saves every image in the source folder to the destination in another format, quality or size.	Sine-save ang bawat larawan sa folder na pinagmulan sa patutunguhan sa ibang format, kalidad o laki.
+Scale	Sukat
+Scale %	Sukat %
+Scale Effects	Mga Epekto ng Sukat
+Scale Effects…	Mga Epekto ng Sukat…
+Scale H	Sukat H
+Scale V	Sukat V
+Scale key	Susi ng sukat
+Scale:	Sukat:
+Scales every size and distance of the active layer's style as one undo step.	Sinusukat ang bawat laki at distansya ng estilo ng aktibong layer bilang isang hakbang ng undo.
+Scaling by 100% changes nothing	Walang binabago ang pagsukat nang 100%
+Scratch directory	Pansamantalang direktoryo
+Screen	Tabing
+Screen, print and social presets	Mga preset para sa screen, paglilimbag at social
+Script…	Iskript…
+Scroll wheel zooms instead of scrolling	Nagzo-zoom ang scroll wheel sa halip na mag-scroll
+Search Commands…	Maghanap ng mga Utos…
+Search layers	Maghanap ng mga layer
+Search layers by name	Maghanap ng mga layer ayon sa pangalan
+Select	Piliin
+Select All	Piliin Lahat
+Select Bottom Layer	Piliin ang Pinakaibabang Layer
+Select Layer Above	Piliin ang Layer sa Itaas
+Select Layer Below	Piliin ang Layer sa Ibaba
+Select Linked Layers	Piliin ang mga Naka-link na Layer
+Select None	Walang Piliin
+Select Top Layer	Piliin ang Pinakaitaas na Layer
+Select a layer first	Pumili muna ng layer
+Select a layer to see its CSS	Pumili ng layer upang makita ang CSS nito
+Select a layer to see its properties	Pumili ng layer upang makita ang mga katangian nito
+Select a layer: a click on a style applies it to the active layer.	Pumili ng layer: inilalapat ng pag-click sa isang estilo ito sa aktibong layer.
+Select a path first	Pumili muna ng daan
+Select a text layer, or type into one: a click inserts the glyph at the caret.	Pumili ng text layer, o mag-type sa isa: inilalagay ng pag-click ang glyph sa caret.
+Select a text layer to edit its type	Pumili ng text layer upang i-edit ang type nito
+Select every pixel near one colour	Piliin ang bawat pixel na malapit sa isang kulay
+Selection	Pagpipili
+Selection Edges	Mga Gilid ng Pagpipili
+Selection: white is replaced, black is kept.	Pagpipili: pinapalitan ang puti, pinananatili ang itim.
+Selective Color	Pumipili ng Kulay
+Selective Color…	Pumipili ng Kulay…
+Selects a band of this width along the selection's edge	Pumipili ng banda na ganito kalapad sa kahabaan ng gilid ng pagpipili
+Semi Condensed	Medyo Siksik
+Semi Expanded	Medyo Malapad
+Semibold	Medyo Makapal
+Send Backward	Dalhin Palikod
+Send to Back	Dalhin sa Likod
+Separate documents	Hiwalay na mga dokumento
+Separate keywords with commas or semicolons.	Paghiwalayin ang mga keyword gamit ang kuwit o tuldok-kuwit.
+Sepia	Sepia
+Set	Itakda
+Set the History Brush to paint from this state (the marked row)	Itakda ang History Brush na magpinta mula sa estadong ito (ang minarkahang hilera)
+Shadows	Mga Anino
+Shadows/Highlights	Mga Anino/Highlight
+Shadows/Highlights…	Mga Anino/Highlight…
+Shape	Hugis
+Shape Dynamics	Dinamika ng Hugis
+Shape Mosaic…	Mosaic ng Hugis…
+Shape Properties	Mga Katangian ng Hugis
+Sharpen	Patalasin
+Sharpen Edges	Patalasin ang mga Gilid
+Sharpen More	Patalasin pa
+Sharpest, with a little ringing on hard edges.	Pinakamatalas, may kaunting ringing sa matitigas na gilid.
+Shear…	Gupitin…
+Shift Edge	Ilipat ang Gilid
+Show	Ipakita
+Show / Hide Layer	Ipakita / Itago ang Layer
+Show / hide layer	Ipakita / itago ang layer
+Show / hide the effects list	Ipakita / itago ang listahan ng mga epekto
+Show / hide the layer style	Ipakita / itago ang estilo ng layer
+Show / hide this channel	Ipakita / itago ang channel na ito
+Show / hide this effect	Ipakita / itago ang epektong ito
+Show / hide this path	Ipakita / itago ang daang ito
+Show / hide this smart filter	Ipakita / itago ang smart filter na ito
+Show Layers	Ipakita ang mga Layer
+Show every layer	Ipakita ang bawat layer
+Show or hide the position, size and alignment fields	Ipakita o itago ang mga field ng posisyon, laki at pagkakahanay
+Show or hide the recorded steps	Ipakita o itago ang mga naitalang hakbang
+Show or hide the set's actions	Ipakita o itago ang mga pagkilos ng set
+Show this alpha channel alone in grayscale and paint into it; click again to store it	Ipakita nang mag-isa ang alpha channel na ito sa grayscale at magpinta rito; i-click muli upang iimbak ito
+Sides	Mga Gilid
+Similar	Pareho
+Size	Laki
+Size jitter	Pag-uga ng laki
+Skew	Ikiling
+Skewness	Skewness
+Slice Options	Mga Opsyon ng Hiwa
+Slice Options…	Mga Opsyon ng Hiwa…
+Slices	Mga Hiwa
+Slices from Guides	Hiwa mula sa mga Gabay
+Slices…	Mga Hiwa…
+Small	Maliit
+Small Caps	Maliliit na Malaking Titik
+Smart Blur…	Labuhang Matalino…
+Smart Filter	Smart Filter
+Smart Filters	Mga Pansala ng Smart
+Smart Guides	Mga Smart na Gabay
+Smart Object	Smart Object
+Smart Sharpen…	Patalasin Patalino…
+Smart filter mask: click to paint on it	Maskara ng smart filter: i-click upang magpinta rito
+Smooth	Makinis
+Smooth Selection	Pakinisin ang Pagpipili
+Smooth draws grey-scale edges; None draws hard, aliased edges. The glyph scaler has one smooth mode, so Sharp, Crisp and Strong are not offered.	Gumuguhit ang Makinis ng mga gilid na grayscale; gumuguhit ang Wala ng matitigas at aliased na gilid. Iisa lamang ang makinis na mode ng glyph scaler, kaya hindi iniaalok ang Matalas, Malinaw at Malakas.
+Smooth…	Makinis…
+Snap	Snap
+Snap To	I-snap sa
+Soft Light	Malambotang Liwanag
+Soft Round 100	Soft Round 100
+Soft Round 24	Soft Round 24
+Soft and cheap. Good for a small enlargement.	Malambot at magaan. Mainam para sa maliit na pagpapalaki.
+Softer Brush	Mas Malambot na Brush
+Solarize	Solarisahin
+Solid Color…	Solidong Kulay…
+Solidity	Kasolidohan
+Source	Pinagmulan
+Source 1	Pinagmulan 1
+Source 2	Pinagmulan 2
+Source Space	Espasyong Pinagmulan
+Spectrum	Ispektro
+Spherize…	I-spherize…
+Spin Blur…	Labuhang Ikot…
+Splits the active layer into Linear Light detail layers over a residual, finest on top; together they recomposite to the layer.	Hinahati ang aktibong layer sa mga Linear na Liwanag na detail layer sa ibabaw ng isang residual, pinakapino sa itaas; magkakasama silang bumubuo muli sa layer.
+Spot Channel	Spot Channel
+Spot Channel Options…	Mga Opsyon ng Spot Channel…
+Spot channel: composited over the image as its ink	Spot channel: pinagsasama sa ibabaw ng larawan bilang tinta nito
+Square	Parisukat
+Squeeze	Pisilin
+Stack Mode	Mode ng Pagkakasalansan
+Stamp Visible	I-stamp ang Nakikita
+Standard	Pamantayan
+Standard Deviation	Standard Deviation
+Standard ligatures	Karaniwang ligature
+Step Backward	Humakbang pabalik
+Step Forward	Humakbang pasulong
+Stop	Ihinto
+Straighten Layer	I-straighten ang Layer
+Strength	Lakas
+Stroke	Stroke
+Stroke path with the foreground colour at the brush size, on a new shape layer	I-stroke ang daan ng kulay ng foreground sa laki ng brush, sa isang bagong shape layer
+Stroke…	Stroke…
+Style	Estilo
+Styles	Mga Estilo
+Styles enabled	Naka-enable ang mga estilo
+Stylize	Magistilo
+Sub	Sub
+Subject	Paksa
+Subtract	Subtrakto
+Subtract Front Shape	Ibawas ang Hugis sa Harap
+Subtract from Selection	Ibawas sa Pagpipili
+Summation	Kabuuan
+Sunset	Paglubog ng Araw
+Super	Super
+Superscript raises and shrinks the text; subscript lowers and shrinks it.	Itinataas at pinaliliit ng superscript ang teksto; ibinababa at pinaliliit ito ng subscript.
+Surface Blur…	Labuhang Ibabaw…
+Swap colours  (X)	Pagpalitin ang mga kulay  (X)
+Swap foreground and background (X)	Pagpalitin ang foreground at background (X)
+Swatches	Talataan ng mga Kulay
+TGA…	TGA…
+TIF…	TIF…
+Templates	Mga Template
+Text	Teksto
+Text Properties	Mga Katangian ng Teksto
+Text overflows the box	Umaapaw ang teksto sa kahon
+Text replacement	Pagpapalit ng teksto
+Texture Dilation…	Pagpapalawak ng Texture…
+That channel is no longer in the document	Wala na sa dokumento ang channel na iyon
+That file could not be used:	Hindi magamit ang file na iyon:
+The CSV ends inside a quoted field	Nagtatapos ang CSV sa loob ng isang field na naka-quote
+The CSV has a header but no data sets	May header ang CSV pero walang set ng data
+The CSV is empty	Walang laman ang CSV
+The CSV names a variable that is not defined:	Pinangangalanan ng CSV ang isang variable na hindi natukoy:
+The active layer is not in the document	Wala sa dokumento ang aktibong layer
+The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	Ipinapakita ng aktibong smart object ang bawat larawan ng folder na pinagmulan nang isa-isa; bawat resulta ay ine-export bilang PNG sa folder na patutunguhan.
+The amount must be within	Dapat nasa loob ng
+The angle must be a finite number of degrees	Dapat may hangganang bilang ng degree ang anggulo
+The balanced default for photographs.	Ang balanseng default para sa mga litrato.
+The canvas grows to fit the rotated image.	Lumalaki ang canvas upang magkasya ang iniikot na larawan.
+The canvas must be at least 1 x 1 pixel	Dapat kahit 1 x 1 pixel ang canvas
+The cell size must be 2 to 200 pixels	Dapat 2 hanggang 200 pixel ang laki ng cell
+The cut is empty: paint more of the part to keep.	Walang laman ang gupit: pintahan pa ang bahaging itatago.
+The destination is the profile the document already has	Ang patutunguhan ay ang profile na mayroon na ang dokumento
+The destination must be another folder than the source.	Dapat ibang folder ang patutunguhan kaysa sa pinagmulan.
+The document has no layers	Walang layer ang dokumento
+The document is already in {name}	Nasa {name} na ang dokumento
+The document is already tagged with this profile	Naka-tag na ang dokumento ng profile na ito
+The document is already tagged {name}	Naka-tag na ang dokumento ng {name}
+The document's own profile: {error}	Sariling profile ng dokumento: {error}
+The first {shown} of {n} pages are listed; a longer file opens only those.	Nakalista ang unang {shown} sa {n} pahina; iyon lamang ang binubuksan ng mas mahabang file.
+The image has no opaque pixels to count	Walang opaque na pixel ang larawan na mabibilang
+The ink is laid over the image; the selection, if there is one, is where it prints.	Inilalatag ang tinta sa ibabaw ng larawan; kung may pagpipili, doon ito nalilimbag.
+The last stop has no segment after it.	Walang segment pagkatapos ng huling stop.
+The layer has no pixels to cut.	Walang pixel ang layer na mapuputol.
+The layer's pixels are locked	Naka-kandado ang mga pixel ng layer
+The list is empty	Walang laman ang listahan
+The margins and gutters leave no room for a column or a row	Walang natitirang puwang para sa hanay o hilera dahil sa mga margin at gutter
+The margins and gutters leave no room for a column or a row.	Walang natitirang puwang para sa hanay o hilera dahil sa mga margin at gutter.
+The name cannot be empty	Hindi maaaring walang laman ang pangalan
+The name has not changed	Hindi nagbago ang pangalan
+The name is the file File > Export > Slices writes this slice as. The URL and Alt Tag go into the HTML page it writes beside the images.	Ang pangalan ay ang file na isusulat ng File > I-export > Mga Hiwa para sa hiwang ito. Napupunta ang URL at Alt Tag sa HTML na pahinang isinusulat nito katabi ng mga larawan.
+The new canvas is smaller — content outside it will be clipped.	Mas maliit ang bagong canvas — mapuputol ang nilalamang nasa labas nito.
+The next text layer the Type tool creates starts with this style.	Nagsisimula sa estilong ito ang susunod na text layer na gagawin ng Type tool.
+The panel is already on this side	Nasa panig na ito na ang panel
+The path encloses no pixel of the canvas	Walang nakapaloob na pixel ng canvas ang daan
+The position must be a finite number	Dapat may hangganang bilang ang posisyon
+The preview runs the real brush engine.	Pinapatakbo ng preview ang tunay na brush engine.
+The resolution must be 1 to 2400 ppi	Dapat 1 hanggang 2400 ppi ang resolusyon
+The resolution must be {min} to {max} dpi	Dapat {min} hanggang {max} dpi ang resolusyon
+The rulers and the size readouts use this unit	Ginagamit ng mga panukat at ng mga pagbasa ng laki ang yunit na ito
+The scale must be between 1% and 1000%	Dapat nasa pagitan ng 1% at 1000% ang sukat
+The selection is kept with the document under this name	Iniimbak ang pagpipili kasama ng dokumento sa ilalim ng pangalang ito
+The source and destination must be different folders	Dapat magkaibang folder ang pinagmulan at patutunguhan
+The steps this snapshot named have been discarded	Itinapon na ang mga hakbang na pinangalanan ng snapshot na ito
+The table needs a name	Kailangan ng pangalan ang talahanayan
+The warp has not changed	Hindi nagbago ang warp
+There are no guides to slice along	Walang gabay na mahihiwaan
+There are no slices to clear	Walang hiwang mabubura
+There is no history to clear	Walang kasaysayang mabubura
+There is no live selection to combine with	Walang live na pagpipiling mapagsasamahan
+These are matrix-shaper profiles, which carry no perceptual or saturation tables: those two intents convert as Relative Colorimetric.	Mga matrix-shaper na profile ang mga ito, na walang perceptual o saturation na talahanayan: kino-convert ang dalawang layuning iyon bilang Relative Colorimetric.
+Thin	Manipis
+Third-party notices	Mga paunawa ng third-party
+This Layer	Ang Layer na Ito
+This adjustment has no panel controls	Walang kontrol sa panel ang pagsasaayos na ito
+This adjustment has no settings.	Walang setting ang pagsasaayos na ito.
+This build keeps channels on layers; it has no free-standing alpha channels yet	Pinananatili ng build na ito ang mga channel sa mga layer; wala pa itong mga hiwalay na alpha channel
+This effect is off. Tick it in the list to edit it.	Naka-off ang epektong ito. Lagyan ito ng tsek sa listahan upang i-edit.
+This format cannot store CMYK, so the document is written as RGB. Choose JPEG or TIFF for CMYK.	Hindi kayang mag-imbak ng CMYK ang format na ito, kaya isinusulat ang dokumento bilang RGB. Piliin ang JPEG o TIFF para sa CMYK.
+This format could not be previewed.	Hindi ma-preview ang format na ito.
+This format has no metadata slot: nothing is embedded	Walang puwang para sa metadata ang format na ito: walang naka-embed
+This format has no palette, so the indexed colours are written as RGB. Choose PNG or GIF for the palette.	Walang paleta ang format na ito, kaya isinusulat ang mga indexed na kulay bilang RGB. Piliin ang PNG o GIF para sa paleta.
+This format stores 8 bits per channel	Nag-iimbak ang format na ito ng 8 bit bawat channel
+This is a Lab document. No format here stores Lab, so it is converted to RGB on export.	Isa itong Lab na dokumento. Walang format dito na nag-iimbak ng Lab, kaya kino-convert ito sa RGB sa pag-export.
+This layer has no mask	Walang maskara ang layer na ito
+This panel is already at the bottom of its dock	Nasa pinakaibaba na ng dock nito ang panel na ito
+This panel is already at the top of its dock	Nasa pinakaitaas na ng dock nito ang panel na ito
+This tool has no options	Walang opsyon ang kasangkapang ito
+This tool is already at its defaults	Nasa mga default na nito ang kasangkapang ito
+This window cannot read screen pixels, so the eyedropper is unavailable	Hindi kayang basahin ng bintanang ito ang mga pixel ng screen, kaya hindi magagamit ang panggota
+This works on a pixel layer; the active layer is a {kind}	Gumagana ito sa isang pixel layer; ang aktibong layer ay isang {kind}
+This works on an 8-bit document	Gumagana ito sa isang 8-bit na dokumento
+This works on an RGB document	Gumagana ito sa isang RGB na dokumento
+Threshold	Bungad
+Threshold…	Bungad…
+Thumbnail Size	Laki ng Thumbnail
+Thumbnail size	Laki ng thumbnail
+Thumbnails by Document	Mga Thumbnail ayon sa Dokumento
+Thumbnails by Layer	Mga Thumbnail ayon sa Layer
+Tiles/List	Tile/Listahan
+Tiles…	Mga Tile…
+Tilt-Shift…	Ikiling-Paglipat…
+Timeline	Timeline
+Tint	Tint
+Tint hue	Hue ng tint
+Tint saturation	Pagbababad ng tint
+To canvas	Sa canvas
+Toggle Link	I-toggle ang Link
+Tonal width	Lapad ng tono
+Tone	Tono
+Tone and Detail	Tono at Detalye
+Tool Presets	Mga Preset ng Kasangkapan
+Top	Top
+Top Edges	Mga Itaas na Gilid
+Top Left	Top Left
+Top Left Pixel Color	Kulay ng Pixel sa Kaliwang Itaas
+Top Right	Top Right
+Top left	Kaliwang itaas
+Top right	Kanang itaas
+Trace Contour…	Ibakas ang Tabas…
+Traces the active layer's colours into shape layers, one per colour.	Tina-trace ang mga kulay ng aktibong layer tungo sa mga shape layer, isa bawat kulay.
+Transform	Baguhin ang anyo
+Transform Layer	Baguhin ang Anyo ng Layer
+Transform Selection	Ibahin ang anyo ng Pagpipili
+Transparency	Transparency
+Transparent Pixels	Mga Transparent na Pixel
+Trim	Gupit
+Trim Away	Gupitin Palayo
+Trim…	Gupit…
+Tritone	Tritone
+Turn on Resample to change the pixel count.	I-on ang I-sample muli upang mabago ang bilang ng pixel.
+Twirl…	Umikot…
+Twist	Pilipitin
+Two variables share a name	Magkapareho ng pangalan ang dalawang variable
+Type	Type
+Type a zoom level	Mag-type ng antas ng zoom
+Type is edited in Character and Paragraph	Ine-edit ang type sa Karakter at Talataan
+Type tool defaults	Mga default ng Type tool
+UI scale	Sukat ng UI
+URL	URL
+US Letter	US Letter
+Ultra Condensed	Sukdulang Siksik
+Ultra Expanded	Sukdulang Malapad
+Underlying Layer	Nakapailalim na Layer
+Undo	I-undo
+Ungroup Layers	I-ungroup ang mga Layer
+Uniform	Magkakatulad
+Unite Shapes	Pag-isahin ang mga Hugis
+Units	Mga Yunit
+Unmake Frames	Tanggalin ang mga Frame
+Unsaved changes	Mga hindi na-save na pagbabago
+Unsharp Mask…	I-unsharp ang Maskara…
+Update the applied comp from the layers	I-update ang nailapat na komposisyon mula sa mga layer
+Use Black Point Compensation	Gamitin ang Black Point Compensation
+Use global light	Gamitin ang pandaigdigang ilaw
+Using:	Ginagamit:
+Vanishing Point…	Punto ng Paglaho…
+Variables	Mga Variable
+Variance	Bariyansa
+Vector Mask	Maskara ng Vector
+Vector density	Densidad ng vector
+Vector enabled	Naka-enable ang vector
+Vector feather	Balbon ng vector
+Vector invert	Pagbaligtad ng vector
+Vector mask	Maskara ng vector
+Vectorize	Bektorisahin
+Vectorize Bitmap	Bektorisahin ang Bitmap
+Vectorize Bitmap…	Bektorisahin ang Bitmap…
+Vertical Centers	Mga Patayong Gitna
+Vertical Distortion	Patayo na Pagbaluktot
+Vertical center guide	Patayong gabay sa gitna
+Vertical scale, in percent: stretches the glyphs about the baseline; leading is unchanged	Patayong sukat, sa porsiyento: binabanat ang mga glyph mula sa baseline; hindi nagbabago ang leading
+Vertically	Patayo
+Vibrance	Kasiglahan
+Vibrance…	Kasiglahan…
+View	Pagtingin
+Violet	Lila
+Visibility	Pagkakita
+Visible adjustment layers	Mga nakikitang layer ng pagsasaayos
+Vivid Light	Vivid na Liwanag
+W	W
+WEBP…	WEBP…
+Waiting for the composite…	Hinihintay ang composite…
+Warm	Mainit
+Warp	Baluktutin
+Warp Style	Estilo ng Warp
+Warp Text	I-warp ang Teksto
+Warp Text…	I-warp ang Teksto…
+Wave	Alon
+Wavelet Decompose	Paghihiwalay na Wavelet
+Wavelet Decompose splits into 2 to 7 scales	Hinahati ng Wavelet Decompose sa 2 hanggang 7 sukat
+Wavelet Decompose works on an sRGB document	Gumagana ang Wavelet Decompose sa isang sRGB na dokumento
+Wavelet Decompose: the layer has no pixels	Wavelet Decompose: walang pixel ang layer
+Wavelet Decompose: {n} detail layers over a residual; the source layer is hidden	Wavelet Decompose: {n} detail layer sa ibabaw ng isang residual; nakatago ang pinagmulang layer
+Wavelet Decompose…	Paghihiwalay na Wavelet…
+Wave…	Alon…
+Web (216)	Web (216)
+WebP (lossless)	WebP (walang kawala)
+WebP (lossy)	WebP (may kawala)
+Weight	Kapal
+White	Puti
+White to Black	Puti hanggang Itim
+Whites	Mga Puti
+Width	Lapad
+Width and height must be at least 1 pixel	Dapat kahit 1 pixel ang lapad at taas
+Width must be between 1 and 250 pixels	Dapat nasa pagitan ng 1 at 250 pixel ang lapad
+Width to 110%	Lapad sa 110%
+Width to 125%	Lapad sa 125%
+Width to 80%	Lapad sa 80%
+Width to 90%	Lapad sa 90%
+Window	Bintana
+Wind…	Hangin…
+With Handles	May mga Hawakan
+Work Path	Work Path
+Workspace	Lugar ng Trabaho
+Wrap to box	Ibalot sa kahon
+Writes the visible adjustment layers, applied to an identity lattice, as a 3D LUT (.cube).	Isinusulat ang mga nakikitang layer ng pagsasaayos, na inilapat sa isang identity lattice, bilang 3D LUT (.cube).
+Written as CMYK: a naive ink model, not an ICC press profile.	Isinulat bilang CMYK: isang simpleng modelo ng tinta, hindi isang ICC press profile.
+Written as XMP into PNG, JPEG and TIFF files by Export As.	Isinusulat bilang XMP sa mga file na PNG, JPEG at TIFF ng I-export Bilang.
+Written with the document's palette.	Isinulat gamit ang paleta ng dokumento.
+Yellow	Dilaw
+Yellow / Blue	Dilaw / Bughaw
+Yellows	Mga Dilaw
+ZigZag…	ZigZag…
+Zoom In	I-zoom in
+Zoom Out	I-zoom out
+Zoom in	I-zoom in
+Zoom out	I-zoom out
+Zoom to Selection	I-zoom sa Pagpipili
+a layer could not be rewritten	hindi maisulat muli ang isang layer
+before / after	bago / pagkatapos
+changed	nabago
+content thumbnail — click to edit the layer's pixels	thumbnail ng nilalaman — i-click upang i-edit ang mga pixel ng layer
+dpi	dpi
+edits are aimed at this mask — right-click for view and mask options	nakatuon ang mga edit sa maskarang ito — i-right-click para sa mga opsyon ng view at maskara
+lines past the box	mga linyang lampas sa kahon
+mask off	naka-off ang maskara
+mask thumbnail — click to edit the layer's mask	thumbnail ng maskara — i-click upang i-edit ang maskara ng layer
+minutes (0 is off)	minuto (0 ay naka-off)
+no drop	walang drop
+px	px
+records here	nagtatala rito
+skipped on play:	nilaktawan sa pag-play:
+the layers could not be added	hindi maidagdag ang mga layer
+the profile cannot be transformed ({error})	hindi mababago ang profile ({error})
+to	hanggang
+vector mask thumbnail — click to edit the vector mask	thumbnail ng maskara ng vector — i-click upang i-edit ang maskara ng vector
+{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time	{format}: ang timeline, {frames} frame sa {fps} fps sa loob ng {length} ms; ipinapakita ng bawat frame ang mga layer sa oras nito
+{label} is not answered by this route	Hindi sinasagot ng rutang ito ang {label}
+{label} was refused: {reason}	Tinanggihan ang {label}: {reason}
+{name} Residual	Residwal ng {name}
+{name} Scale {k}	{name} Sukat {k}
+{name}: {n} pages	{name}: {n} pahina
+{n} slices from the guides ({cols} x {rows}); they replace the slices there were	{n} hiwa mula sa mga gabay ({cols} x {rows}); pinapalitan nila ang mga hiwang naroon
+{path} is a {space} profile; an RGB document takes an RGB profile	Ang {path} ay isang {space} na profile; RGB na profile ang tinatanggap ng RGB na dokumento
+{path} is {len} bytes, larger than any colour profile	Ang {path} ay {len} byte, mas malaki kaysa anumang profile ng kulay
+{reason}; this one is {space}	{reason}; ang isang ito ay {space}
+16 Bits	16 Bit
+8 Bits	8 Bit
+AVIF…	AVIF…
+Blank preview image	Blangkong larawan ng preview
+Byte Order	Pagkakasunod ng Byte
+Depth	Lalim
+Duplicate Into…	Kopyahin Patungo sa…
+Guides from Layer	Mga Gabay mula sa Layer
+Minify the file	Paliitin ang file
+Nothing under the pointer for this row	Walang nasa ilalim ng pointer para sa hilerang ito
+Make Work Path	Gumawa ng Work Path
+RAW…	RAW…
+Remove Anchor Point	Alisin ang Anchor Point
+Remove Path	Alisin ang Daan
+Make Selection	Gumawa ng Pagpipili
+Divide…	Divide…
+Right-click on an anchor point of the path	I-right-click sa isang anchor point ng daan
+Right-click inside a path	I-right-click sa loob ng isang daan
+Save PSD/PSB	I-save ang PSD/PSB
+Save PSD/PSB…	I-save ang PSD/PSB…
+Select or draw a path first	Pumili o gumuhit muna ng daan
+Right-click on a text layer	I-right-click sa isang text layer
+Right-click inside a slice	I-right-click sa loob ng isang hiwa
+Divide Slices	Hatiin ang mga Hiwa
+N equal parts	N pantay na bahagi
+N pixels per part	N pixel bawat bahagi
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Hinahati ang hiwang in-right-click mo, o ang canvas kung wala, tungo sa isang parilya ng mga hiwa.
+Tick Horizontally or Vertically	Lagyan ng tsek ang Pahiga o Patayo
+These settings make no cut: raise N or pick a smaller pixel count	Walang gupit na ginagawa ang mga setting na ito: taasan ang N o pumili ng mas maliit na bilang ng pixel
+Cancel (Esc)	Kanselahin (Esc)
+All Documents	Lahat ng mga Dokumento
+Select Source	Piliin ang Pinagmulan
+Alt	Alt
+Turn into JPG	Gawing JPG
+ZIP for pixel data	ZIP para sa pixel data
+a	a
+b	b
+Open a document to see its memory	Magbukas ng dokumento upang makita ang memorya nito
+Image data	Data ng larawan
+{undo} undo / {redo} redo steps	{undo} hakbang ng undo / {redo} hakbang ng redo
+Holds copied pixels	May hawak na kinopyang pixel
+Empty	Walang laman
+Purge Clipboard	Linisin ang Clipboard
+Purge Histories	Linisin ang mga Kasaysayan
+Purge All	Linisin Lahat
+Make	Gumawa
+There is no path; draw one or select it in the Paths panel	Walang daan; gumuhit ng isa o piliin ito sa panel ng Mga Tarundon
+Artboards	Mga Artboard
+No Slices	Walang Hiwa
+All Slices	Lahat ng Hiwa
+User Slices	Mga Hiwa ng User
+Put the file into ZIP	Ilagay ang file sa ZIP
+{size} ({tiles} tiles)	{size} ({tiles} tile)
+Reverse pages	Baligtarin ang mga pahina
+Convert to sRGB	I-convert sa sRGB

@@ -136,14 +136,9 @@ pub fn guides_from_shape(editor: &mut Editor) -> Result<String, String> {
         let mut guides = doc.document.guides.clone();
         let mut layers = 0usize;
         for id in chosen {
-            let bounds = compositor::bounds::document_bounds(
-                &doc.document,
-                &doc.tiles,
-                id,
-                0,
-                compositor::CompositeOptions::default(),
-            )
-            .map_err(|e| e.to_string())?;
+            // The layer's own rect, as Photopea's: its tight ink, not the
+            // stored tiles that hold it.
+            let bounds = crate::tool_input::tight_document_bounds(&doc.document, &doc.tiles, id);
             if let Some(bounds) = bounds.filter(|b| b.width > 0 && b.height > 0) {
                 guides.list.extend(shape_guides(bounds));
                 layers += 1;
@@ -253,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn shape_guides_sit_on_the_edges_and_centres() {
+    fn shape_guides_sit_on_the_four_edges_in_photopeas_order() {
         let g = shape_guides(raster::PixelRect::new(10, 20, 40, 60));
         let v: Vec<f32> = g
             .iter()
@@ -265,8 +260,9 @@ mod tests {
             .filter(|g| g.axis == GuideAxis::Horizontal)
             .map(|g| g.doc)
             .collect();
-        assert_eq!(v, vec![10.0, 30.0, 50.0]);
-        assert_eq!(h, vec![20.0, 50.0, 80.0]);
+        // W18-G: Photopea's gidsFromLayer puts no centre guides.
+        assert_eq!(v, vec![10.0, 50.0]);
+        assert_eq!(h, vec![20.0, 80.0]);
     }
 
     // ---- the real routes: keymap -> menu action -> `perform` -------------

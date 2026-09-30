@@ -19,7 +19,13 @@
 //!   committed ones; "All Slices": those and the automatic ones covering the
 //!   rest of the canvas, [`auto_slices`]). A job with a PDF row and its
 //!   "reverse pages" is parked likewise and written whole, the PDF's pages
-//!   (one per artboard) last first.
+//!   (one per artboard) last first, and its "Pages" (`1, 3-5`) writes only
+//!   the pages named.
+//! * **Export As ▸ convert to sRGB** — offered over a document with an
+//!   embedded profile ([`document_has_profile`]); checked (the default) the
+//!   batch writer converts to sRGB and writes no profile, unchecked the job
+//!   is parked and written here in the document's own space with its
+//!   profile embedded ([`kept_profile`]).
 
 use std::path::{Path, PathBuf};
 
@@ -37,7 +43,7 @@ pub const TURN_INTO_JPG_QUALITY: u8 = 90;
 /// Straight-alpha RGBA8 flattened onto white, alpha set opaque.
 fn onto_white(rgba: &[u8]) -> Vec<u8> {
     let mut out = rgba.to_vec();
-    for px in out.chunks_exact_mut(4) {
+    for px in out.as_chunks_mut::<4>().0 {
         let a = u32::from(px[3]);
         for c in &mut px[..3] {
             *c = ((u32::from(*c) * a + 255 * (255 - a) + 127) / 255) as u8;
@@ -469,6 +475,61 @@ fn regions(editor: &mut Editor, extras: ExportExtras, base: &str) -> Result<Vec<
     Ok(out)
 }
 
+/// Whether the active document carries an embedded profile other than
+/// sRGB (an sRGB-equivalent one opens as plain sRGB), which is when Export
+/// As offers Photopea's "convert to sRGB".
+pub(crate) fn document_has_profile(editor: &Editor) -> bool {
+    editor.active().is_some_and(|doc| {
+        matches!(
+            &doc.document.meta.color_space,
+            color::ColorSpace::IccProfile { profile, .. } if !profile.is_empty()
+        )
+    })
+}
+
+/// The document's space and profile, when Export As's "convert to sRGB" is
+/// unchecked and the document has one to keep.
+fn kept_profile(editor: &Editor, extras: ExportExtras) -> Option<(color::ColorSpace, Vec<u8>)> {
+    if !extras.keep_profile {
+        return None;
+    }
+    match &editor.active()?.document.meta.color_space {
+        space @ color::ColorSpace::IccProfile { profile, .. } if !profile.is_empty() => {
+            Some((space.clone(), profile.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// `preset` written in the kept profile's space (its samples are the
+/// document's own), with the profile embedded, where its container carries
+/// one; a container that cannot is left converting to sRGB.
+fn in_kept_profile(
+    mut preset: raster::ExportPreset,
+    kept: &Option<(color::ColorSpace, Vec<u8>)>,
+) -> raster::ExportPreset {
+    if let Some((space, _)) = kept {
+        if preset.format.supports_icc() {
+            preset.color_space = space.clone();
+            preset.include_metadata = true;
+        }
+    }
+    preset
+}
+
+/// The profile offered to every preset of a batch: the kept one, or none.
+fn kept_metadata(kept: &Option<(color::ColorSpace, Vec<u8>)>) -> raster::export::ExportMetadata {
+    match kept {
+        Some((space, profile)) => {
+            raster::export::ExportMetadata::describing(space.clone(), profile.clone())
+        }
+        None => raster::export::ExportMetadata {
+            icc_profile: None,
+            icc_profile_space: None,
+        },
+    }
+}
+
 /// Write `job` cut into the regions `extras` asks for — one file per
 /// artboard or per slice for every enabled row (`<region><suffix>.<ext>`),
 /// through the exporter Export As uses — into the folder the picker gives.
@@ -494,22 +555,20 @@ pub(crate) fn export_parked(
         return Err("Export As: no destination chosen".to_string());
     };
     ui::dialogs::export_as::remember_exported_job(job);
+    let kept = kept_profile(editor, extras);
     let doc = editor.active().ok_or("No document is open")?;
     let (space, mode) = (
         doc.document.meta.color_space.clone(),
         doc.document.meta.color_mode,
     );
-    let metadata = raster::export::ExportMetadata {
-        icc_profile: None,
-        icc_profile_space: None,
-    };
+    let metadata = kept_metadata(&kept);
     let mut written = 0usize;
     for region in &cut {
         let image =
             raster::export::linear_from_rgba8(region.width, region.height, &region.rgba, &space)
                 .map_err(|e| format!("Export As: {}: {e}", region.name))?;
         for entry in job.entries.iter().filter(|e| e.enabled) {
-            let mut preset = entry.preset.clone().for_color_mode(mode);
+            let mut preset = in_kept_profile(entry.preset.clone().for_color_mode(mode), &kept);
             preset.name = format!("{}{}", region.name, entry.suffix);
             let paths = raster::export::export_batch_to_dir(&dir, &image, &[preset], &metadata)
                 .map_err(|e| format!("Export As: {}: {e}", region.name))?;
@@ -542,12 +601,45 @@ fn export_whole(
         return Err("Export As: no destination chosen".to_string());
     };
     ui::dialogs::export_as::remember_exported_job(job);
+    let kept = kept_profile(editor, extras);
     let doc = editor.active_mut().ok_or("No document is open")?;
-    let written = doc
-        .export_job(job, &dir)
-        .map_err(|e| format!("Export As: {e}"))?;
+    let written = match &kept {
+        None => doc
+            .export_job(job, &dir)
+            .map_err(|e| format!("Export As: {e}"))?,
+        // "convert to sRGB" unchecked: the batch Export As writes, in the
+        // document's own space with its profile.
+        Some(_) => {
+            let rect = doc.canvas_rect();
+            let rgba = doc.composite(rect).map_err(|e| format!("Export As: {e}"))?;
+            let meta = &doc.document.meta;
+            let image = raster::export::linear_from_rgba8(
+                doc.document.width(),
+                doc.document.height(),
+                &rgba,
+                &meta.color_space,
+            )
+            .map_err(|e| format!("Export As: {e}"))?;
+            let presets: Vec<raster::ExportPreset> = job
+                .entries
+                .iter()
+                .filter(|entry| entry.enabled)
+                .map(|entry| {
+                    let mut preset = in_kept_profile(
+                        entry.preset.clone().for_color_mode(meta.color_mode),
+                        &kept,
+                    );
+                    preset.name = format!("{}{}", job.base_name, entry.suffix);
+                    preset
+                })
+                .collect();
+            raster::export::export_batch_to_dir(&dir, &image, &presets, &kept_metadata(&kept))
+                .map_err(|e| format!("Export As: {e}"))?
+        }
+    };
     let rows = job.entries.iter().filter(|e| e.enabled);
     let mut reversed = 0usize;
+    let mut picked: Option<(usize, usize)> = None;
     for (entry, path) in rows.zip(&written) {
         let (format, whole) = (entry.preset.format, entry.preset.scale == 1.0);
         let err = |e: crate::doc::DocumentError| format!("Export As: {}: {e}", path.display());
@@ -570,26 +662,48 @@ fn export_whole(
             })
             .map_err(err)?;
         }
-        if format == raster::ExportFormat::Pdf && extras.reverse_pages {
+        if format == raster::ExportFormat::Pdf && (extras.reverse_pages || extras.pages != 0) {
             let mut scene =
                 crate::menu_bridge::w16k::vector_doc(&doc.document, &doc.tiles).map_err(err)?;
-            scene.pages.reverse();
+            // "Pages": the pages named, by their place in reading order.
+            let count = scene.pages.len();
+            let mut index = 0usize;
+            scene.pages.retain(|_| {
+                index += 1;
+                extras.writes_page(index - 1, count)
+            });
+            if extras.pages != 0 {
+                picked = Some((scene.pages.len(), count));
+            }
+            if extras.reverse_pages {
+                scene.pages.reverse();
+            }
             let bytes = raster::codec::export_vector::encode_pdf(&scene)
                 .map_err(|e| format!("Export As: {}: {e}", path.display()))?;
             crate::doc::write_atomically(path, &bytes)
                 .map_err(|e| format!("Export As: {}: {e}", path.display()))?;
-            reversed += 1;
+            if extras.reverse_pages {
+                reversed += 1;
+            }
         } else if raster::ExportFormat::VECTOR.contains(&format) {
             crate::menu_bridge::w16k::write_vector_export(&doc.document, &doc.tiles, format, path)
                 .map_err(err)?;
         }
     }
     Ok(format!(
-        "Exported {} file(s) to {}{}",
+        "Exported {} file(s) to {}{}{}{}",
         written.len(),
         dir.display(),
         if reversed > 0 {
             " (PDF pages reversed)"
+        } else {
+            ""
+        },
+        picked.map_or(String::new(), |(n, of)| format!(
+            " (PDF pages: {n} of {of})"
+        )),
+        if kept.is_some() {
+            " (profile kept)"
         } else {
             ""
         }

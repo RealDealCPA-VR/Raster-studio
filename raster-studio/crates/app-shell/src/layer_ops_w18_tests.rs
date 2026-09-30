@@ -694,8 +694,8 @@ impl Rig {
         for _ in 0..30 {
             self.frame(Vec::new());
             let now = self.ctx.read_response(id).map(|r| r.rect);
-            if now.is_some() && now == last {
-                return now.unwrap();
+            if let Some(rect) = now.filter(|_| now == last) {
+                return rect;
             }
             last = now;
         }
@@ -840,5 +840,200 @@ fn the_row_menus_stack_mode_submenu_opens_beside_it_and_picks_a_mode() {
         vec![MenuAction::LayerExtra(LayerExtraOp::StackMode(
             StackMode::Median
         ))]
+    );
+}
+
+/// An 8 x 8 PNG tagged with Adobe RGB (1998), saturated enough that a
+/// conversion to sRGB moves its samples.
+fn adobe_png(dir: &Path) -> (PathBuf, Vec<u8>, Vec<u8>) {
+    let (w, h) = (8u32, 8u32);
+    let px: Vec<u8> = (0..w * h)
+        .flat_map(|i| [30 + (i as u8 % 8) * 20, 200, 60, 255])
+        .collect();
+    let profile = color::icc::adobe_rgb_1998_profile();
+    let path = dir.join("adobe.png");
+    raster::encode_to_path(
+        &path,
+        raster::ExportFormat::Png,
+        w,
+        h,
+        raster::EncodedPixels::Rgba8(&px),
+        &raster::EncodeOptions::with_icc(profile.clone()),
+    )
+    .unwrap();
+    (path, px, profile)
+}
+
+/// File > Export As over an Adobe RGB document, through the real chrome:
+/// Photopea's "convert to sRGB" is drawn (checked), pressed where it is
+/// drawn to uncheck it, Enter confirms, and the PNG written carries the
+/// document's own samples with its Adobe RGB profile embedded. The checked
+/// default (the batch writer the shell runs) writes converted, untagged
+/// samples — the two differ, so the option is what changed the file.
+#[test]
+fn export_as_with_convert_to_srgb_unchecked_keeps_the_profile_and_the_samples() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let (src, px, profile) = adobe_png(dir.path());
+    let mut ed = editor(dir.path(), ScriptedDialogs::new().exporting_folder(&out));
+    ed.open_path(&src).unwrap();
+    assert!(
+        crate::menu_bridge::w18g::document_has_profile(&ed),
+        "the Adobe RGB file opens tagged"
+    );
+    // Checked (the default): what the shell's batch writer writes.
+    let converted = {
+        let mut d = ui::dialogs::ExportAsDialog::new(
+            8,
+            8,
+            "converted",
+            ui::dialogs::PreviewSource::placeholder(8, 8),
+        );
+        d.set_format(raster::ExportFormat::Png);
+        let job = d.job();
+        let paths = ed.active_mut().unwrap().export_job(&job, &out).unwrap();
+        raster::decode_path(&paths[0]).unwrap()
+    };
+    assert_eq!(converted.icc_profile, None, "converted to sRGB, untagged");
+    assert_ne!(converted.rgba8, px, "the conversion moved the samples");
+
+    let mut rig = Rig::new(ed);
+    // The menu bar is drawn before it is clicked.
+    rig.step(Vec::new());
+    rig.menu(MenuAction::Export(raster::ExportFormat::Png));
+    rig.chrome
+        .dialogs_for_test()
+        .active_export_dialog_for_test()
+        .set_base_name("kept");
+    rig.step(Vec::new());
+    rig.step(Vec::new());
+    let srgb = rig
+        .chrome
+        .dialogs_for_test()
+        .active_export_dialog_for_test()
+        .drawn_extras()[3]
+        .expect("a document with a profile is offered Convert to sRGB");
+    let at = rig.settled_rect(srgb).center();
+    rig.press(at, egui::PointerButton::Primary);
+    assert!(
+        rig.chrome
+            .dialogs_for_test()
+            .active_export_dialog_for_test()
+            .extras()
+            .keep_profile,
+        "the press unchecked it"
+    );
+    let said: Vec<_> = rig
+        .step(enter())
+        .into_iter()
+        .chain(rig.step(Vec::new()))
+        .collect();
+    let kept = raster::decode_path(&out.join("kept.png")).unwrap();
+    assert_eq!(
+        kept.icc_profile.as_deref(),
+        Some(&profile[..]),
+        "profile embedded"
+    );
+    assert_eq!(kept.rgba8, px, "the document's own samples");
+    assert!(
+        said.iter()
+            .any(|r| r.as_ref().is_ok_and(|s| s.contains("profile kept"))),
+        "{said:?}"
+    );
+}
+
+/// Over an untagged document Convert to sRGB is not offered.
+#[test]
+fn convert_to_srgb_is_not_offered_over_an_untagged_document() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = png(dir.path(), "plain.png", 8, 8, |_, _| [10, 20, 30, 255]);
+    let mut ed = editor(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&src).unwrap();
+    assert!(!crate::menu_bridge::w18g::document_has_profile(&ed));
+    let mut rig = Rig::new(ed);
+    rig.step(Vec::new());
+    rig.menu(MenuAction::Export(raster::ExportFormat::Png));
+    rig.step(Vec::new());
+    rig.step(Vec::new());
+    let d = rig
+        .chrome
+        .dialogs_for_test()
+        .active_export_dialog_for_test();
+    assert!(!d.offers_srgb());
+    assert_eq!(d.drawn_extras()[3], None);
+}
+
+/// File > Export As with a PDF row and Photopea's "Pages", through the real
+/// chrome: the field is clicked where it is drawn and "2" typed into it,
+/// Enter confirms, and the PDF written holds only the second artboard's
+/// page.
+#[test]
+fn export_as_pdf_with_pages_writes_only_the_pages_named() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let src = png(dir.path(), "deck.png", 16, 16, |_, _| [40, 90, 200, 255]);
+    let mut ed = editor(dir.path(), ScriptedDialogs::new().exporting_folder(&out));
+    ed.open_path(&src).unwrap();
+    two_artboards(&mut ed);
+    {
+        let doc = &mut ed.active_mut().unwrap().document;
+        let plate = doc
+            .layers
+            .iter_depth_first()
+            .into_iter()
+            .find(|id| {
+                matches!(
+                    doc.layers.get(*id).map(|l| &l.kind),
+                    Some(LayerKind::Raster(r)) if r.artboard.as_ref().is_some_and(|b| b.x > 0)
+                )
+            })
+            .expect("the second artboard's plate");
+        if let Some(LayerKind::Raster(r)) = doc.layers.get_mut(plate).map(|l| &mut l.kind) {
+            r.artboard.as_mut().unwrap().width = 24;
+        }
+    }
+    let plain = {
+        let doc = ed.active().unwrap();
+        let scene = crate::menu_bridge::w16k::vector_doc(&doc.document, &doc.tiles).unwrap();
+        media_boxes(&raster::codec::export_vector::encode_pdf(&scene).unwrap())
+    };
+    assert_eq!(plain.len(), 2, "{plain:?}");
+    let mut rig = Rig::new(ed);
+    rig.menu(MenuAction::Export(raster::ExportFormat::Pdf));
+    rig.chrome
+        .dialogs_for_test()
+        .active_export_dialog_for_test()
+        .set_base_name("deck");
+    rig.step(Vec::new());
+    rig.step(Vec::new());
+    let pages = rig
+        .chrome
+        .dialogs_for_test()
+        .active_export_dialog_for_test()
+        .drawn_extras()[4]
+        .expect("a PDF row is offered Pages");
+    let at = rig.settled_rect(pages).center();
+    rig.press(at, egui::PointerButton::Primary);
+    rig.frame(vec![egui::Event::Text("2".to_string())]);
+    assert_eq!(
+        rig.chrome
+            .dialogs_for_test()
+            .active_export_dialog_for_test()
+            .pdf_pages(),
+        "2"
+    );
+    // Enter leaves the field, and Enter again confirms.
+    let said: Vec<_> = rig
+        .step(enter())
+        .into_iter()
+        .chain(rig.step(enter()))
+        .chain(rig.step(Vec::new()))
+        .collect();
+    let pdf = std::fs::read(out.join("deck.pdf")).unwrap();
+    assert_eq!(media_boxes(&pdf), vec![plain[1].clone()], "only page 2");
+    assert!(
+        said.iter()
+            .any(|r| r.as_ref().is_ok_and(|s| s.contains("PDF pages: 1 of 2"))),
+        "{said:?}"
     );
 }

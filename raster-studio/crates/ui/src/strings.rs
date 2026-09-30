@@ -81,6 +81,7 @@ pub enum Locale {
     Lt,
     Eo,
     Sq,
+    Tl,
 }
 
 impl Locale {
@@ -112,6 +113,7 @@ impl Locale {
         Locale::Sl,
         Locale::Fi,
         Locale::Sv,
+        Locale::Tl,
         Locale::Vi,
         Locale::Tr,
         Locale::El,
@@ -176,6 +178,7 @@ impl Locale {
             Self::Lt => "lt",
             Self::Eo => "eo",
             Self::Sq => "sq",
+            Self::Tl => "tl",
         }
     }
 
@@ -241,6 +244,7 @@ impl Locale {
             Self::Lt => include_str!("i18n/lt.tsv"),
             Self::Eo => include_str!("i18n/eo.tsv"),
             Self::Sq => include_str!("i18n/sq.tsv"),
+            Self::Tl => include_str!("i18n/tl.tsv"),
         })
     }
 
@@ -704,6 +708,8 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.w18g.slices.all", &[(Locale::En, "All Slices")]),
     ("ui.w18g.slices.user", &[(Locale::En, "User Slices")]),
     ("ui.w18g.export.reverse.pages", &[(Locale::En, "Reverse pages")]),
+    ("ui.w18g.export.pages", &[(Locale::En, "Pages")]),
+    ("ui.w18g.export.srgb", &[(Locale::En, "Convert to sRGB")]),
     ("ui.w16.navigator.degrees", &[(Locale::En, "\u{b0}")]),
     ("ui.w16.comps.last.state", &[(Locale::En, "Last Document State")]),
     ("ui.w16.comps.last.state.none", &[(Locale::En, "Kept when a comp is first applied")]),
@@ -1812,6 +1818,8 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.w18g.slices.all",
     "ui.w18g.slices.user",
     "ui.w18g.export.reverse.pages",
+    "ui.w18g.export.pages",
+    "ui.w18g.export.srgb",
     "ui.w16.comps.last.state",
     "ui.w16.comps.last.state.none",
     "ui.w16.comps.flag.visibility",

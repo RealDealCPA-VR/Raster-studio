@@ -355,7 +355,13 @@ pub struct ExportAsDialog {
     /// W18-G: Photopea's Artboards and Slices options ([`ExportExtras`]),
     /// and the ids the last frame drew their controls with.
     extras: ExportExtras,
-    extras_drawn: [Option<egui::Id>; 3],
+    extras_drawn: [Option<egui::Id>; 5],
+    /// W18-G: whether the document carries an embedded profile other than
+    /// sRGB ([`note_document_profile`]), which is when Photopea offers
+    /// "convert to sRGB".
+    has_profile: bool,
+    /// W18-G: a PDF row's "Pages" field as typed (Photopea's `pags`).
+    pdf_pages: String,
 }
 
 impl std::fmt::Debug for ExportAsDialog {
@@ -408,7 +414,9 @@ impl ExportAsDialog {
             metadata: raster::metadata::EmbeddedMetadata::default(),
             embed_metadata: true,
             extras: ExportExtras::default(),
-            extras_drawn: [None; 3],
+            extras_drawn: [None; 5],
+            has_profile: DOCUMENT_PROFILE.with(Cell::get),
+            pdf_pages: String::new(),
         }
     }
 
@@ -1340,7 +1348,29 @@ impl ExportAsDialog {
                 SliceExport::No
             },
             reverse_pages: self.offers_reverse_pages() && self.extras.reverse_pages,
+            keep_profile: self.offers_srgb() && self.extras.keep_profile,
+            pages: if self.offers_reverse_pages() {
+                page_mask(&self.pdf_pages)
+            } else {
+                0
+            },
         }
+    }
+
+    /// W18-G: whether Photopea's "convert to sRGB" is offered: the document
+    /// carries an embedded profile other than sRGB.
+    pub fn offers_srgb(&self) -> bool {
+        self.has_profile
+    }
+
+    /// W18-G: a PDF row's "Pages" field as typed.
+    pub fn pdf_pages(&self) -> &str {
+        &self.pdf_pages
+    }
+
+    /// W18-G: type into a PDF row's "Pages" field.
+    pub fn set_pdf_pages(&mut self, pages: impl Into<String>) {
+        self.pdf_pages = pages.into();
     }
 
     /// W18-G: whether Photopea's PDF option "reverse pages" is offered: an
@@ -1374,9 +1404,9 @@ impl ExportAsDialog {
     }
 
     /// W18-G: the ids the last frame drew the Artboards checkbox, the
-    /// Slices choice and the PDF's Reverse pages checkbox with (`None` when
-    /// not offered).
-    pub fn drawn_extras(&self) -> [Option<egui::Id>; 3] {
+    /// Slices choice, the PDF's Reverse pages checkbox, the Convert to sRGB
+    /// checkbox and the PDF's Pages field with (`None` when not offered).
+    pub fn drawn_extras(&self) -> [Option<egui::Id>; 5] {
         self.extras_drawn
     }
 
@@ -1384,7 +1414,7 @@ impl ExportAsDialog {
     /// while every enabled row can take them.
     fn w18g_extras(&mut self, ui: &mut egui::Ui) {
         let (artboards, slices) = self.offered_extras();
-        self.extras_drawn = [None; 3];
+        self.extras_drawn = [None; 5];
         if artboards {
             let mut on = self.extras.artboards;
             let response =
@@ -1428,6 +1458,28 @@ impl ExportAsDialog {
             self.extras_drawn[2] = Some(response.id);
             if response.changed() {
                 self.extras.reverse_pages = on;
+            }
+            // Photopea's "Pages": which pages (one per artboard) are
+            // written, as `1, 3-5`; empty writes them all.
+            let field =
+                design::inspector_field(ui, crate::strings::tr("ui.w18g.export.pages"), |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.pdf_pages)
+                            .desired_width(sizes::text_field_wide()),
+                    )
+                });
+            self.extras_drawn[4] = Some(field.inner.id);
+        }
+        if self.offers_srgb() {
+            // Checked (Photopea's default): the pixels are converted to sRGB
+            // and no profile is written; unchecked, the document's own
+            // samples are written with its profile embedded.
+            let mut convert = !self.extras.keep_profile;
+            let response =
+                checkbox_row(ui, crate::strings::tr("ui.w18g.export.srgb"), &mut convert);
+            self.extras_drawn[3] = Some(response.id);
+            if response.changed() {
+                self.extras.keep_profile = !convert;
             }
         }
     }
@@ -1486,13 +1538,60 @@ pub struct ExportExtras {
     /// A PDF row's "reverse pages": its pages (one per artboard) written
     /// last first.
     pub reverse_pages: bool,
+    /// "convert to sRGB" unchecked: the document's own samples are written
+    /// with its embedded profile, rather than converted to sRGB untagged.
+    pub keep_profile: bool,
+    /// A PDF row's "Pages": bit `n` set writes page `n + 1` (one page per
+    /// artboard); `0` writes every page ([`page_mask`]).
+    pub pages: u128,
 }
 
 impl ExportExtras {
     /// Neither option: the whole canvas, as the batch writer writes it.
     pub fn is_plain(self) -> bool {
-        !self.artboards && self.slices == SliceExport::No && !self.reverse_pages
+        !self.artboards
+            && self.slices == SliceExport::No
+            && !self.reverse_pages
+            && !self.keep_profile
+            && self.pages == 0
     }
+
+    /// Whether the PDF's page `index` (from 0) of `count` is written: every
+    /// page when the Pages field named none of the `count`, as Photopea
+    /// drops the numbers past the last page and writes all when none is left.
+    pub fn writes_page(self, index: usize, count: usize) -> bool {
+        let named = |i: usize| i < 128 && self.pages & (1u128 << i) != 0;
+        if !(0..count).any(named) {
+            return true;
+        }
+        named(index)
+    }
+}
+
+/// W18-G: Photopea's PDF "Pages" field read as it reads it: commas and
+/// spaces separate page numbers, `a-b` is every page from `a` to `b`, and a
+/// word that is not a page number (or is below 1) is dropped. Bit `n` of the
+/// mask is page `n + 1`; pages past 128 cannot be named.
+pub fn page_mask(text: &str) -> u128 {
+    let spaced = text.replace(',', " ").replace('-', " - ");
+    let words: Vec<&str> = spaced.split_whitespace().collect();
+    let mut pages: Vec<i64> = Vec::new();
+    for (i, word) in words.iter().enumerate() {
+        if *word == "-" {
+            if let (Some(from), Some(to)) = (
+                pages.pop(),
+                words.get(i + 1).and_then(|w| w.parse::<i64>().ok()),
+            ) {
+                pages.extend(from..to.min(from.saturating_add(128)));
+            }
+        } else if let Ok(n) = word.parse::<i64>() {
+            pages.push(n);
+        }
+    }
+    pages
+        .into_iter()
+        .filter(|&n| (1..=128).contains(&n))
+        .fold(0u128, |mask, n| mask | 1u128 << (n - 1))
 }
 
 /// W18-G: whether Photopea offers "Artboards" for `format`.
@@ -1513,6 +1612,9 @@ pub fn offers_slices(format: ExportFormat) -> bool {
 }
 
 thread_local! {
+    /// W18-G: whether the document Export As is about to open over carries
+    /// an embedded non-sRGB profile ([`note_document_profile`]).
+    static DOCUMENT_PROFILE: Cell<bool> = const { Cell::new(false) };
     /// W18-G: the Export As job parked for its per-artboard / per-slice
     /// writer, and whether the File ▸ Export row is still to be asked for.
     static PARKED_EXPORT: RefCell<Option<(ExportJob, ExportExtras)>> =
@@ -1526,6 +1628,13 @@ thread_local! {
 pub fn park_export(job: ExportJob, extras: ExportExtras) {
     PARKED_EXPORT.with(|slot| *slot.borrow_mut() = Some((job, extras)));
     PARKED_ASK.with(|ask| ask.set(true));
+}
+
+/// W18-G: the host says whether the active document carries an embedded
+/// profile other than sRGB, before Export As opens over it; the dialog then
+/// offers Photopea's "convert to sRGB".
+pub fn note_document_profile(has: bool) {
+    DOCUMENT_PROFILE.with(|slot| slot.set(has));
 }
 
 /// W18-G: the parked Export As job and its options, taken.
@@ -2616,7 +2725,7 @@ mod tests {
             ExportExtras {
                 artboards: false,
                 slices: SliceExport::All,
-                reverse_pages: false,
+                ..Default::default()
             },
             "choosing slices turns Artboards off"
         );
@@ -2689,5 +2798,39 @@ mod tests {
         // Back on a PNG row the option is not offered, and nothing parks.
         d.borrow_mut().set_format(ExportFormat::Png);
         assert!(!d.borrow().effective_extras().reverse_pages);
+    }
+
+    /// W18-G: Photopea's PDF "Pages" read as it reads it — numbers and
+    /// ranges, anything else dropped — and a mask naming no page of the
+    /// document writes every page.
+    #[test]
+    fn the_pdf_pages_field_reads_as_photopea_reads_it() {
+        let bits = |pages: &[u32]| pages.iter().fold(0u128, |m, p| m | 1u128 << (p - 1));
+        assert_eq!(page_mask(""), 0);
+        assert_eq!(page_mask("1, 3-5"), bits(&[1, 3, 4, 5]));
+        assert_eq!(page_mask("2 x 0 7"), bits(&[2, 7]));
+        assert_eq!(page_mask("4-2"), bits(&[2]));
+        let extras = ExportExtras {
+            pages: page_mask("2"),
+            ..ExportExtras::default()
+        };
+        assert!(!extras.is_plain(), "a Pages choice parks the job");
+        assert!(!extras.writes_page(0, 3) && extras.writes_page(1, 3));
+        let past = ExportExtras {
+            pages: page_mask("9"),
+            ..ExportExtras::default()
+        };
+        assert!((0..3).all(|i| past.writes_page(i, 3)), "none left: all");
+        // Offered only with a PDF row; unchecking Convert to sRGB parks too.
+        let mut d = dialog();
+        d.set_pdf_pages("2");
+        assert_eq!(d.effective_extras().pages, 0, "no PDF row");
+        d.set_format(ExportFormat::Pdf);
+        assert_eq!(d.effective_extras().pages, bits(&[2]));
+        assert!(!ExportExtras {
+            keep_profile: true,
+            ..ExportExtras::default()
+        }
+        .is_plain());
     }
 }

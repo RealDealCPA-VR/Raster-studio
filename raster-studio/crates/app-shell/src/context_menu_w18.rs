@@ -307,6 +307,9 @@ mod tests {
         chrome: Chrome,
         ctx: egui::Context,
         last: Option<egui::FullOutput>,
+        /// The text layer a frame asked the shell to enter, as
+        /// `Shell::apply_chrome` reads `enter_text_layer`.
+        entered: Option<layer_model::LayerId>,
     }
 
     fn rig(tool: ToolId) -> Rig {
@@ -347,6 +350,7 @@ mod tests {
             chrome: Chrome::new(),
             ctx,
             last: None,
+            entered: None,
         };
         for _ in 0..3 {
             rig.step(Vec::new());
@@ -371,6 +375,9 @@ mod tests {
                 out = Some(chrome.ui(ctx, editor));
             });
             let out = out.expect("a frame ran");
+            if out.enter_text_layer.is_some() {
+                self.entered = out.enter_text_layer;
+            }
             // The selection lands first, as `Shell::apply_chrome` lands it.
             if let Some((layers, active)) = out.select_layers {
                 self.editor.set_layer_selection(layers, active);
@@ -785,6 +792,149 @@ mod tests {
             2,
             "{:?}",
             rig.editor.slices.get(id)
+        );
+    }
+
+    /// Where document point `(x, y)` sits on screen in a [`rig`].
+    fn screen(x: f32, y: f32) -> egui::Pos2 {
+        egui::pos2(CENTRE.x + (x - 4.0) * ZOOM, CENTRE.y + (y - 4.0) * ZOOM)
+    }
+
+    #[test]
+    fn a_pen_row_removes_the_anchor_and_makes_the_selection_through_the_real_route() {
+        let mut rig = rig(ToolId::Pen);
+        {
+            let paths = &mut rig.chrome.workspace_for_test().paths;
+            paths.work_path = Some(vector::shapes::rect(vector::Bounds::new(
+                vector::point(1.0, 1.0),
+                vector::point(6.0, 6.0),
+            )));
+            paths.work_selected = true;
+        }
+        rig.step(Vec::new());
+        // On the corner anchor (1, 1): Remove Anchor Point drops it.
+        let rows = rig.menu_at(screen(1.0, 1.0));
+        assert_eq!(
+            rows,
+            [
+                "Remove Anchor Point",
+                "Remove Path",
+                "Make Selection",
+                "Fill",
+                "Stroke"
+            ],
+            "the pen list"
+        );
+        rig.click_row("Remove Anchor Point");
+        let path = rig
+            .chrome
+            .workspace()
+            .paths
+            .work_path
+            .clone()
+            .expect("the work path is kept");
+        let subpaths = vector::anchors::from_path(&path);
+        assert_eq!(subpaths.len(), 1);
+        assert_eq!(
+            subpaths[0].anchors.len(),
+            3,
+            "the anchor under the pointer went"
+        );
+        // Inside the path: Make Selection loads it as the selection.
+        assert!(rig
+            .editor
+            .active()
+            .unwrap()
+            .document
+            .selection
+            .bounds()
+            .is_none());
+        rig.menu_at(screen(4.0, 3.0));
+        rig.click_row("Make Selection");
+        assert!(
+            rig.editor
+                .active()
+                .unwrap()
+                .document
+                .selection
+                .bounds()
+                .is_some(),
+            "the path became the selection"
+        );
+    }
+
+    #[test]
+    fn a_free_transform_row_flips_the_layer_through_the_real_route() {
+        let mut rig = rig(ToolId::FreeTransform);
+        // Ink only the left column, so a flip is visible.
+        let doc = rig.editor.active_mut().unwrap();
+        let layer = doc.document.active_layer().unwrap();
+        let mut bytes = Vec::with_capacity(256 * 256 * 4);
+        for _y in 0..256u32 {
+            for x in 0..256u32 {
+                bytes.extend_from_slice(&if x == 0 { [200, 10, 10, 255] } else { [0; 4] });
+            }
+        }
+        let hash = doc.tiles.insert_bytes(bytes);
+        doc.apply(
+            Command::paint_tiles(
+                PixelTarget::Layer(layer),
+                vec![TileEdit::set(TileCoord::new(0, 0, 0), hash)],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let before = crate::menu_bridge::pixels::read_layer(rig.editor.active().unwrap(), layer);
+        assert_eq!(before[3], 255, "the left column is inked");
+        assert_eq!(before[7 * 4 + 3], 0, "the right column is bare");
+        let rows = rig.menu_at(CENTRE);
+        assert_eq!(rows.len(), 12, "the free transform list: {rows:?}");
+        rig.click_row("Flip Horizontal");
+        let after = crate::menu_bridge::pixels::read_layer(rig.editor.active().unwrap(), layer);
+        assert_eq!(after[3], 0, "the left column is bare after the flip");
+        assert_eq!(
+            after[7 * 4 + 3],
+            255,
+            "the ink moved to the right column: the row flipped the layer"
+        );
+    }
+
+    #[test]
+    fn type_right_click_shows_edit_and_warp_text_and_edit_enters_the_text_under_the_pointer() {
+        use layer_model::{Layer, LayerKind, TextLayer};
+        let mut rig = rig(ToolId::Type);
+        let layer = Layer::with_kind(
+            "Headline",
+            LayerKind::Text(TextLayer {
+                text: "MMMM".to_string(),
+                font_family: "DejaVu Sans".to_string(),
+                size_px: 16.0,
+                ..TextLayer::default()
+            }),
+        );
+        let id = layer.id;
+        rig.editor
+            .active_mut()
+            .unwrap()
+            .apply(Command::create_layer(layer))
+            .unwrap();
+        rig.step(Vec::new());
+        // A point of the canvas the text's ink covers.
+        let doc = rig.editor.active().unwrap();
+        let (x, y) = (0..16)
+            .flat_map(|j| (0..16).map(move |i| (i as f32 * 0.5 + 0.25, j as f32 * 0.5 + 0.25)))
+            .find(|(x, y)| super::layers_under(doc, glam::Vec2::new(*x, *y)).first() == Some(&id))
+            .expect("the text covers some point of the canvas");
+        let rows = rig.menu_at(screen(x, y));
+        assert_eq!(rows.len(), 2, "Edit and Warp Text: {rows:?}");
+        assert_eq!(rows[0], "Edit");
+        assert!(rows[1].starts_with("Warp Text"), "{rows:?}");
+        assert_eq!(rig.entered, None);
+        rig.click_row("Edit");
+        assert_eq!(
+            rig.entered,
+            Some(id),
+            "Edit asked the shell to enter the text layer under the pointer"
         );
     }
 }

@@ -140,10 +140,12 @@ fn every_mapped_filter_saves_live_and_reopens_with_equal_parameters() {
     let mut stack: Vec<SmartFilter> = ui::menu::FilterId::ALL
         .iter()
         .copied()
-        .filter(|id| sf::has_photoshop_equivalent(&key_of(*id)))
+        .filter(|id| sf::rasterised_reason(&key_of(*id)).is_none())
         .map(at_defaults)
         .collect();
-    assert_eq!(stack.len(), sf::MAPPED.len());
+    // Every filter not named rasterised rides live: a filter dropped from
+    // `MAPPED` is in this stack and turns the object into a fallback.
+    assert!(!stack.is_empty());
     for f in &mut stack {
         let edge = match f.filter.as_str() {
             "GaussianBlur" => 2,

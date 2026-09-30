@@ -635,7 +635,8 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   the row's left margin, saved with the `.rstudio` document and carried by
   Duplicate Layer, and (W13-B) read from and written to a PSD's `lclr`.
   Photopea's submenus there (Smart Object, Layer Style, Color) are flat
-  rows, its Stack Mode / Turn into JPG rows are not offered, its merge row
+  rows (W18-G: Stack Mode is now a real submenu on a smart object's row,
+  followed by Turn into JPG), its merge row
   reads Merge Layers even over one layer (here Merge Down, a label other
   tests pin) and its Clipping Mask row is one check (here Create or
   Release, whichever applies). W16-D, the
@@ -778,7 +779,15 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   does the options bar's Commit check, shown while a transform, crop box or
   pen path is pending; W18-F: a Cancel cross beside it does what Escape
   does, and the pair also shows for a Type run, a Perspective Crop quad and
-  a Show Transform Controls drag, which now stays open for Enter). The
+  a Show Transform Controls drag, which now stays open for Enter; Puppet
+  Warp is still a modal dialog with its own OK / Cancel, not an on-canvas
+  session with that pair). W18-F also gives the Magnetic Lasso bar Feather
+  and Anti-alias, the Pencil bar Smoothing, the Clone Stamp / Healing Brush
+  bars the Alt (Select Source) toggle and K, the Zoom bar Zoom In / Zoom Out
+  and the Zoom / Hand bars All Documents, the Paint Bucket a pattern picker;
+  Alt draws a marquee or box shape out from its centre, Crop by sets the
+  box, and the Parametric Shape bar shows only the picked shape's keys
+  (a polygon starts on 5 sides). The
   options bar shows Photopea's numbers: Tolerance 0-255, Opacity, Flow,
   Hardness, Exposure and Spacing in %, the Blur / Sharpen Strength in %
   (the tool's top reads 100%), sizes and the Parametric Shape's Corner
@@ -792,7 +801,7 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   each one alone to its own file (`<picked name>-<layer>`); a `.svg` name
   writes SVG (shapes as paths, text as text); an `@2x` / `@0.5x` suffix on
   the name scales a PNG (0.01x-10x, Lanczos-3). There is no Quick Export
-  options dialog: the scale travels in the file name. W13-A: Alt+drag with the Move tool moves a copy —
+  options dialog (Photopea's Move bar offers 1x-4x and PNG / SVG buttons): the scale travels in the file name, and the picker is the generic Save As dialog (project filter only), so the extension is typed. W13-A: Alt+drag with the Move tool moves a copy —
   the selected layer(s) are duplicated above their sources, or, with a pixel
   selection, a copy of the selected pixels is laid down and the originals
   stay — as one undo step; Ctrl+Alt+drag does the same from the tools Ctrl
@@ -1189,11 +1198,14 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   Export As lists AVIF and Photopea's headerless RAW (Channels 1 / 3 / 4,
   8 or 16 Bits, byte order 12-34 or 34-12) and Photopea's Artboards /
   Slices (No / All / User) options, a file per artboard or per slice for
-  every row, and a PDF row's reverse pages (its pages, one per artboard,
-  last first); File ▸ Save PSD/PSB… opens Photopea's options dialog (PSD or
+  every row, a PDF row's reverse pages (its pages, one per artboard,
+  last first) and Pages (`1, 3-5`: only the pages named), and, over a
+  document with an embedded profile, Convert to sRGB (checked: converted
+  and untagged; unchecked: the document's own samples with its profile
+  embedded); File ▸ Save PSD/PSB… opens Photopea's options dialog (PSD or
   PSB, Blank preview image, ZIP for pixel data, Put the file into ZIP) and
-  Save writes the file (Remove Smart Object pixels, Convert to sRGB and the
-  PDF's other options are not offered). Export As has
+  Save writes the file (Remove Smart Object pixels and the PDF's quality,
+  rasterize all, vectorize text and margin are not offered). Export As has
   presets and writes several rows (format and scale) in one run;
   Export Layers and File ▸ Export ▸ Slices (the Slice Select tool moves,
   resizes by an edge or corner, and Alt+click or Delete on the picked slice
@@ -1220,10 +1232,12 @@ in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
   setting Photoshop lacks riding as an extra key so it reads back exactly;
   Lens Blur, Displace, Shear, Gradient Fill, Lighting Effects, Oil Paint,
   Tiles, Flame, Camera Raw and Lens Correction keep the object as its
-  rendered pixels, named with the reason (`psd::placed::smart_filters::RASTERISED`),
-  and so does a smart-filter mask: its `filterFXStyle` settings and `FEid`
-  pixels are written and read by `psd_live`, but Save as PSD and File ▸
-  Open do not call that code yet; pattern overlays with their pattern); print as PDF.
+  rendered pixels, named with the reason (`psd::placed::smart_filters::RASTERISED`);
+  a smart-filter mask is written live too: its switch, link, density,
+  feather and invert in `filterFXStyle`, its pixels (and the object's
+  unfiltered pixels) in the document's `FEid` block, and File ▸ Open
+  attaches it again (a mask on a rotated or scaled object, or on a file a
+  second smart object also places, keeps the rendered pixels, named); pattern overlays with their pattern); print as PDF.
   Duplicate a document, Close Others, Close All.
 - **File automation and data-driven exports (W10-E).** File ▸ Automate ▸
   Batch… plays a recorded Action (from the Actions panel's library) on every
@@ -1464,10 +1478,10 @@ matrix, each with its reason there:
   the canvas, and a pin cannot be dragged; there is no View > Show > Notes
   of its own (View > Extras hides the pins).
 - **Languages** (W16-N, W18-K): Window ▸ Language (Photopea's More ▸ Language)
-  offers English and 36 full translations — Bahasa Indonesia, Català, Česky, Dansk, Deutsch, Eesti, Español, Esperanto, Français, Hrvatski, Italiano, Lietuvių, Magyar, Nederlands, Norsk, Polski, Português, Português (Brasil), Română, Shqip, Slovenčina, Slovenščina, Suomi, Svenska, Tiếng Việt, Türkçe, Ελληνικά, Български език, Македонски, Русский, Српски језик, Українська, 简体中文, 繁體中文, 日本語, 한국어 — each row in its own
+  offers English and 37 full translations — Bahasa Indonesia, Català, Česky, Dansk, Deutsch, Eesti, Español, Esperanto, Français, Hrvatski, Italiano, Lietuvių, Magyar, Nederlands, Norsk, Polski, Português, Português (Brasil), Română, Shqip, Slovenčina, Slovenščina, Suomi, Svenska, Tagalog, Tiếng Việt, Türkçe, Ελληνικά, Български език, Македонски, Русский, Српски језик, Українська, 简体中文, 繁體中文, 日本語, 한국어 — each row in its own
   language; the choice is stored in preferences (`language`) and applied
   the moment it is picked (the Preferences dialog's Language list offers
-  the same thirty-seven). A language is a table, `crates/ui/src/i18n/<code>.tsv`,
+  the same thirty-eight). A language is a table, `crates/ui/src/i18n/<code>.tsv`,
   keyed by the English source string. The gate
   `strings::tests::every_language_table_translates_every_catalogue_string`
   holds every table to every English string the catalogue knows — every
@@ -1493,7 +1507,7 @@ matrix, each with its reason there:
   two faces; the route is proved end to end by
   `app-shell/tests/w16n_language.rs` (menu clicks, the drawn bar in
   German, Japanese, Korean and Chinese, no tofu) and
-  `app-shell/tests/w18k_languages.rs` (Window ▸ Language ▸ each of the 24
+  `app-shell/tests/w18k_languages.rs` (Window ▸ Language ▸ each of the 25
   wave-18 languages clicked in turn, the nine drawn menu titles read back
   in that language, every painted glyph present), and
   `strings::w18k_tests` checks that every row of every table draws in both
@@ -1512,7 +1526,7 @@ matrix, each with its reason there:
   menu row, and the `Recent n` slots. Japanese uses the SC face,
   so shared Han characters take Chinese forms, and the subset covers only
   the characters the four CJK tables use (CJK typed into a field can still
-  meet a missing glyph). Not offered from the 59 languages Photopea's bundle lists (`file.json` `langs`; its `dbs.js` list has 50): the right-to-left languages (Arabic, Hebrew, Persian, Central Kurdish, N'Ko), because egui lays every line out left to right with no bidi reordering and the chrome has no mirrored layout; Thai, Lao, Tibetan, Tamil and Bengali, because their marks stack and reorder through OpenType shaping that egui's glyph-by-glyph layout does not do; Amharic and Ge'ez, because no Ethiopic face is bundled and Photopea's own tables for them hold 72 and 12 entries; Georgian, Kazakh, Rusyn and Tagalog, whose Photopea tables exist and are filled for 734 to 880 of its 902 strings but cover only 446 to 464 of this catalogue's 1,673 rows, and the other rows were not translated in this wave (Georgian would also need a font); and Irish, Kurmanji, Uzbek, Azerbaijani, Welsh and Luganda, whose Photopea tables are partial (420, 107, 217, 283, 48 and 53 filled entries) and cover 278, 84, 139, 189, 20 and 21 rows of the catalogue, the rest again not translated in this wave. In the 24 wave-18 tables, every row whose English text is also a string in Photopea's own table for that language (its bundle, `file.json` `tables`, matching Photopea's `...` to the menu ellipsis) carries Photopea's translation: 350 to 464 rows per table, 10,365 in all, 10,351 of them Photopea's words (five Vietnamese rows recomposed from decomposed accents). The other 14 keep this build's wording because Photopea's entry is not a word of that language: Bulgarian Edit ("ya"), Bend (in Bengali), Luminosity (Ukrainian) and Screen (Russian); Serbian Iris Blur, Spin Blur and Tilt-Shift (Lithuanian); Croatian Swatches (Hungarian); Indonesian Merge Down (German) and Add Noise ("Pecahkan Gambar", break the image); Greek Pixel to Pixel, Slices and Wave and Bulgarian Divide (left in Latin script). The remaining rows of each table (about 1,210 to 1,320 of 1,673), for which Photopea has no string, are this build's own wording, so in those rows a table can use a different term from Photopea's for the same thing (Vietnamese keeps Photopea's "Layer" where Photopea has it and "lớp" elsewhere, for example).
+  meet a missing glyph). Not offered from the 59 languages Photopea's bundle lists (`file.json` `langs`; its `dbs.js` list has 50): the right-to-left languages (Arabic, Hebrew, Persian, Central Kurdish, N'Ko), because egui lays every line out left to right with no bidi reordering and the chrome has no mirrored layout; Thai, Lao, Tibetan, Tamil and Bengali, because their marks stack and reorder through OpenType shaping that egui's glyph-by-glyph layout does not do; Amharic and Ge'ez, because no Ethiopic face is bundled and Photopea's own tables for them hold 72 and 12 entries; Kazakh (a full table was translated in this wave, but a 39th row puts the last language of Window ▸ Language below the bottom of a 900-pixel window: the submenu does not scroll, so the table is not shipped until it does); Georgian, because no Georgian face is bundled and egui's own fonts have none; Rusyn, whose Photopea table covers 446 of this catalogue's rows, the rest not translated in this wave; and Irish, Kurmanji, Uzbek, Azerbaijani, Welsh and Luganda, whose Photopea tables are partial (420, 107, 217, 283, 48 and 53 filled entries) and cover 278, 84, 139, 189, 20 and 21 rows of the catalogue, the rest again not translated in this wave. In the 25 wave-18 tables, every row whose English text is also a string in Photopea's own table for that language (its bundle, `file.json` `tables`, matching Photopea's `...` to the menu ellipsis) carries Photopea's translation: 350 to 464 rows per table, 10,828 in all, 10,814 of them Photopea's words (five Vietnamese rows recomposed from decomposed accents). The other 14 keep this build's wording because Photopea's entry is not a word of that language: Bulgarian Edit ("ya"), Bend (in Bengali), Luminosity (Ukrainian) and Screen (Russian); Serbian Iris Blur, Spin Blur and Tilt-Shift (Lithuanian); Croatian Swatches (Hungarian); Indonesian Merge Down (German) and Add Noise ("Pecahkan Gambar", break the image); Greek Pixel to Pixel, Slices and Wave and Bulgarian Divide (left in Latin script). The remaining rows of each table (about 1,210 to 1,320 of 1,674), for which Photopea has no string, are this build's own wording, so in those rows a table can use a different term from Photopea's for the same thing (Vietnamese keeps Photopea's "Layer" where Photopea has it and "lớp" elsewhere, for example).
 - **Glass Menus** (W16-N): Window ▸ Appearance ▸ Glass Menus — the last
   row of the themes list below a separator, where Photopea's bundle puts
   it (More ▸ Themes ▸ Glass Menus) — stored in preferences, draws every
@@ -1544,9 +1558,10 @@ matrix, each with its reason there:
   files are read back by this build and by psd-tools 1.19 (kinds, path,
   stroke, embedded PNG, corners, 16-bit samples), not yet by Photoshop. A
   shape with a translucent fill, a stroke under a non-uniform transform, an
-  arc in its path or a pattern fill under a transform, and a linked or
-  smart-filtered smart object, still export as rendered pixels (named in the
-  report). W11-B: all ten layer effects are written as editable `lfx2`
+  arc in its path or a pattern fill under a transform, and a smart object
+  carrying a filter in `smart_filters::RASTERISED` (W16-J/W18-J: linked
+  objects and every other smart filter are written live), still export as
+  rendered pixels (named in the report). W11-B: all ten layer effects are written as editable `lfx2`
   descriptors: inner shadow (`IrSh`), inner glow (`IrGl`), bevel and emboss
   (`ebbl`), satin (`ChFX`) and gradient overlay (`GrFl`) join the drop
   shadow, stroke, colour overlay, outer glow and pattern overlay, with the

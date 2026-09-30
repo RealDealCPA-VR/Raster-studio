@@ -49,6 +49,7 @@ const W18_LANGUAGES: &[(Locale, &str, &str)] = &[
     (Locale::Lt, "lt", "Lietuvi\u{173}"),
     (Locale::Eo, "eo", "Esperanto"),
     (Locale::Sq, "sq", "Shqip"),
+    (Locale::Tl, "tl", "Tagalog"),
 ];
 
 fn ready(ctx: &egui::Context) {
@@ -56,10 +57,12 @@ fn ready(ctx: &egui::Context) {
 }
 
 fn fonts() -> (egui::FontId, egui::FontId) {
-    (
-        egui::FontId::proportional(13.0),
-        egui::FontId::monospace(13.0),
-    )
+    let body = design::egui_theme::font_id(design::Theme::Dark.tokens(), design::TypeRole::Body);
+    let mono = egui::FontId {
+        family: egui::FontFamily::Monospace,
+        ..body.clone()
+    };
+    (body, mono)
 }
 
 /// Every non-English table's name and every row draws in both font families
@@ -161,9 +164,9 @@ fn every_w18_language_is_offered_under_its_own_name_and_translates_the_bar() {
             "{locale:?} leaves the bar in English: {titles:?}"
         );
     }
-    // English, the twelve wave-16 languages and these twenty-four.
-    assert_eq!(Locale::ALL.len(), 37, "{} languages", Locale::ALL.len());
-    assert_eq!(W18_LANGUAGES.len(), 24);
+    // English, the twelve wave-16 languages and these twenty-five.
+    assert_eq!(Locale::ALL.len(), 38, "{} languages", Locale::ALL.len());
+    assert_eq!(W18_LANGUAGES.len(), 25);
 }
 
 /// No table carries Hebrew, Arabic or other right-to-left text: the layout
@@ -558,6 +561,20 @@ const PHOTOPEA_TITLES: &[(Locale, &[(&str, &str)])] = &[
             ("View", "Pamja"),
             ("Window", "Dritarja"),
             ("Help", "Ndihme"),
+        ],
+    ),
+    (
+        Locale::Tl,
+        &[
+            ("File", "File"),
+            ("Edit", "I-edit"),
+            ("Image", "Larawan"),
+            ("Layer", "Layer"),
+            ("Select", "Piliin"),
+            ("Filter", "Salain"),
+            ("View", "Pagtingin"),
+            ("Window", "Bintana"),
+            ("Help", "Tulong"),
         ],
     ),
 ];

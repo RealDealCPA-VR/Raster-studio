@@ -1795,7 +1795,8 @@ fn dragging_an_int_option_writes_it_and_says_so() {
     h.use_tool(tool);
     assert_eq!(
         h.workspace.options.get(tool, "sides"),
-        Some(ui::OptionValue::Int(6))
+        // W18-F: Photopea starts a polygon on five sides.
+        Some(ui::OptionValue::Int(5))
     );
 
     let intents = h.drag_control(ids::tool_option(tool, "sides"), egui::vec2(24.0, 0.0));
@@ -1807,7 +1808,7 @@ fn dragging_an_int_option_writes_it_and_says_so() {
     assert_eq!(last.0, tool);
     assert_eq!(last.1, "sides");
     match last.2 {
-        ui::OptionValue::Int(v) => assert!(v > 6, "Sides went the wrong way: {v}"),
+        ui::OptionValue::Int(v) => assert!(v > 5, "Sides went the wrong way: {v}"),
         other => panic!("Sides emitted {other:?}"),
     }
     // The intent and the workspace agree, so an application that follows the

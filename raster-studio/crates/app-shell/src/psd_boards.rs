@@ -162,7 +162,10 @@ pub(crate) fn import_artboard(
         ArtboardBackground::White => [255, 255, 255, 255],
         ArtboardBackground::Black => [0, 0, 0, 255],
         ArtboardBackground::Transparent => return Ok(()),
-        ArtboardBackground::Other(c) => [c[0] as u8, c[1] as u8, c[2] as u8, 255],
+        ArtboardBackground::Other(c) => {
+            let byte = |v: f64| v.round().clamp(0.0, 255.0) as u8;
+            [byte(c[0]), byte(c[1]), byte(c[2]), 255]
+        }
     };
     let (pw, ph) = ((x1 - x0) as usize, (y1 - y0) as usize);
     let rgba = px.repeat(pw * ph);
@@ -231,15 +234,10 @@ fn effects_of(descriptor: &psd::Descriptor) -> LayerEffects {
     psd::effects::import_effects(&block, &opts()).map_or_else(LayerEffects::default, |i| i.effects)
 }
 
-/// One comp row as the `cmls` entry for `record` (whose bounds are final):
-/// the offset is the record's top-left moved by how far the comp's
-/// translation is from the layer's.
-fn psd_state(
-    id: i32,
-    layer: &Layer,
-    record: &psd::PsdLayer,
-    s: &CompLayerState,
-) -> PsdCompLayerState {
+/// One comp row as a `cmls` entry for `layer`: the `Ofst` is how far the
+/// comp's translation is from the layer's (Photoshop's and Photopea's
+/// `Ofst` is the move from the saved position, not the position).
+fn psd_state(id: i32, layer: &Layer, s: &CompLayerState) -> PsdCompLayerState {
     let t = glam::Affine2::from_cols_array(&s.transform);
     let (dx, dy) = (
         t.translation.x - layer.transform.translation.x,
@@ -255,10 +253,7 @@ fn psd_state(
     PsdCompLayerState {
         comp_id: id,
         visible: Some(s.visible),
-        offset: Some((
-            record.bounds.left.saturating_add(shift(dx)),
-            record.bounds.top.saturating_add(shift(dy)),
-        )),
+        offset: Some((shift(dx), shift(dy))),
         blend_mode: Some(s.blend_mode),
         opacity: Some(f64::from(s.opacity)),
         fill_opacity: Some(f64::from(s.fill_opacity)),
@@ -288,11 +283,11 @@ pub(crate) fn export_comp_states(
     };
     let mut states = Vec::new();
     if let Some(s) = x.last_document_state.as_ref().and_then(|c| c.state_of(id)) {
-        states.push(psd_state(lc::LAST_DOCUMENT_STATE_ID, layer, record, s));
+        states.push(psd_state(lc::LAST_DOCUMENT_STATE_ID, layer, s));
     }
     for (index, comp) in x.layer_comps.iter().enumerate() {
         if let Some(s) = comp.state_of(id) {
-            states.push(psd_state(comp_id(index), layer, record, s));
+            states.push(psd_state(comp_id(index), layer, s));
         }
     }
     lc::set_layer_states(record, &states)?;
@@ -384,10 +379,9 @@ impl ImportedComps {
             return;
         };
         for s in states {
+            // `Ofst` is the move from the saved position.
             let transform = match s.offset {
-                Some((ox, oy)) => {
-                    let dx = f64::from(ox) - f64::from(source.bounds.left);
-                    let dy = f64::from(oy) - f64::from(source.bounds.top);
+                Some((dx, dy)) => {
                     glam::Affine2::from_translation(glam::Vec2::new(dx as f32, dy as f32))
                         * layer.transform
                 }
@@ -683,6 +677,29 @@ mod tests {
         );
         let written = lc::layer_comps(&file.resources, &opts).unwrap().unwrap();
         assert_eq!(written.comps.len(), 3);
+        // Photoshop's `Ofst` is the move from the saved position: Free is
+        // moved by (7, -3) in comp 3 and the Last Document State (captured
+        // after the move), every other row is unmoved.
+        let free_record = file.layers.iter().find(|l| l.name == "Free").unwrap();
+        let free_states = lc::layer_states(free_record, &opts).unwrap();
+        assert_eq!(free_states.len(), 4, "three comps and the last state");
+        let moved = [written.comps[2].id, lc::LAST_DOCUMENT_STATE_ID];
+        for st in &free_states {
+            let want = if moved.contains(&st.comp_id) {
+                (7, -3)
+            } else {
+                (0, 0)
+            };
+            assert_eq!(st.offset, Some(want), "comp id {}", st.comp_id);
+        }
+        let red_record = groups
+            .iter()
+            .flat_map(|g| g.children())
+            .find(|l| l.name == "Red")
+            .unwrap();
+        for st in lc::layer_states(red_record, &opts).unwrap() {
+            assert_eq!(st.offset, Some((0, 0)), "Red never moves");
+        }
         assert_eq!(written.last_applied, Some(written.comps[1].id));
 
         // Reopened: the same artboards, plate at the bottom and painted.

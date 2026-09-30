@@ -855,6 +855,9 @@ pub fn draw(
     context: &MenuContext,
     on_click: &mut dyn FnMut(Intent),
 ) {
+    // W18-G: whichever road opens Export As next (a row here, a chord),
+    // its "convert to sRGB" is offered over a document with a profile.
+    ui::dialogs::export_as::note_document_profile(w18g::document_has_profile(editor));
     let menus = menus(editor);
     // W16-N: Window > Glass Menus fills the menus translucently.
     ui::menu::with_glass_menus(ctx, editor.preferences().glass_menus, || {
@@ -10265,6 +10268,10 @@ mod tests {
                 // source Run parks, which `script::tests::a_script_run_from_
                 // the_window_edits_the_document_as_one_undo_step` drives.
                 || action == MenuAction::Script
+                // W18-G: Save PSD/PSB opens its options dialog first;
+                // `w18g::tests::save_psd_psb_options_change_the_written_file_
+                // and_it_still_reads_back` drives the dialog and the write.
+                || action == MenuAction::SavePsdPsb
                 // W16-K: View > Mode moves the window, not the document;
                 // `w16k_tests::view_mode_rows_set_the_screen_mode` pins it.
                 || matches!(action, MenuAction::SetScreenMode(_))

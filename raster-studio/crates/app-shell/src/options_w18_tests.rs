@@ -609,3 +609,222 @@ fn the_pencil_bars_smoothing_reaches_the_stroke() {
         "Smoothing 90% draws a different (smoother) line: {differ} pixels differ"
     );
 }
+
+/// The marquee's live band, through the shell's published geometry.
+fn marquee_band(pointer: &mut ToolPointer) -> [Vec2; 2] {
+    match pointer.live_geometry() {
+        Some((_, tools::SessionGeometry::Marquee { rect, .. })) => rect,
+        other => panic!("no marquee band: {other:?}"),
+    }
+}
+
+#[test]
+fn alt_draws_the_marquee_out_from_its_centre_through_the_canvas_route() {
+    let _clean = Clean::new();
+    let dir = tempfile::tempdir().unwrap();
+    let mut editor = editor(dir.path());
+    editor.set_tool(ToolId::RectMarquee);
+    let mut pointer = ToolPointer::new();
+    let alt = Modifiers::alt();
+    // Nothing selected: Alt at the press draws out from the press.
+    send(
+        &mut pointer,
+        &mut editor,
+        PointerPhase::Down,
+        (20.0, 20.0),
+        alt,
+        &[],
+    );
+    send(
+        &mut pointer,
+        &mut editor,
+        PointerPhase::Move,
+        (30.0, 25.0),
+        alt,
+        &[],
+    );
+    assert_eq!(
+        marquee_band(&mut pointer),
+        [Vec2::new(10.0, 15.0), Vec2::new(30.0, 25.0)]
+    );
+    send(
+        &mut pointer,
+        &mut editor,
+        PointerPhase::Up,
+        (30.0, 25.0),
+        alt,
+        &[],
+    );
+    let sel = &editor.active().unwrap().document.selection;
+    assert_eq!(
+        sel.bounds(),
+        Some((glam::IVec2::new(10, 15), glam::IVec2::new(30, 25))),
+        "the committed selection is centred on the press"
+    );
+
+    // Over that selection Alt at the press subtracts, corner to corner, and
+    // centres once Alt is pressed afresh during the drag.
+    send(
+        &mut pointer,
+        &mut editor,
+        PointerPhase::Down,
+        (20.0, 20.0),
+        alt,
+        &[],
+    );
+    send(
+        &mut pointer,
+        &mut editor,
+        PointerPhase::Move,
+        (24.0, 22.0),
+        alt,
+        &[],
+    );
+    assert_eq!(
+        marquee_band(&mut pointer),
+        [Vec2::new(20.0, 20.0), Vec2::new(24.0, 22.0)]
+    );
+    let m = Modifiers::NONE;
+    send(
+        &mut pointer,
+        &mut editor,
+        PointerPhase::Move,
+        (24.0, 22.0),
+        m,
+        &[],
+    );
+    send(
+        &mut pointer,
+        &mut editor,
+        PointerPhase::Move,
+        (24.0, 22.0),
+        alt,
+        &[],
+    );
+    assert_eq!(
+        marquee_band(&mut pointer),
+        [Vec2::new(16.0, 18.0), Vec2::new(24.0, 22.0)]
+    );
+    send(
+        &mut pointer,
+        &mut editor,
+        PointerPhase::Up,
+        (24.0, 22.0),
+        alt,
+        &[],
+    );
+    let sel = &editor.active().unwrap().document.selection;
+    assert!(
+        sel.coverage_at(glam::IVec2::new(20, 20)) < 0.5,
+        "the centred band was subtracted"
+    );
+    assert!(sel.coverage_at(glam::IVec2::new(12, 16)) > 0.5);
+}
+
+#[test]
+fn alt_mid_drag_draws_a_box_shape_out_from_its_centre_through_the_canvas_route() {
+    let _clean = Clean::new();
+    let dir = tempfile::tempdir().unwrap();
+    let mut editor = editor(dir.path());
+    editor.set_tool(ToolId::Rectangle);
+    let mut pointer = ToolPointer::new();
+    let size = |pointer: &ToolPointer| {
+        let (_, r) = pointer.live_readout().expect("a live W/H");
+        (r.width_px, r.height_px)
+    };
+    let m = Modifiers::NONE;
+    send(
+        &mut pointer,
+        &mut editor,
+        PointerPhase::Down,
+        (20.0, 20.0),
+        m,
+        &[],
+    );
+    send(
+        &mut pointer,
+        &mut editor,
+        PointerPhase::Move,
+        (30.0, 25.0),
+        m,
+        &[],
+    );
+    assert_eq!(size(&pointer), (10.0, 5.0), "corner to corner");
+    let alt = Modifiers::alt();
+    send(
+        &mut pointer,
+        &mut editor,
+        PointerPhase::Move,
+        (30.0, 25.0),
+        alt,
+        &[],
+    );
+    assert_eq!(size(&pointer), (20.0, 10.0), "Alt: out from the press");
+    let alt_shift = Modifiers { shift: true, ..alt };
+    send(
+        &mut pointer,
+        &mut editor,
+        PointerPhase::Move,
+        (30.0, 25.0),
+        alt_shift,
+        &[],
+    );
+    assert_eq!(
+        size(&pointer),
+        (20.0, 20.0),
+        "Alt + Shift: a centred square"
+    );
+    let steps = send(
+        &mut pointer,
+        &mut editor,
+        PointerPhase::Up,
+        (30.0, 25.0),
+        alt_shift,
+        &[],
+    );
+    assert_eq!(steps, 1, "the centred square lands as one step");
+}
+
+#[test]
+fn the_parametric_polygon_the_bar_starts_draws_five_sides() {
+    let _clean = Clean::new();
+    let dir = tempfile::tempdir().unwrap();
+    let mut editor = editor(dir.path());
+    editor.set_tool(ToolId::Polygon);
+    // What the bar shows, and what the chrome forwards when untouched.
+    let options = ui::ToolOptions::new();
+    assert_eq!(
+        options.get(ToolId::Polygon, "sides"),
+        Some(ui::OptionValue::Int(5))
+    );
+    // An untouched bar forwards nothing (`Chrome::tool_options`): the tool
+    // starts on its own default, which must be the bar's.
+    assert!(options.held(ToolId::Polygon).is_empty());
+    let settings: Vec<(String, ToolSetting)> = Vec::new();
+    let mut pointer = ToolPointer::new();
+    let steps = drag(
+        &mut pointer,
+        &mut editor,
+        &[(8.0, 8.0), (30.0, 30.0), (56.0, 56.0)],
+        &settings,
+    );
+    assert_eq!(steps, 1);
+    let doc = &editor.active().unwrap().document;
+    let shape = doc
+        .layers
+        .iter_depth_first()
+        .into_iter()
+        .find_map(|id| match &doc.layers.get(id)?.kind {
+            layer_model::LayerKind::Shape(s) => Some(s.clone()),
+            _ => None,
+        })
+        .expect("a shape layer");
+    let path = vector::parse_svg(&shape.path_svg).unwrap();
+    let mut corners: Vec<vector::Point> = Vec::new();
+    for p in path.elements().iter().filter_map(|e| e.end_point()) {
+        if !corners.iter().any(|c| c.distance(p) < 0.01) {
+            corners.push(p);
+        }
+    }
+    assert_eq!(corners.len(), 5, "a pentagon: {corners:?}");
+}

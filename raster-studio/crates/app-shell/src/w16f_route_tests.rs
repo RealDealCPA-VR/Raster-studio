@@ -183,7 +183,11 @@ fn a_show_transform_controls_corner_drag_scales_the_layer_in_one_step() {
         Modifiers::NONE,
         &settings,
     );
-    assert_eq!(steps, 1, "the handle drag is one step");
+    // W18-F: as in Photopea the release keeps the session open; Enter (or
+    // the Commit check) lands the handle drag as one step.
+    assert_eq!(steps, 0, "the release holds the session for Enter");
+    assert_eq!(editor.active().unwrap().history_depth(), before);
+    assert_eq!(pointer.commit(&mut editor).failed, None);
     assert_eq!(editor.active().unwrap().history_depth(), before + 1);
     let m = active_layer_transform(&editor);
     assert!((m.matrix2.x_axis.x - 0.5).abs() < 1e-4, "{m:?}");

@@ -44,6 +44,7 @@ const W18: &[Locale] = &[
     Locale::Lt,
     Locale::Eo,
     Locale::Sq,
+    Locale::Tl,
 ];
 
 const TITLES: [&str; 9] = [
