@@ -50,10 +50,9 @@ waves (`53dd398`, `2caaa6c`, `02c7e1b`, `1c5b727` + `7bb295a`, `b477a09`,
 `0e4a6fd`), then eight Photopea-parity waves (wave 7 `8b6c399`, wave 8
 `f9329d0`, wave 9 `9a61faa`, wave 10 `05ec9b1`, wave 11 `fe978d3`, wave 13
 `06abd74`, wave 13X `25b66e0`, wave 15 `44afe56`; there is no wave 12) and
-wave 14's documentation pass (`2392753`). Wave 16 (W16-A … W16-N, the
-final parity audit's items) is on the branch `wip/wave16-partial`
-(`409728a` … `1c34b9c`), reviewed pair by pair but not merged into `main`,
-and CI does not run on that branch; this README describes that branch.
+wave 14's documentation pass (`2392753`), wave 16 (W16-A … W16-N,
+`36e5411`, with the Linux font fix `769fc85`) and wave 18 (W18-A … W18-K,
+`b942fe2`), every pair reviewed; this README describes `main` after wave 18.
 The labels W7-A … W16-N below name the wave that brought a feature. The
 [CHANGELOG](CHANGELOG.md) says what each wave changed. The row-by-row state lives
 in [`docs/parity-matrix.md`](raster-studio/docs/parity-matrix.md).
@@ -1674,7 +1673,7 @@ the workflow.
 ```bash
 cd raster-studio
 cargo check --workspace --all-targets   # type-check everything
-cargo test  --workspace                 # 6,323 #[test] functions
+cargo test  --workspace                 # 6,533 #[test] functions
 cargo run   -p studio-desktop           # launch
 ```
 

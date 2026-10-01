@@ -460,8 +460,8 @@ impl ImportFormat {
     /// W10-F: `.psb`, the large-document variant with 64-bit section lengths,
     /// maps to [`ImportFormat::Psd`]: both start `8BPS`, and the `psd` crate
     /// reads version 2 as well as version 1 through the same layered road.
-    /// `.heic` / `.heif` map to nothing: no reader exists (see
-    /// [`formats::heic_refusal`]), and the content sniff refuses one by name.
+    /// `.heic` / `.heif` map to nothing here: the content sniff finds a HEIC
+    /// by its `ftyp` brand, and W15-A decodes it in the decode worker.
     pub fn from_extension(ext: &str) -> Option<Self> {
         Some(match ext.to_ascii_lowercase().as_str() {
             "png" | "apng" => ImportFormat::Png,

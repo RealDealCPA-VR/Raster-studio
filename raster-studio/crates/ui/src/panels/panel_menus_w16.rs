@@ -6,7 +6,7 @@
 //!
 //! Photopea's Brushes and Styles menus are its app bundle's `cq` gallery
 //! menu, in this order: **Define New**, **Thumbnails / List** (here
-//! "Tiles/List"), **Load .ABR/.ASL** (here "Open .ABR…"/"Open .ASL…"),
+//! "Tiles/List"), **Open .ABR/.ASL** (Photopea's own label, `{VAR0 .}Open`),
 //! **Export as .ABR/.ASL**, **Name Change**, **Delete**, then the bundled
 //! library files it ships (which this build does not list). `cq` leaves
 //! Define New off the Styles (and Shapes) menu, so the Styles menu here has

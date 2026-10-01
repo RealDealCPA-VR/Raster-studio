@@ -32,8 +32,9 @@ the docs commit `6e0287d` (run 36052957676), and `22e31a7` (run
 36054206009) is green. Wave 13 (`06abd74`, run 36084801672) is
 green. Wave 13X (`25b66e0`, run 36102799475), wave 14 (`2392753`, run
 36109214171) and wave 15 (`44afe56`, run 36123487476) are green (the
-release job is skipped on every run: no tag). Wave 16 is on the branch
-`wip/wave16-partial` (`409728a` … `1c34b9c`), where CI does not run.
+release job is skipped on every run: no tag). Wave 16 (`36e5411`) was red on
+ubuntu only (vector-import text dropped: the runner has no fonts); `769fc85`
+(run 36247898361) fixed it and is green. Wave 18 is `b942fe2`.
 
 ### Wave 18
 
@@ -50,7 +51,7 @@ release job is skipped on every run: no tag). Wave 16 is on the branch
 - W18-G: Photopea's remaining menu and export rows. Now: View ▸ Guides from Layer (was New Guides from Shape) puts four guides on each selected layer's bounds, any kind of layer, one undo step; Layer ▸ Duplicate Into… (under Duplicate Layer, the Duplicate Layer dialog with its Destination); Layer ▸ Smart Object ▸ Turn into JPG re-encodes an embedded source as a JPEG (quality 90, transparency onto white), one undo step; the Layers row menu on a smart object ends with Stack Mode as a real submenu (hover opens the eleven modes beside it) and Turn into JPG; File ▸ Export As lists AVIF and RAW (`ExportFormat::Raw(RawLayout)`: Channels 1 / 3 / 4, 8 / 16 Bits, byte order 12-34 / 34-12, headerless interleaved, picked on the three combos the RAW row draws — its Depth is the row's only one, the generic 8 bit / 16 bit Depth is not drawn on a RAW row; on a 16-bit sRGB document a 16 Bits row at 100% writes the document's own 16-bit samples, elsewhere the 8-bit composite widened); Export As offers Photopea's Artboards checkbox and Slices choice (No / All / User Slices) while every row is GIF / PNG / JPG / WebP (Artboards also SVG): a confirmed job with either is written once per artboard, or per slice (All adds the automatic slices covering the rest of the canvas), for every row, through File ▸ Export ▸ Artboards to Files / Slices' route; a PDF row offers Photopea's "reverse pages" and "Pages" (`1, 3-5`, read as Photopea reads it — `export_as::page_mask`): a job with either is written whole, the PDF holding only the pages named, last first when reversed (`layer_ops_w18::export_whole`); over a document with an embedded non-sRGB profile Export As offers Photopea's "Convert to sRGB" (checked by default: converted and untagged, as before; unchecked: the job is written in the document's own space, its samples unchanged and its profile embedded, where the container carries one; the offer follows the active document in every screen mode, Full Screen included); File ▸ Save PSD/PSB… opens Photopea's options dialog (PSD or PSB; Minify the file: Blank preview image, ZIP for pixel data, Put the file into ZIP — `psd::WriteOptions::blank_preview`, `psd::write::zip_container`) and Save writes the file; File ▸ New gains Photopea's Photo, Mobile, Ads and 2ᴺ ("2^N") presets; the transform chords are verified against Photopea and kept as Photoshop's, a documented deviation (Photopea's Alt+Ctrl+T / Shift+Alt+Ctrl+T already mean Free Transform a Copy / Again with Copy here). Still missing: Remove Smart Object pixels (a smart object read from a `.psd` shows its layer pixels here, so a file without them would reopen blank); the PDF's other options (quality, rasterize all, vectorize text, margin: the PDF writer has no switch for them); Convert to sRGB is offered only over an ICC-tagged document (a Display P3 or linear document has no profile bytes to keep), and Pages cannot name a page past 128; the Artboards / Slices options are offered on every document and start off (Photopea shows them only when the document has artboards / slices, Artboards on and All Slices by default — the Export As dialog is not told which the document has), and an archive per option (Photopea's ZIP of the files) is not written: the files land in the chosen folder.
 - W18-B: artboards and layer comps survive a `.psd`. `psd::artboard` reads and writes Photoshop's artboard block (`artb`, and `artd` / `abdd` on read: `artboardRect`, background type and `Clr `, preset name) on the group record, and `psd::layer_comps` reads and writes image resource 1065 (a `CompList` descriptor, as Photopea writes it: comp names, ids, `capturedInfo` flags, comments, last applied) and each layer's `shmd` / `cmls` settings (visibility; position as `Ofst`, the move from the layer's saved position — Photopea adds the layer's place on open and takes it off on save — with the place itself as `FXRefPoint`; blend, opacity, fill, `Lefx`; later entries inheriting from earlier ones as Photoshop writes them, a first entry without `enab` / `Ofst` read as visible and unmoved), all bounded and never panicking. Save as PSD writes an artboard as that block instead of its background plate and the comps with the Last Document State as comp id 0; opening rebuilds the painted plate and the comps with their per-layer rows (`import::psd_boards::tests::two_artboards_and_three_comps_round_trip_through_psd`). Still not: the Photoshop layouts are checked only on hand-built blocks and Photopea's own reader/writer code (no Photoshop-written file was available); an artboard's preset name is written empty and not kept on open (the document's artboard has no preset field); a plate's own pixels beyond its colour, a translucent background's alpha, a comp's scale or rotation (written as the offset) and a plate's comp row are not written, because the format has no place for them; per-comp layer-mask position and smart-filter state are still not recorded.
 
-### Wave 16 — the final parity audit's items (branch `wip/wave16-partial`, not on `main`)
+### Wave 16 — the final parity audit's items (`36e5411`)
 
 Fourteen doer/reviewer pairs, W16-A … W16-N, one per group of findings of
 a final audit of Photopea's features against this build. The first run was
@@ -64,8 +65,8 @@ closed by the orchestrator (`Editor::open_resource_file` asks
 `Editor::open_video_file` first, `Editor::place_path` asks
 `Editor::place_video_file` first). `1c34b9c`'s message records 6312 tests
 passing with clippy `-D warnings`, rustfmt and `cargo audit` clean on the
-local machine; CI has not run on this branch (the workflow runs on pushes
-to `main` and on pull requests). The bullets below are one per pair, with
+local machine; merged into `main` as `36e5411`, whose CI was red on ubuntu
+only until `769fc85`. The bullets below are one per pair, with
 each pair's stated gaps.
 
 - W16-A: **selection tools follow Photopea's gestures.** A drag inside the
@@ -274,7 +275,7 @@ each pair's stated gaps.
   files are errors, bit-flipped ones come back as results, and the process
   survives all 46).
 
-- W16-N: **Twelve interface languages and Glass Menus.** Window ▸ Language
+- W16-N: **Thirteen interface languages (English and twelve translations) and Glass Menus.** Window ▸ Language
   (Photopea's More ▸ Language) switches the interface live between English,
   Deutsch, Español, Français, Italiano, Polski, Português (Brasil), Türkçe,
   Русский, Українська, 简体中文, 日本語 and 한국어, stored in preferences. Each
