@@ -6959,6 +6959,13 @@ mod tests {
         shell.editor.set_tool(tool);
         let ctx = egui::Context::default();
         crate::chrome::install_theme(&ctx, design::Theme::Dark);
+        // These frames carry no clock, so egui reads the wall clock: on a
+        // slow runner a hovered control's tooltip (0.5 s) or a fade could
+        // appear between two counts. Neither is what this test measures.
+        ctx.style_mut(|s| {
+            s.interaction.tooltip_delay = f32::INFINITY;
+            s.animation_time = 0.0;
+        });
         let idle = painted_shape_count(&ctx, &mut shell);
 
         gesture(&mut shell);

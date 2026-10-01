@@ -20,7 +20,6 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
 
 // W18-K: the language gates for the tables and faces added in wave 18.
@@ -257,12 +256,15 @@ impl Locale {
     }
 }
 
-/// The active locale. One per process: the editor is a single-window app and
-/// the choice lives in preferences, installed at startup and again the moment
-/// the preference changes (`Editor::set_preferences`).
-static ACTIVE: AtomicU8 = AtomicU8::new(0);
-
 thread_local! {
+    /// The active locale, per thread. The editor is a single-window app: its
+    /// UI thread installs the preference at startup and again the moment it
+    /// changes (`Editor::set_preferences`), and that same thread draws every
+    /// string (`tr` is only called from the chrome). Kept per thread so that
+    /// tests, which run in parallel threads of one process, cannot switch
+    /// each other's language (a menu sweep performing Window > Language rows
+    /// once flipped a concurrent shell test's menus into another language).
+    static ACTIVE: Cell<u8> = const { Cell::new(0) };
     /// A locale pinned for the current thread by [`with_locale`], ahead of the
     /// process-wide one. Tests run in parallel threads of one process: a test
     /// that switched the process-wide locale would flip every other test's
@@ -270,9 +272,9 @@ thread_local! {
     static SCOPED: Cell<Option<Locale>> = const { Cell::new(None) };
 }
 
-/// Switch the catalogue's locale for the whole process.
+/// Switch the catalogue's locale for the calling (UI) thread.
 pub fn set_locale(locale: Locale) {
-    ACTIVE.store(locale.index() as u8, Ordering::Relaxed);
+    ACTIVE.with(|a| a.set(locale.index() as u8));
 }
 
 /// The locale in force on this thread.
@@ -280,7 +282,7 @@ pub fn active() -> Locale {
     if let Some(scoped) = SCOPED.with(Cell::get) {
         return scoped;
     }
-    let index = ACTIVE.load(Ordering::Relaxed) as usize;
+    let index = ACTIVE.with(Cell::get) as usize;
     Locale::ALL.get(index).copied().unwrap_or(Locale::En)
 }
 
@@ -2896,6 +2898,20 @@ mod tests {
         with_locale(Locale::Ja, || assert_ne!(tr_en("File"), "File"));
         assert_eq!(tr_en("File"), "File");
         assert_eq!(Locale::De.display_name(), "Deutsch");
+    }
+
+    /// A locale switched on one thread (a test's editor performing Window >
+    /// Language) never reaches another thread's strings.
+    #[test]
+    fn set_locale_on_one_thread_leaves_another_threads_language_alone() {
+        let before = active();
+        std::thread::spawn(|| {
+            set_locale(Locale::De);
+            assert_eq!(active(), Locale::De);
+        })
+        .join()
+        .unwrap();
+        assert_eq!(active(), before, "another thread's set_locale leaked here");
     }
 
     #[test]
