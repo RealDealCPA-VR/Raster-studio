@@ -10,8 +10,27 @@ names what changed and, where it matters, how it was verified.
 
 ## [Unreleased]
 
+### Documentation and release readiness (after wave 18)
+
+- **README rewritten for new users and partners.** The root README is now a
+  short overview: what the app is, what it does, project status, a complete
+  grouped list of what is still missing versus Photopea (re-derived from the
+  parity matrix's own gap notes and checked against the code), and how to
+  build it. The previous item-by-item feature and gap detail moved, unchanged
+  apart from fixes, to `raster-studio/docs/FEATURES.md`; the crate map moved
+  to `raster-studio/README.md`.
+- Stale claims fixed: the release job "never run" (README, workspace README,
+  parity matrix), the parity matrix's Parametric Shape defaults (fixed in
+  W18-F) and its panel-menu label note (Photopea's own words are "Open .ABR"
+  and "Tiles/List").
+- **Release dry run green** (`be59b92`, run 36819294457): the Windows
+  installer, macOS disk image and Debian package build as workflow
+  artifacts. No version is tagged.
+- `be59b92`: the interface language is per thread, so tests can no longer
+  switch each other's language (a CI-only flake in a shell overlay test).
+
 Six fix waves (0-5), each from a fresh adversarial audit of the commit
-before it, then the Photopea-parity waves 7-11, 13, 13X, 15 and 16, each
+before it, then the Photopea-parity waves 7-11, 13, 13X, 15, 16 and 18, each
 from an audit of Photopea's features against this build, and the docs
 pass of wave 14. Every entry below is taken
 from its commit message and checked against the code; where a wave left
