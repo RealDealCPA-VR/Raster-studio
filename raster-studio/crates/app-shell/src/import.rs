@@ -1984,8 +1984,13 @@ pub fn document_from_psd(
                 document.set_asset_origin(p.asset.clone());
                 placed = DocRect::from_psd(source.bounds);
                 // W18-J: its smart-filter mask, from the document's `FEid`.
-                let mask =
-                    psd_live::import_filter_mask(&file.extra, source, id, &mut document, &mut tiles);
+                let mask = psd_live::import_filter_mask(
+                    &file.extra,
+                    source,
+                    id,
+                    &mut document,
+                    &mut tiles,
+                );
                 if let Err(why) = mask {
                     notes.push(format!("the smart object “{}”: {why}", source.name));
                 }

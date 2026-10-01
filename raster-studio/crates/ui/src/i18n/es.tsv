@@ -30,6 +30,10 @@ Save PSD/PSB…	Guardar PSD/PSB…
 Select or draw a path first	Primero seleccione o dibuje un trazado
 Right-click on a text layer	Haga clic derecho en una capa de texto
 Right-click inside a slice	Haga clic derecho dentro de un sector
+Share…	Compartir…
+Remove BG	Quitar fondo
+Publishing online is not part of this build	La publicación en línea no forma parte de esta versión
+Background removal is not part of this build	La eliminación del fondo no forma parte de esta versión
 Divide Slices	Dividir sectores
 N equal parts	N partes iguales
 N pixels per part	N píxeles por parte
@@ -326,7 +330,7 @@ Columns	Columnas
 Columns and rows with gutters between them, inside optional margins, in pixels.	Columnas y filas con medianiles entre ellas, dentro de márgenes opcionales, en píxeles.
 Combine Shapes	Combinar formas
 Commit (Enter)	Confirmar (Intro)
-Cancel (Esc)	Cancelar (Esc)
+Cancel	Cancelar
 All Documents	Todos los documentos
 Select Source	Seleccionar origen
 Alt	Alt
@@ -1126,7 +1130,7 @@ Purge	Purgar
 Purple	Morado
 Quadtone	Cuatritono
 Quality	Calidad
-Quick Export Layer as PNG…	Exportación rápida de capa como PNG…
+Quick Export Selected Layers…	Exportación rápida de las capas seleccionadas…
 Quit	Salir
 RGB Color	Color RGB
 Radial Blur…	Desenfoque radial…
@@ -1676,3 +1680,8 @@ Make	Crear
 There is no path; draw one or select it in the Paths panel	No hay ningún trazado; dibuje uno o selecciónelo en el panel Trazados
 Reverse pages	Invertir páginas
 Convert to sRGB	Convertir a sRGB
+Use GPU	Usar GPU
+Quick Export	Exportación rápida
+The active layer, alone	La capa activa, sola
+{n} selected layers, each to its own file	{n} capas seleccionadas, cada una en su propio archivo
+An SVG is resolution-free: it is written at canvas size	Un SVG no depende de la resolución: se escribe al tamaño del lienzo

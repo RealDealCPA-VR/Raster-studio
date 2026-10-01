@@ -18,6 +18,10 @@ Right-click inside a path	Faceți clic dreapta în interiorul unui traseu
 Select or draw a path first	Selectați sau desenați mai întâi un traseu
 Right-click on a text layer	Faceți clic dreapta pe un strat text
 Right-click inside a slice	Faceți clic dreapta în interiorul unei felii
+Share…	Partajează…
+Remove BG	Elimină fundalul
+Publishing online is not part of this build	Publicarea online nu face parte din această versiune
+Background removal is not part of this build	Eliminarea fundalului nu face parte din această versiune
 Divide Slices	Împărțire felii
 N equal parts	N părți egale
 N pixels per part	N pixeli pe parte
@@ -1110,7 +1114,7 @@ Purge	Eliberare memorie
 Purple	Mov
 Quadtone	Cvadricromie
 Quality	Calitate
-Quick Export Layer as PNG…	Export rapid strat ca PNG…
+Quick Export Selected Layers…	Export rapid al straturilor selectate…
 Quit	Ieșire din aplicație
 RGB Color	Culoare RGB
 Radial Blur…	Estompare radială…
@@ -1658,7 +1662,7 @@ Minify the file	Micșorarea fișierului
 RAW…	RAW…
 Save PSD/PSB	Salvare PSD/PSB
 Save PSD/PSB…	Salvare PSD/PSB…
-Cancel (Esc)	Anulare (Esc)
+Cancel	Anulare
 All Documents	Toate documentele
 Select Source	Selectare sursă
 Alt	Alt
@@ -1676,3 +1680,8 @@ Purge All	Golire totală
 Make	Creare
 Reverse pages	Inversează paginile
 Convert to sRGB	Convertește în sRGB
+Use GPU	Folosește GPU
+Quick Export	Export rapid
+The active layer, alone	Stratul activ, singur
+{n} selected layers, each to its own file	{n} straturi selectate, fiecare în propriul fișier
+An SVG is resolution-free: it is written at canvas size	Un SVG nu depinde de rezoluție: este scris la dimensiunea pânzei

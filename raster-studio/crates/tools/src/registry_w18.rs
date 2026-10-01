@@ -89,7 +89,8 @@ pub fn pending_for(tool: ToolId) -> Option<bool> {
         .and_then(|(t, pending)| (t == tool).then_some(pending))
 }
 
-/// The bar's Cancel cross: abandon the held edit, as Escape does.
+/// The bar's Cancel cross: discard the held edit (a Type run included,
+/// which Escape would commit instead).
 pub fn post_cancel() {
     CANCEL.with(|c| c.set(true));
 }

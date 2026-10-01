@@ -30,6 +30,10 @@ Save PSD/PSB…	PSD/PSB を保存…
 Select or draw a path first	先にパスを選択または描画してください
 Right-click on a text layer	テキストレイヤーを右クリックしてください
 Right-click inside a slice	スライスの内側を右クリックしてください
+Share…	共有…
+Remove BG	背景を削除
+Publishing online is not part of this build	オンライン公開はこのバージョンには含まれていません
+Background removal is not part of this build	背景の削除はこのバージョンには含まれていません
 Divide Slices	スライスを分割
 N equal parts	N 等分
 N pixels per part	1 部分あたり N ピクセル
@@ -326,7 +330,7 @@ Columns	列
 Columns and rows with gutters between them, inside optional margins, in pixels.	間隔をあけた列と行（ピクセル単位、任意のマージン内）。
 Combine Shapes	シェイプを結合
 Commit (Enter)	確定（Enter）
-Cancel (Esc)	キャンセル (Esc)
+Cancel	キャンセル
 All Documents	すべてのドキュメント
 Select Source	ソースを選択
 Alt	Alt
@@ -1126,7 +1130,7 @@ Purge	メモリをクリア
 Purple	パープル
 Quadtone	クワッドトーン
 Quality	画質
-Quick Export Layer as PNG…	レイヤーを PNG としてクイック書き出し…
+Quick Export Selected Layers…	選択したレイヤーをクイック書き出し…
 Quit	終了
 RGB Color	RGB カラー
 Radial Blur…	ぼかし（放射状）…
@@ -1676,3 +1680,8 @@ Make	作成
 There is no path; draw one or select it in the Paths panel	パスがありません。パスを描くか、パスパネルで選択してください
 Reverse pages	ページを逆順にする
 Convert to sRGB	sRGB に変換
+Use GPU	GPU を使用
+Quick Export	クイック書き出し
+The active layer, alone	アクティブなレイヤーのみ
+{n} selected layers, each to its own file	選択した {n} 個のレイヤー（それぞれ別ファイル）
+An SVG is resolution-free: it is written at canvas size	SVG は解像度に依存しません：カンバスサイズで書き出されます

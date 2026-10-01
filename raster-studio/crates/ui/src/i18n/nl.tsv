@@ -30,6 +30,10 @@ Save PSD/PSB…	PSD/PSB opslaan…
 Select or draw a path first	Selecteer of teken eerst een pad
 Right-click on a text layer	Klik met de rechtermuisknop op een tekstlaag
 Right-click inside a slice	Klik met de rechtermuisknop binnen een segment
+Share…	Delen…
+Remove BG	Achtergrond verwijderen
+Publishing online is not part of this build	Online publiceren maakt geen deel uit van deze versie
+Background removal is not part of this build	Achtergrond verwijderen maakt geen deel uit van deze versie
 Divide Slices	Segmenten verdelen
 N equal parts	N gelijke delen
 N pixels per part	N pixels per deel
@@ -326,7 +330,7 @@ Columns	Kolommen
 Columns and rows with gutters between them, inside optional margins, in pixels.	Kolommen en rijen met tussenruimten, binnen optionele marges, in pixels.
 Combine Shapes	Vormen combineren
 Commit (Enter)	Doorvoeren (Enter)
-Cancel (Esc)	Annuleren (Esc)
+Cancel	Annuleren
 All Documents	Alle documenten
 Select Source	Bron selecteren
 Alt	Alt
@@ -1126,7 +1130,7 @@ Purge	Leegmaken
 Purple	Paars
 Quadtone	Quadtoon
 Quality	Kwaliteit
-Quick Export Layer as PNG…	Laag snel exporteren als PNG…
+Quick Export Selected Layers…	Snel exporteren van geselecteerde lagen…
 Quit	Afsluiten
 RGB Color	RGB-kleur
 Radial Blur…	Radiaal vervagen…
@@ -1676,3 +1680,8 @@ a	a
 b	b
 Reverse pages	Pagina's omkeren
 Convert to sRGB	Converteren naar sRGB
+Use GPU	GPU gebruiken
+Quick Export	Snel exporteren
+The active layer, alone	De actieve laag, alleen
+{n} selected layers, each to its own file	{n} geselecteerde lagen, elk naar een eigen bestand
+An SVG is resolution-free: it is written at canvas size	Een SVG is resolutie-onafhankelijk: hij wordt op canvasgrootte geschreven

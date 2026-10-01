@@ -18,6 +18,10 @@ Right-click inside a path	Kattintson a jobb gombbal egy útvonalon belül
 Select or draw a path first	Előbb jelöljön ki vagy rajzoljon egy útvonalat
 Right-click on a text layer	Kattintson a jobb gombbal egy szövegrétegre
 Right-click inside a slice	Kattintson a jobb gombbal egy szeleten belül
+Share…	Megosztás…
+Remove BG	Háttér eltávolítása
+Publishing online is not part of this build	Az online közzététel nem része ennek a verziónak
+Background removal is not part of this build	A háttér eltávolítása nem része ennek a verziónak
 Divide Slices	Szeletek felosztása
 N equal parts	N egyenlő rész
 N pixels per part	N képpont részenként
@@ -1110,7 +1114,7 @@ Purge	Kiürítés
 Purple	Lila
 Quadtone	Négytónusú
 Quality	Minőség
-Quick Export Layer as PNG…	Réteg gyorsexportálása PNG-be…
+Quick Export Selected Layers…	A kijelölt rétegek gyorsexportálása…
 Quit	Kilépés
 RGB Color	RGB szín
 Radial Blur…	Sugaras életlenítés…
@@ -1658,7 +1662,7 @@ Minify the file	A fájl tömörítése
 RAW…	RAW…
 Save PSD/PSB	PSD/PSB mentése
 Save PSD/PSB…	PSD/PSB mentése…
-Cancel (Esc)	Mégse (Esc)
+Cancel	Mégse
 All Documents	Összes dokumentum
 Select Source	Forrás kijelölése
 Alt	Alt
@@ -1676,3 +1680,8 @@ Purge All	Minden kiürítése
 Make	Létrehozás
 Reverse pages	Oldalak megfordítása
 Convert to sRGB	Konvertálás sRGB-be
+Use GPU	GPU használata
+Quick Export	Gyors exportálás
+The active layer, alone	Az aktív réteg, önmagában
+{n} selected layers, each to its own file	{n} kijelölt réteg, mindegyik külön fájlba
+An SVG is resolution-free: it is written at canvas size	Az SVG felbontásfüggetlen: vászonméretben íródik ki

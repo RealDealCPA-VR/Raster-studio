@@ -30,6 +30,10 @@ Save PSD/PSB…	Spara PSD/PSB…
 Select or draw a path first	Markera eller rita en bana först
 Right-click on a text layer	Högerklicka på ett textlager
 Right-click inside a slice	Högerklicka inuti ett segment
+Share…	Dela…
+Remove BG	Ta bort bakgrund
+Publishing online is not part of this build	Onlinepublicering ingår inte i den här versionen
+Background removal is not part of this build	Borttagning av bakgrund ingår inte i den här versionen
 Divide Slices	Dela segment
 N equal parts	N lika delar
 N pixels per part	N pixlar per del
@@ -326,7 +330,7 @@ Columns	Kolumner
 Columns and rows with gutters between them, inside optional margins, in pixels.	Kolumner och rader med mellanrum emellan, inom valfria marginaler, i pixlar.
 Combine Shapes	Kombinera former
 Commit (Enter)	Verkställ (Retur)
-Cancel (Esc)	Avbryt (Esc)
+Cancel	Avbryt
 All Documents	Alla Dokument
 Select Source	Välj källa
 Alt	Alt
@@ -1126,7 +1130,7 @@ Purge	Töm
 Purple	Violett
 Quadtone	Kvadroton
 Quality	Kvalitet
-Quick Export Layer as PNG…	Snabbexportera lager som PNG…
+Quick Export Selected Layers…	Snabbexport av markerade lager…
 Quit	Avsluta
 RGB Color	RGB-färg
 Radial Blur…	Radiell oskärpa…
@@ -1676,3 +1680,8 @@ Purge Histories	Töm historiker
 Purge All	Töm allt
 Reverse pages	Omvänd sidordning
 Convert to sRGB	Konvertera till sRGB
+Use GPU	Använd GPU
+Quick Export	Snabbexport
+The active layer, alone	Det aktiva lagret, ensamt
+{n} selected layers, each to its own file	{n} markerade lager, vart och ett till en egen fil
+An SVG is resolution-free: it is written at canvas size	En SVG är upplösningsoberoende: den skrivs i arbetsytans storlek

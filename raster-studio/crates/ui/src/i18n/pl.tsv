@@ -30,6 +30,10 @@ Save PSD/PSB…	Zapisz PSD/PSB…
 Select or draw a path first	Najpierw zaznacz lub narysuj ścieżkę
 Right-click on a text layer	Kliknij prawym przyciskiem warstwę tekstową
 Right-click inside a slice	Kliknij prawym przyciskiem wewnątrz plasterka
+Share…	Udostępnij…
+Remove BG	Usuń tło
+Publishing online is not part of this build	Publikowanie online nie jest częścią tej wersji
+Background removal is not part of this build	Usuwanie tła nie jest częścią tej wersji
 Divide Slices	Podziel plasterki
 N equal parts	N równych części
 N pixels per part	N pikseli na część
@@ -326,7 +330,7 @@ Columns	Kolumny
 Columns and rows with gutters between them, inside optional margins, in pixels.	Kolumny i wiersze z odstępami między nimi, w opcjonalnych marginesach, w pikselach.
 Combine Shapes	Połącz kształty
 Commit (Enter)	Zatwierdź (Enter)
-Cancel (Esc)	Anuluj (Esc)
+Cancel	Anuluj
 All Documents	Wszystkie dokumenty
 Select Source	Wybierz źródło
 Alt	Alt
@@ -1126,7 +1130,7 @@ Purge	Wyczyść pamięć
 Purple	Fioletowy
 Quadtone	Czterotonowy
 Quality	Jakość
-Quick Export Layer as PNG…	Szybki eksport warstwy jako PNG…
+Quick Export Selected Layers…	Szybki eksport zaznaczonych warstw…
 Quit	Zakończ
 RGB Color	Kolor RGB
 Radial Blur…	Rozmycie radialne…
@@ -1676,3 +1680,8 @@ Make	Utwórz
 There is no path; draw one or select it in the Paths panel	Brak ścieżki; narysuj ją lub zaznacz w panelu Ścieżki
 Reverse pages	Odwróć kolejność stron
 Convert to sRGB	Konwertuj do sRGB
+Use GPU	Używaj GPU
+Quick Export	Szybki eksport
+The active layer, alone	Aktywna warstwa, osobno
+{n} selected layers, each to its own file	Zaznaczone warstwy ({n}), każda do osobnego pliku
+An SVG is resolution-free: it is written at canvas size	SVG nie zależy od rozdzielczości: zapisuje się w rozmiarze obszaru roboczego

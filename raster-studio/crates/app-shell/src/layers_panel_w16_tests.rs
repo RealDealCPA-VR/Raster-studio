@@ -1035,3 +1035,39 @@ fn a_long_tap_on_a_row_opens_its_menu_when_the_option_is_on() {
     );
     assert!(rig.drawn(ui::context_menu::ids::context_item(0)));
 }
+
+/// W18-I: an effect switched off with its eye is kept in the saved
+/// document, as Photopea keeps it: saved to `.rstudio` and reopened, the
+/// Stroke row is still listed with its eye off, and its eye brings back the
+/// same 5 px stroke.
+#[test]
+fn a_hidden_effect_is_saved_with_the_document_and_comes_back_on_reopen() {
+    let mut rig = Rig::new();
+    let id = rig.styled();
+    rig.click(ids::effect_eye(id, EffectSlot::Stroke));
+    assert!(rig.layer(id).effects.stroke.is_none(), "the stroke is off");
+    let project = rig._dir.path().join("hidden-fx.rstudio");
+    rig.ed
+        .active_mut()
+        .unwrap()
+        .save_to(&project, "test")
+        .expect("the save succeeds");
+    rig.ed.open_path(&project).unwrap();
+    rig.settle();
+    rig.settle();
+    assert!(
+        rig.layer(id).effects.stroke.is_none(),
+        "reopened, still off"
+    );
+    assert!(
+        rig.drawn(ids::effect_row(id, EffectSlot::Stroke)),
+        "the reopened document still lists the hidden Stroke"
+    );
+    rig.click(ids::effect_eye(id, EffectSlot::Stroke));
+    assert_eq!(
+        rig.layer(id).effects.stroke.as_ref().map(|s| s.size_px),
+        Some(5.0),
+        "the eye brought back the parameters saved with the document"
+    );
+    assert!(rig.layer(id).effects.extras.hidden.is_none());
+}

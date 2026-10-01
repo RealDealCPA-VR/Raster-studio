@@ -30,6 +30,10 @@ Save PSD/PSB…	Зберегти PSD/PSB…
 Select or draw a path first	Спершу виберіть або намалюйте контур
 Right-click on a text layer	Клацніть правою кнопкою на текстовому шарі
 Right-click inside a slice	Клацніть правою кнопкою всередині фрагмента
+Share…	Поділитися…
+Remove BG	Видалити фон
+Publishing online is not part of this build	Публікація в інтернеті не входить до цієї версії
+Background removal is not part of this build	Видалення фону не входить до цієї версії
 Divide Slices	Розділити фрагменти
 N equal parts	N рівних частин
 N pixels per part	N пікселів на частину
@@ -326,7 +330,7 @@ Columns	Стовпці
 Columns and rows with gutters between them, inside optional margins, in pixels.	Стовпці й рядки з проміжками між ними, усередині необов'язкових полів, у пікселях.
 Combine Shapes	Об'єднати фігури
 Commit (Enter)	Застосувати (Enter)
-Cancel (Esc)	Скасувати (Esc)
+Cancel	Скасувати
 All Documents	Усі документи
 Select Source	Вибрати джерело
 Alt	Alt
@@ -1126,7 +1130,7 @@ Purge	Очистити пам'ять
 Purple	Фіолетова
 Quadtone	Квадротон
 Quality	Якість
-Quick Export Layer as PNG…	Швидкий експорт шару в PNG…
+Quick Export Selected Layers…	Швидкий експорт вибраних шарів…
 Quit	Вихід
 RGB Color	Кольори RGB
 Radial Blur…	Радіальне розмиття…
@@ -1676,3 +1680,8 @@ Make	Створити
 There is no path; draw one or select it in the Paths panel	Немає контуру; намалюйте його або виберіть на панелі «Контури»
 Reverse pages	Зворотний порядок сторінок
 Convert to sRGB	Перетворити в sRGB
+Use GPU	Використовувати GPU
+Quick Export	Швидкий експорт
+The active layer, alone	Активний шар окремо
+{n} selected layers, each to its own file	Вибрані шари ({n}), кожен у свій файл
+An SVG is resolution-free: it is written at canvas size	SVG не залежить від роздільності: він записується в розмірі полотна

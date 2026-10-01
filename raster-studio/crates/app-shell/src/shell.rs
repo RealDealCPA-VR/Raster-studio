@@ -914,7 +914,9 @@ impl Shell {
 
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(window.clone())?;
-        let gpu = pollster::block_on(GpuContext::for_surface(instance, &surface))
+        // W18-I: Window > Use GPU off asks for the software adapter.
+        let use_gpu = self.editor.preferences().use_gpu;
+        let gpu = pollster::block_on(GpuContext::for_surface_with(instance, &surface, use_gpu))
             .map_err(ShellError::Gpu)?;
         // The diagnostics bundle names the adapter the window ACTUALLY got.
         self.editor
@@ -1863,7 +1865,14 @@ impl Shell {
             }
         }
         if let Some(prefs) = output.preferences {
+            // W18-I: Window > Use GPU applies when the window's device is
+            // next made, at the next start; the status line says so.
+            let gpu_changed = prefs.use_gpu != self.editor.preferences().use_gpu;
+            let use_gpu = prefs.use_gpu;
             self.editor.set_preferences(prefs);
+            if gpu_changed {
+                self.editor.set_status(use_gpu_status(use_gpu));
+            }
         }
         // The Preferences dialog's confirmed schema maps onto the app's own
         // preferences, keymap page included (`Editor::apply_ui_preferences`);
@@ -2773,6 +2782,16 @@ fn system_theme(window: &Window) -> design::Theme {
     match window.theme() {
         Some(winit::window::Theme::Light) => design::Theme::Light,
         _ => design::Theme::Dark,
+    }
+}
+
+/// W18-I: the status line Window > Use GPU leaves: the switch applies when
+/// the window's device is next made, at the next start.
+fn use_gpu_status(use_gpu: bool) -> &'static str {
+    if use_gpu {
+        "Use GPU is on: Raster Studio draws on the graphics card from its next start"
+    } else {
+        "Use GPU is off: Raster Studio draws on the software renderer from its next start"
     }
 }
 

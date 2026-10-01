@@ -30,6 +30,10 @@ Save PSD/PSB…	PSD/PSB kaydet…
 Select or draw a path first	Önce bir yol seçin veya çizin
 Right-click on a text layer	Bir metin katmanına sağ tıklayın
 Right-click inside a slice	Bir dilimin içine sağ tıklayın
+Share…	Paylaş…
+Remove BG	Arka planı kaldır
+Publishing online is not part of this build	Çevrimiçi yayımlama bu sürümün parçası değil
+Background removal is not part of this build	Arka plan kaldırma bu sürümün parçası değil
 Divide Slices	Dilimleri Böl
 N equal parts	N eşit parça
 N pixels per part	Parça başına N piksel
@@ -326,7 +330,7 @@ Columns	Sütunlar
 Columns and rows with gutters between them, inside optional margins, in pixels.	Aralarında oluklar olan sütunlar ve satırlar, isteğe bağlı kenar boşlukları içinde, piksel cinsinden.
 Combine Shapes	Şekilleri Birleştir
 Commit (Enter)	Uygula (Enter)
-Cancel (Esc)	İptal (Esc)
+Cancel	İptal
 All Documents	Tüm belgeler
 Select Source	Kaynak seç
 Alt	Alt
@@ -1126,7 +1130,7 @@ Purge	Temizle
 Purple	Mor
 Quadtone	Dört Ton
 Quality	Kalite
-Quick Export Layer as PNG…	Katmanı PNG Olarak Hızlı Dışa Aktar…
+Quick Export Selected Layers…	Seçili Katmanları Hızlı Dışa Aktar…
 Quit	Çık
 RGB Color	RGB Renk
 Radial Blur…	Radyal Bulanıklaştırma…
@@ -1676,3 +1680,8 @@ Make	Oluştur
 There is no path; draw one or select it in the Paths panel	Yol yok; bir yol çizin veya Yollar panelinde seçin
 Reverse pages	Sayfaları ters çevir
 Convert to sRGB	sRGB'ye dönüştür
+Use GPU	GPU kullan
+Quick Export	Hızlı Dışa Aktar
+The active layer, alone	Etkin katman, tek başına
+{n} selected layers, each to its own file	Seçili {n} katman, her biri kendi dosyasına
+An SVG is resolution-free: it is written at canvas size	SVG çözünürlükten bağımsızdır: tuval boyutunda yazılır

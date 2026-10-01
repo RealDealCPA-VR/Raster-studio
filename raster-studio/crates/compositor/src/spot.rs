@@ -48,7 +48,8 @@ pub(crate) fn lay_spot_inks(doc: &Document, space: &ColorSpace, level: u8, canva
     }
     let rect = canvas.rect();
     let stride = i64::from(rect.width.max(1));
-    for channel in &doc.spot_channels {
+    // W18-I: a channel whose eye is off lays no ink.
+    for channel in doc.spot_channels.iter().filter(|c| !c.hidden) {
         let ink = to_linear(space, channel.ink.map(|v| f32::from(v) / 255.0));
         let s = channel.solidity_fraction();
         for (i, px) in canvas.pixels_mut().iter_mut().enumerate() {
@@ -84,6 +85,8 @@ pub(crate) fn ink_over(backdrop: [f32; 4], ink: [f32; 3], a_s: f32, s: f32) -> [
 pub(crate) fn hash_spot_inks(doc: &Document, level: u8, rect: PixelRect, h: &mut DefaultHasher) {
     doc.spot_channels.len().hash(h);
     for channel in &doc.spot_channels {
+        // W18-I: the eye changes what the tile shows.
+        channel.hidden.hash(h);
         channel.ink.hash(h);
         channel.solidity.hash(h);
         for y in rect.y..rect.bottom() {
@@ -168,5 +171,35 @@ mod tests {
             second.to_rgba8(&doc.meta.color_space)[..4],
             [255, 0, 0, 255]
         );
+    }
+
+    /// W18-I: a spot channel whose eye is off lays no ink, and the cached
+    /// tile follows the eye both ways.
+    #[test]
+    fn a_hidden_spot_channel_lays_no_ink_and_the_cache_follows_its_eye() {
+        let source = MemoryTileSource::new();
+        let mut cache = TileCompositor::new();
+        let region = PixelRect::new(0, 0, 8, 8);
+        let mut doc = doc_with_spot(100);
+        let at = |c: &Canvas, doc: &Document| c.to_rgba8(&doc.meta.color_space)[..4].to_vec();
+        let shown = cache
+            .composite_region(&doc, &source, region, 0, CompositeOptions::default())
+            .unwrap();
+        assert_eq!(at(&shown, &doc), [0, 255, 0, 255]);
+        doc.spot_channels[0].hidden = true;
+        let hidden = cache
+            .composite_region(&doc, &source, region, 0, CompositeOptions::default())
+            .unwrap();
+        assert_eq!(
+            at(&hidden, &doc),
+            [0, 0, 0, 0],
+            "the hidden ink still shows"
+        );
+        assert_eq!(px(&doc, 1, 1), [0, 0, 0, 0]);
+        doc.spot_channels[0].hidden = false;
+        let back = cache
+            .composite_region(&doc, &source, region, 0, CompositeOptions::default())
+            .unwrap();
+        assert_eq!(at(&back, &doc), [0, 255, 0, 255]);
     }
 }

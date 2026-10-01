@@ -87,6 +87,12 @@ fn turn_into_jpg_re_encodes_the_smart_objects_source_as_a_jpeg() {
     assert_eq!(name, "logo");
     assert!(png_bytes.starts_with(&[0x89, b'P', b'N', b'G']));
     let depth = ed.active().unwrap().history_depth();
+    // Before: the object's transparent half shows the blue canvas, so no
+    // pixel of the composite is white.
+    let before = composite(&ed);
+    assert_eq!(count(&before, is_white), 0, "no white before");
+    let red_before = count(&before, is_red);
+    assert!(red_before > 0, "the object's red half is drawn");
 
     let said = click(&mut ed, MenuAction::TurnIntoJpg).unwrap();
     assert!(said.contains("logo.jpg"), "{said}");
@@ -111,15 +117,54 @@ fn turn_into_jpg_re_encodes_the_smart_objects_source_as_a_jpeg() {
         white.iter().all(|c| *c > 235),
         "transparency onto white: {white:?}"
     );
-    // The object shows the JPEG: its right half is opaque white now.
-    let doc = ed.active().unwrap();
-    let id = doc.document.active_layer().unwrap();
-    let tiles = doc.document.layer_tiles(id).expect("the object has pixels");
-    assert!(tiles.iter().count() > 0);
-    assert_eq!(doc.history_depth(), depth + 1, "one undo step");
+    // The object shows the JPEG: the document's composite now has the
+    // object's right half opaque white over the blue canvas, as many white
+    // pixels as the object had red ones (the two halves are the same size),
+    // and its red half is still red.
+    let after = composite(&ed);
+    let white_after = count(&after, is_white);
+    assert!(
+        white_after * 10 >= red_before * 9,
+        "the transparent half is white now: {white_after} white, {red_before} red before"
+    );
+    assert!(count(&after, is_red) * 10 >= red_before * 9, "still red");
+    assert_eq!(
+        ed.active().unwrap().history_depth(),
+        depth + 1,
+        "one undo step"
+    );
 
     assert!(ed.active_mut().unwrap().undo().unwrap());
     assert_eq!(source_of_active(&ed), ("logo".to_string(), png_bytes));
+    assert_eq!(composite(&ed), before, "undo puts the pixels back too");
+}
+
+/// The document's composite over its canvas, RGBA8.
+fn composite(ed: &Editor) -> Vec<u8> {
+    let doc = ed.active().unwrap();
+    compositor::composite_region(
+        &doc.document,
+        &doc.tiles,
+        doc.canvas_rect(),
+        0,
+        compositor::CompositeOptions::default(),
+    )
+    .unwrap()
+    .to_rgba8(&doc.document.meta.color_space)
+}
+
+fn count(rgba: &[u8], f: fn(&[u8]) -> bool) -> usize {
+    (0..rgba.len() / 4)
+        .filter(|i| f(&rgba[i * 4..i * 4 + 4]))
+        .count()
+}
+
+fn is_white(p: &[u8]) -> bool {
+    p.iter().all(|c| *c > 235)
+}
+
+fn is_red(p: &[u8]) -> bool {
+    p[0] > 180 && p[1] < 70 && p[2] < 70
 }
 
 /// The row is greyed on a layer that is not a smart object, and says why.
@@ -135,20 +180,41 @@ fn turn_into_jpg_is_greyed_out_off_a_smart_object() {
     );
 }
 
-/// File > Export As > RAW, through the menu: the row opens Export As on a
-/// RAW row; the layout set there (3 channels, 16 bits, 34-12) is what the
-/// job the shell hands the writer writes — headerless interleaved samples.
+/// File > Export As > RAW, through the real chrome: the menu row opens
+/// Export As on a RAW row; the layout is picked on the combos the dialog
+/// draws (Channels 3, Depth 16 Bits, Byte Order 34-12) and Enter writes
+/// headerless interleaved samples. The source is a 16-bit
+/// PNG whose samples have two different bytes, so the file shows both that
+/// the document's 16-bit samples are written whole and which byte comes
+/// first.
 #[test]
 fn export_as_raw_writes_the_interleaved_bytes_of_the_chosen_layout() {
     use raster::codec::RawLayout;
-    use ui::dialogs::Dialog as _;
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("out");
-    let src = png(dir.path(), "shot.png", 3, 2, |x, y| {
-        [(x * 40) as u8, (y * 90) as u8, 200, 255]
-    });
-    let mut ed = editor(dir.path(), ScriptedDialogs::new());
+    let sample = |x: u16, y: u16| [0x1234 + x * 0x0501, 0xA0C0 - y * 0x1103, 0x7F01];
+    let rgba16: Vec<u16> = (0..2u16)
+        .flat_map(|y| (0..3u16).map(move |x| (x, y)))
+        .flat_map(|(x, y)| {
+            let [r, g, b] = sample(x, y);
+            [r, g, b, u16::MAX]
+        })
+        .collect();
+    // Opening a 16-bit PNG keeps 8 bits a sample (the open decodes to
+    // RGBA8 and widens), so the 16-bit samples are written into the layer
+    // as a 16-bit edit writes them.
+    let src = png(dir.path(), "shot.png", 3, 2, |_, _| [0, 0, 0, 255]);
+    let mut ed = editor(dir.path(), ScriptedDialogs::new().exporting_folder(&out));
     ed.open_path(&src).unwrap();
+    {
+        let doc = ed.active_mut().unwrap();
+        doc.convert_depth(16, false).unwrap();
+        let layer = doc.document.active_layer().unwrap();
+        let command = doc.layer_rgba16_command(layer, &rgba16, "Samples").unwrap();
+        doc.apply(command).unwrap();
+        assert_eq!(doc.layer_rgba16(layer), rgba16, "the layer holds them");
+    }
+    assert!(ed.active().unwrap().is_sixteen_bit(), "a 16-bit document");
     let raw = MenuAction::Export(raster::ExportFormat::RAW[0]);
     let menus = crate::menu_bridge::menus(&ed);
     assert!(
@@ -160,34 +226,62 @@ fn export_as_raw_writes_the_interleaved_bytes_of_the_chosen_layout() {
         menus.iter().any(|m| m.actions().contains(&avif)),
         "File > Export As lists AVIF"
     );
-    let mut host = crate::dialog_host::DialogHost::default();
-    assert!(host.open_for_menu_action(&raw, &ed));
-    let crate::dialog_host::ActiveDialog::ExportAs(dialog) = host.active_for_test() else {
-        panic!("Export As > RAW did not open Export As");
-    };
-    assert_eq!(dialog.raw_layout(), Some(RawLayout::DEFAULT));
+    let mut rig = Rig::new(ed);
+    rig.step(Vec::new());
+    rig.menu(raw);
     let layout = RawLayout {
         channels: 3,
         sixteen_bit: true,
         little_endian: true,
     };
-    assert!(dialog.set_raw_layout(layout));
-    let Some(ui::dialogs::DialogAction::Export(job)) = dialog.confirm() else {
-        panic!("a valid job");
-    };
-    // What the shell does with a confirmed Export As once a folder is picked.
-    ed.request_export(*job, out.clone());
-    ed.poll_exports();
+    {
+        let dialog = rig
+            .chrome
+            .dialogs_for_test()
+            .active_export_dialog_for_test();
+        assert_eq!(dialog.raw_layout(), Some(RawLayout::DEFAULT));
+        dialog.set_base_name("shot");
+    }
+    rig.step(Vec::new());
+    rig.step(Vec::new());
+    for (field, label) in [(0, "3"), (1, "16 Bits"), (2, "34-12")] {
+        let button = rig
+            .chrome
+            .dialogs_for_test()
+            .active_export_dialog_for_test()
+            .drawn_raw_fields()[field]
+            .expect("a RAW row draws its layout");
+        rig.pick_in_combo(button, label);
+    }
+    {
+        let dialog = rig
+            .chrome
+            .dialogs_for_test()
+            .active_export_dialog_for_test();
+        assert_eq!(dialog.raw_layout(), Some(layout), "picked on the combos");
+        assert_eq!(
+            dialog.entries()[0].preset.bit_depth,
+            raster::BitDepth::Sixteen
+        );
+    }
+    rig.step(Vec::new());
+    let said: Vec<_> = rig
+        .step(enter())
+        .into_iter()
+        .chain(rig.step(Vec::new()))
+        .chain(rig.step(Vec::new()))
+        .collect();
     let listing: Vec<_> = std::fs::read_dir(&out)
         .map(|d| d.flatten().map(|e| e.file_name()).collect())
         .unwrap_or_default();
-    let bytes = std::fs::read(out.join("shot_png.raw"))
-        .unwrap_or_else(|e| panic!("shot_png.raw: {e}; {listing:?}; {:?}", ed.status()));
+    let bytes = std::fs::read(out.join("shot.raw"))
+        .unwrap_or_else(|e| panic!("shot.raw: {e}; {listing:?}; {said:?}"));
     let mut expected = Vec::new();
     for y in 0..2u16 {
         for x in 0..3u16 {
-            for v in [x * 40, y * 90, 200] {
-                expected.extend_from_slice(&(v * 257).to_le_bytes());
+            for v in sample(x, y) {
+                assert_ne!(v >> 8, v & 0xFF, "two different bytes");
+                expected.extend_from_slice(&v.to_le_bytes());
             }
         }
     }
@@ -702,6 +796,40 @@ impl Rig {
         panic!("{id:?} never settled: {last:?}")
     }
 
+    /// Open the combo drawn with the button `id` (pressed where it settled)
+    /// and press its row painted `label`: the galley with that text nearest
+    /// below the button, which is where the combo's popup lists its rows.
+    fn pick_in_combo(&mut self, id: egui::Id, label: &str) {
+        let button = self.settled_rect(id);
+        self.press(button.center(), egui::PointerButton::Primary);
+        self.t += 0.05;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 1600.0),
+            )),
+            time: Some(self.t),
+            ..Default::default()
+        };
+        let full = self.ctx.run(input, |ctx| {
+            self.chrome.ui(ctx, &mut self.ed);
+        });
+        let row = full
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                }
+                _ => None,
+            })
+            .filter(|r| r.top() >= button.bottom() - 1.0 && r.left() < button.right())
+            .min_by(|a, b| a.top().total_cmp(&b.top()))
+            .unwrap_or_else(|| panic!("{label:?} is not listed below {button:?}"));
+        self.press(row.center(), egui::PointerButton::Primary);
+        self.frame(Vec::new());
+    }
+
     fn press(&mut self, at: egui::Pos2, button: egui::PointerButton) -> Vec<MenuAction> {
         let event = |pressed| egui::Event::PointerButton {
             pos: at,
@@ -961,6 +1089,52 @@ fn convert_to_srgb_is_not_offered_over_an_untagged_document() {
         .active_export_dialog_for_test();
     assert!(!d.offers_srgb());
     assert_eq!(d.drawn_extras()[3], None);
+}
+
+/// Full Screen draws no menu bar, and Export As still offers Convert to sRGB
+/// by the document it opens over: a tagged document seen in Standard mode,
+/// then an untagged one made active in Full Screen, opens Export As without
+/// the option (and the tagged one, made active again, with it).
+#[test]
+fn convert_to_srgb_follows_the_active_document_in_full_screen() {
+    use crate::action::Action;
+    use ui::palette::ScreenMode;
+    let dir = tempfile::tempdir().unwrap();
+    let (tagged, _, _) = adobe_png(dir.path());
+    let plain = png(dir.path(), "plain.png", 8, 8, |_, _| [10, 20, 30, 255]);
+    let mut ed = editor(dir.path(), ScriptedDialogs::new());
+    ed.open_path(&tagged).unwrap();
+    let mut rig = Rig::new(ed);
+    rig.step(Vec::new());
+    rig.ed.dispatch(Action::CycleScreenMode).unwrap();
+    rig.ed.dispatch(Action::CycleScreenMode).unwrap();
+    assert_eq!(rig.ed.screen_mode(), ScreenMode::FullScreen);
+    rig.step(Vec::new());
+    rig.ed.open_path(&plain).unwrap();
+    assert!(!crate::menu_bridge::w18g::document_has_profile(&rig.ed));
+    rig.step(Vec::new());
+    rig.menu(MenuAction::Export(raster::ExportFormat::Png));
+    rig.step(Vec::new());
+    assert!(
+        !rig.chrome
+            .dialogs_for_test()
+            .active_export_dialog_for_test()
+            .offers_srgb(),
+        "an untagged document is not offered Convert to sRGB in Full Screen"
+    );
+    rig.chrome.dialogs_for_test().close();
+    rig.ed.activate(0).unwrap();
+    assert!(crate::menu_bridge::w18g::document_has_profile(&rig.ed));
+    rig.step(Vec::new());
+    rig.menu(MenuAction::Export(raster::ExportFormat::Png));
+    rig.step(Vec::new());
+    assert!(
+        rig.chrome
+            .dialogs_for_test()
+            .active_export_dialog_for_test()
+            .offers_srgb(),
+        "the tagged document is offered Convert to sRGB in Full Screen"
+    );
 }
 
 /// File > Export As with a PDF row and Photopea's "Pages", through the real

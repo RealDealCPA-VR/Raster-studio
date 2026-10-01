@@ -1087,7 +1087,7 @@ Purge	Spastro kujtesën
 Purple	Vjollcë
 Quadtone	Katërton
 Quality	Kualiteti
-Quick Export Layer as PNG…	Eksportim i shpejtë i shtresës si PNG…
+Quick Export Selected Layers…	Eksport i shpejtë i shtresave të zgjedhura…
 Quit	Dil
 RGB Color	Ngjyrë RGB
 Radial Blur…	Mjegullim Rrezor…
@@ -1643,6 +1643,10 @@ Save PSD/PSB…	Ruaje PSD/PSB…
 Select or draw a path first	Përzgjidhni ose vizatoni fillimisht një shteg
 Right-click on a text layer	Klikoni me të djathtën mbi një shtresë teksti
 Right-click inside a slice	Klikoni me të djathtën brenda një copëze
+Share…	Ndaj…
+Remove BG	Hiq sfondin
+Publishing online is not part of this build	Publikimi në internet nuk është pjesë e këtij versioni
+Background removal is not part of this build	Heqja e sfondit nuk është pjesë e këtij versioni
 Divide Slices	Pjesëto copëzat
 N equal parts	N pjesë të barabarta
 N pixels per part	N pikselë për pjesë
@@ -1650,7 +1654,7 @@ N	N
 Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Pret copëzën ku klikuat me të djathtën, ose kanavacën nëse s'kishte, në një rrjetë copëzash.
 Tick Horizontally or Vertically	Shënoni Horizontalisht ose Vertikalisht
 These settings make no cut: raise N or pick a smaller pixel count	Këto rregullime s'bëjnë asnjë prerje: rriteni N ose zgjidhni një numër më të vogël pikselësh
-Cancel (Esc)	Anuloje (Esc)
+Cancel	Anuloje
 All Documents	Të gjitha dokumentet
 Select Source	Përzgjidh burimin
 Alt	Alt
@@ -1676,3 +1680,8 @@ User Slices	Copëza përdoruesi
 Put the file into ZIP	Vëre skedarin në ZIP
 Reverse pages	Kthe renditjen e faqeve
 Convert to sRGB	Konverto në sRGB
+Use GPU	Përdor GPU
+Quick Export	Eksport i shpejtë
+The active layer, alone	Shtresa aktive, e vetme
+{n} selected layers, each to its own file	{n} shtresa të zgjedhura, secila në skedarin e vet
+An SVG is resolution-free: it is written at canvas size	Një SVG nuk varet nga rezolucioni: shkruhet në madhësinë e kanavacës

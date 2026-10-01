@@ -1087,7 +1087,7 @@ Purge	Limpar memória
 Purple	Roxo
 Quadtone	Quadritom
 Quality	Qualidade
-Quick Export Layer as PNG…	Exportação rápida da camada como PNG…
+Quick Export Selected Layers…	Exportação rápida das camadas selecionadas…
 Quit	Sair
 RGB Color	Cor RGB
 Radial Blur…	Desfoque Radial…
@@ -1643,6 +1643,10 @@ Save PSD/PSB…	Guardar PSD/PSB…
 Select or draw a path first	Selecione ou desenhe primeiro um traçado
 Right-click on a text layer	Clique com o botão direito numa camada de texto
 Right-click inside a slice	Clique com o botão direito dentro de uma fatia
+Share…	Partilhar…
+Remove BG	Remover fundo
+Publishing online is not part of this build	A publicação online não faz parte desta versão
+Background removal is not part of this build	A remoção do fundo não faz parte desta versão
 Divide Slices	Dividir fatias
 N equal parts	N partes iguais
 N pixels per part	N píxeis por parte
@@ -1650,7 +1654,7 @@ N	N
 Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Corta a fatia em que clicou com o botão direito, ou a tela se não havia nenhuma, numa grelha de fatias.
 Tick Horizontally or Vertically	Marque Horizontalmente ou Verticalmente
 These settings make no cut: raise N or pick a smaller pixel count	Estas definições não fazem nenhum corte: aumente N ou escolha um número menor de píxeis
-Cancel (Esc)	Cancelar (Esc)
+Cancel	Cancelar
 All Documents	Todos os documentos
 Select Source	Selecionar origem
 Alt	Alt
@@ -1676,3 +1680,8 @@ User Slices	Fatias do utilizador
 Put the file into ZIP	Colocar o ficheiro num ZIP
 Reverse pages	Inverter páginas
 Convert to sRGB	Converter para sRGB
+Use GPU	Utilizar GPU
+Quick Export	Exportação rápida
+The active layer, alone	A camada ativa, sozinha
+{n} selected layers, each to its own file	{n} camadas selecionadas, cada uma no seu próprio ficheiro
+An SVG is resolution-free: it is written at canvas size	Um SVG é independente da resolução: é gravado no tamanho da tela

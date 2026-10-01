@@ -30,6 +30,10 @@ Save PSD/PSB…	保存 PSD/PSB…
 Select or draw a path first	请先选择或绘制路径
 Right-click on a text layer	请右键单击文字图层
 Right-click inside a slice	请在切片内部右键单击
+Share…	发布…
+Remove BG	移除背景
+Publishing online is not part of this build	此版本不包含在线发布
+Background removal is not part of this build	此版本不包含背景移除
 Divide Slices	划分切片
 N equal parts	N 等份
 N pixels per part	每份 N 像素
@@ -326,7 +330,7 @@ Columns	列
 Columns and rows with gutters between them, inside optional margins, in pixels.	带间隔的列和行，位于可选边距内，单位为像素。
 Combine Shapes	合并形状
 Commit (Enter)	提交（Enter）
-Cancel (Esc)	取消 (Esc)
+Cancel	取消
 All Documents	所有文档
 Select Source	选择源
 Alt	Alt
@@ -1126,7 +1130,7 @@ Purge	清理
 Purple	紫色
 Quadtone	四色调
 Quality	品质
-Quick Export Layer as PNG…	将图层快速导出为 PNG…
+Quick Export Selected Layers…	快速导出所选图层…
 Quit	退出
 RGB Color	RGB 颜色
 Radial Blur…	径向模糊…
@@ -1676,3 +1680,8 @@ Make	建立
 There is no path; draw one or select it in the Paths panel	没有路径；请绘制一个，或在路径面板中选择
 Reverse pages	反转页面顺序
 Convert to sRGB	转换为 sRGB
+Use GPU	使用 GPU
+Quick Export	快速导出
+The active layer, alone	仅当前图层
+{n} selected layers, each to its own file	{n} 个选中的图层，各存为单独文件
+An SVG is resolution-free: it is written at canvas size	SVG 与分辨率无关：按画布尺寸写出

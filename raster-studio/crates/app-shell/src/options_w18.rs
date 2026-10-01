@@ -6,9 +6,11 @@
 //!   Transform Controls drag - so the bar draws its Cancel cross and Commit
 //!   check.
 //! * [`drain`], from [`ToolPointer::begin_pending_session`] (every frame, and
-//!   every pointer sample): the Cancel cross (Escape's route: a Type run is
-//!   cancelled through its own text route, anything else through
-//!   [`ToolPointer::cancel`]), a Crop by row (the Crop tool is given that box
+//!   every pointer sample): a held Show Transform Controls drag committed
+//!   when the palette has left the Move tool, the Cancel cross, which discards the held edit (a
+//!   Type run through its own text route's Cancel, which is not what Escape
+//!   does to a run - Escape commits it - and anything else through
+//!   [`ToolPointer::cancel`], as Escape does), a Crop by row (the Crop tool is given that box
 //!   and waits for the commit, as Photopea's does), a Paint Bucket pattern
 //!   pick, and the defined patterns the picker lists.
 //! * [`adjust_input`], at the head of [`ToolPointer::handle`]: the Zoom bar's
@@ -59,7 +61,7 @@ pub(super) fn drain(
     editor: &mut Editor,
     settings: &[(String, tools::ToolSetting)],
 ) -> bool {
-    let mut changed = false;
+    let mut changed = commit_on_leaving_move(pointer, editor);
     if bar::take_cancel() {
         if pointer.is_text_editing() {
             let _ = pointer.text_edit(editor, tools::TextEdit::Cancel);
@@ -84,6 +86,20 @@ pub(super) fn drain(
     }
     publish_pending(pointer);
     changed
+}
+
+/// A held Show Transform Controls drag lands (one history step) when the
+/// palette leaves the Move tool, as Photopea applies a held transform when
+/// another tool is picked: replacing the Move tool would otherwise drop it.
+/// A borrowed tool (Space's Hand, a spring-loaded pick) leaves it held while
+/// the palette's own tool is still Move. Reports whether it committed.
+fn commit_on_leaving_move(pointer: &mut ToolPointer, editor: &mut Editor) -> bool {
+    let held = pointer.live_tool() == Some(ToolId::Move) && pointer.has_pending_commit();
+    if !held || editor.tool() == ToolId::Move || editor.effective_tool() == ToolId::Move {
+        return false;
+    }
+    let _ = pointer.commit(editor);
+    true
 }
 
 /// The box a Crop by row sets, in document pixels: the bounds of every

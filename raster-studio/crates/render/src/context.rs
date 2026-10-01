@@ -113,7 +113,7 @@ impl GpuContext {
     /// "skip", not as a failure.
     pub async fn headless() -> Result<Self> {
         let instance = wgpu::Instance::default();
-        Self::from_instance(instance, None).await
+        Self::from_instance(instance, None, true).await
     }
 
     /// Create a context suitable for rendering to `surface`.
@@ -121,28 +121,38 @@ impl GpuContext {
         instance: wgpu::Instance,
         surface: &wgpu::Surface<'_>,
     ) -> Result<Self> {
-        Self::from_instance(instance, Some(surface)).await
+        Self::from_instance(instance, Some(surface), true).await
+    }
+
+    /// W18-I: [`GpuContext::for_surface`] honouring the "Use GPU"
+    /// preference (Photopea's More ▸ Use WebGL). Off, the software adapter
+    /// (WARP on Windows, lavapipe on Linux) is asked for first, so nothing
+    /// is drawn on the graphics card; the hardware one is the fallback only
+    /// when the machine has no software adapter.
+    pub async fn for_surface_with(
+        instance: wgpu::Instance,
+        surface: &wgpu::Surface<'_>,
+        use_gpu: bool,
+    ) -> Result<Self> {
+        Self::from_instance(instance, Some(surface), use_gpu).await
     }
 
     async fn from_instance(
         instance: wgpu::Instance,
         compatible_surface: Option<&wgpu::Surface<'_>>,
+        use_gpu: bool,
     ) -> Result<Self> {
-        let mut adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface,
-                force_fallback_adapter: false,
-            })
-            .await;
-        if adapter.is_none() {
+        let mut adapter = None;
+        for options in adapter_attempts(use_gpu) {
             adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::LowPower,
                     compatible_surface,
-                    force_fallback_adapter: true,
+                    ..options
                 })
                 .await;
+            if adapter.is_some() {
+                break;
+            }
         }
         let adapter = adapter.context("no suitable GPU adapter found")?;
 
@@ -201,5 +211,42 @@ impl GpuContext {
     /// Convenience: build a headless context, blocking the current thread.
     pub fn headless_blocking() -> Result<Arc<Self>> {
         Ok(Arc::new(pollster::block_on(Self::headless())?))
+    }
+}
+
+/// W18-I: the adapters [`GpuContext`] asks for, in order. With the GPU on:
+/// the high-performance hardware adapter, then the software one. Off: the
+/// software adapter first (`force_fallback_adapter`), then the hardware one
+/// for a machine that has no software adapter at all.
+pub fn adapter_attempts(use_gpu: bool) -> [wgpu::RequestAdapterOptions<'static, 'static>; 2] {
+    let hardware = wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    };
+    let software = wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        compatible_surface: None,
+        force_fallback_adapter: true,
+    };
+    if use_gpu {
+        [hardware, software]
+    } else {
+        [software, hardware]
+    }
+}
+
+#[cfg(test)]
+mod w18i_tests {
+    use super::adapter_attempts;
+
+    /// W18-I: "Use GPU" off asks for the software adapter first; on, the
+    /// hardware one first. Either way the other is the fallback.
+    #[test]
+    fn use_gpu_off_asks_for_the_software_adapter_first() {
+        let on = adapter_attempts(true).map(|o| o.force_fallback_adapter);
+        let off = adapter_attempts(false).map(|o| o.force_fallback_adapter);
+        assert_eq!(on, [false, true]);
+        assert_eq!(off, [true, false]);
     }
 }

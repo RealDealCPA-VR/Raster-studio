@@ -1087,7 +1087,7 @@ Purge	Εκκαθάριση μνήμης
 Purple	Μωβ
 Quadtone	Τετράτονο
 Quality	Ποιότητα
-Quick Export Layer as PNG…	Γρήγορη εξαγωγή επιπέδου ως PNG…
+Quick Export Selected Layers…	Γρήγορη εξαγωγή επιλεγμένων επιπέδων…
 Quit	Έξοδος
 RGB Color	Χρώμα RGB
 Radial Blur…	Ακτινικό θόλωμα…
@@ -1643,6 +1643,10 @@ Save PSD/PSB…	Αποθήκευση PSD/PSB…
 Select or draw a path first	Επιλέξτε ή σχεδιάστε πρώτα μια διαδρομή
 Right-click on a text layer	Κάντε δεξί κλικ σε ένα επίπεδο κειμένου
 Right-click inside a slice	Κάντε δεξί κλικ μέσα σε μια φέτα
+Share…	Κοινοποίηση…
+Remove BG	Αφαίρεση φόντου
+Publishing online is not part of this build	Η διαδικτυακή δημοσίευση δεν περιλαμβάνεται σε αυτή την έκδοση
+Background removal is not part of this build	Η αφαίρεση φόντου δεν περιλαμβάνεται σε αυτή την έκδοση
 Divide Slices	Διαίρεση φετών
 N equal parts	N ίσα μέρη
 N pixels per part	N pixel ανά μέρος
@@ -1650,7 +1654,7 @@ N	N
 Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Κόβει τη φέτα στην οποία κάνατε δεξί κλικ, ή τον καμβά αν δεν υπήρχε, σε πλέγμα φετών.
 Tick Horizontally or Vertically	Επιλέξτε Οριζόντια ή Κατακόρυφα
 These settings make no cut: raise N or pick a smaller pixel count	Αυτές οι ρυθμίσεις δεν κάνουν καμία τομή: αυξήστε το N ή επιλέξτε μικρότερο πλήθος pixel
-Cancel (Esc)	Άκυρο (Esc)
+Cancel	Άκυρο
 All Documents	Όλα τα έγγραφα
 Select Source	Επιλογή προέλευσης
 Alt	Alt
@@ -1676,3 +1680,8 @@ User Slices	Φέτες χρήστη
 Put the file into ZIP	Τοποθέτηση του αρχείου σε ZIP
 Reverse pages	Αντιστροφή σελίδων
 Convert to sRGB	Μετατροπή σε sRGB
+Use GPU	Χρήση GPU
+Quick Export	Γρήγορη εξαγωγή
+The active layer, alone	Το ενεργό επίπεδο, μόνο του
+{n} selected layers, each to its own file	{n} επιλεγμένα επίπεδα, το καθένα σε δικό του αρχείο
+An SVG is resolution-free: it is written at canvas size	Ένα SVG δεν εξαρτάται από την ανάλυση: γράφεται στο μέγεθος του καμβά

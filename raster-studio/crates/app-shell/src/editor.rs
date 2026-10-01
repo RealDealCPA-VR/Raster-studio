@@ -2570,6 +2570,12 @@ impl Editor {
         self.dialogs.pick_save_path(suggested)
     }
 
+    /// W18-I: ask the file dialogs for an export path (Quick Export asks with
+    /// the Export picker, PNG and SVG among its filters, not Save As's).
+    pub(crate) fn pick_export_path(&mut self, suggested: &std::path::Path) -> Option<PathBuf> {
+        self.dialogs.pick_export_path(suggested)
+    }
+
     /// W10-I: Layer ▸ Smart Object ▸ Export Contents…: write the active smart
     /// object's source to a file the user picks — the embedded bytes exactly
     /// as they were placed (a PNG stays that PNG, a PSD that PSD), or, for a

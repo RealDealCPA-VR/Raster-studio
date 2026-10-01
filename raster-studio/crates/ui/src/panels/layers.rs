@@ -137,9 +137,8 @@ pub struct LayersState {
     rename_fresh: bool,
     /// W16-D: layers whose effects list is folded (the row's fx toggle).
     effects_folded: HashSet<LayerId>,
-    /// W16-D: effects whose eye was switched off in the panel, with the
-    /// parameters the eye puts back (see [`w16`]).
-    hidden_effects: HashMap<LayerId, Vec<(crate::menu::EffectSlot, layer_model::LayerEffects)>>,
+    // W18-I: the effects whose eye is off are kept in the style itself
+    // (`layer_model::effects::StyleExtras::hidden`), saved with the document.
     /// W16-D: the effects row being dragged: the layer, and the effect
     /// (`None` for the "Effects" row, the whole style).
     effect_drag: Option<(LayerId, Option<crate::menu::EffectSlot>)>,

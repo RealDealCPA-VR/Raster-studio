@@ -1087,7 +1087,7 @@ Purge	Išvalyti atmintį
 Purple	Violetinė
 Quadtone	Keturspalvis
 Quality	Kokybė
-Quick Export Layer as PNG…	Sparčiai eksportuoti sluoksnį kaip PNG…
+Quick Export Selected Layers…	Greitas pasirinktų sluoksnių eksportas…
 Quit	Išeiti
 RGB Color	RGB spalva
 Radial Blur…	Radialinis liejimas…
@@ -1643,6 +1643,10 @@ Save PSD/PSB…	Įrašyti PSD/PSB…
 Select or draw a path first	Pirmiausia pasirinkite arba nubrėžkite kelią
 Right-click on a text layer	Dešiniuoju pelės klavišu spustelėkite teksto sluoksnį
 Right-click inside a slice	Dešiniuoju pelės klavišu spustelėkite pjūvio viduje
+Share…	Bendrinti…
+Remove BG	Pašalinti foną
+Publishing online is not part of this build	Paskelbimas internete nėra šios versijos dalis
+Background removal is not part of this build	Fono pašalinimas nėra šios versijos dalis
 Divide Slices	Dalyti pjūvius
 N equal parts	N lygių dalių
 N pixels per part	N pikselių daliai
@@ -1650,7 +1654,7 @@ N	N
 Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Supjausto pjūvį, kurį spustelėjote dešiniuoju pelės klavišu, arba drobę, jei pjūvio nebuvo, į pjūvių tinklelį.
 Tick Horizontally or Vertically	Pažymėkite Horizontaliai arba Vertikaliai
 These settings make no cut: raise N or pick a smaller pixel count	Šie nustatymai nieko nepjauna: padidinkite N arba pasirinkite mažesnį pikselių skaičių
-Cancel (Esc)	Atšaukti (Esc)
+Cancel	Atšaukti
 All Documents	Visi dokumentai
 Select Source	Pasirinkti šaltinį
 Alt	Alt
@@ -1676,3 +1680,8 @@ User Slices	Naudotojo pjūviai
 Put the file into ZIP	Įdėti failą į ZIP
 Reverse pages	Apversti puslapių tvarką
 Convert to sRGB	Konvertuoti į sRGB
+Use GPU	Naudoti GPU
+Quick Export	Greitas eksportas
+The active layer, alone	Aktyvus sluoksnis, vienas
+{n} selected layers, each to its own file	{n} pasirinkti sluoksniai, kiekvienas į atskirą failą
+An SVG is resolution-free: it is written at canvas size	SVG nepriklauso nuo raiškos: jis įrašomas drobės dydžiu

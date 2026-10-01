@@ -30,6 +30,10 @@ Save PSD/PSB…	PSD/PSB speichern…
 Select or draw a path first	Wählen oder zeichnen Sie zuerst einen Pfad
 Right-click on a text layer	Klicken Sie mit der rechten Maustaste auf eine Textebene
 Right-click inside a slice	Klicken Sie mit der rechten Maustaste in ein Slice
+Share…	Teilen…
+Remove BG	Hintergrund entfernen
+Publishing online is not part of this build	Online-Veröffentlichung ist in dieser Version nicht enthalten
+Background removal is not part of this build	Hintergrundentfernung ist in dieser Version nicht enthalten
 Divide Slices	Slices teilen
 N equal parts	N gleiche Teile
 N pixels per part	N Pixel pro Teil
@@ -326,7 +330,7 @@ Columns	Spalten
 Columns and rows with gutters between them, inside optional margins, in pixels.	Spalten und Zeilen mit Abständen dazwischen, innerhalb optionaler Ränder, in Pixeln.
 Combine Shapes	Formen kombinieren
 Commit (Enter)	Bestätigen (Eingabe)
-Cancel (Esc)	Abbrechen (Esc)
+Cancel	Abbrechen
 All Documents	Alle Dokumente
 Select Source	Quelle wählen
 Alt	Alt
@@ -1126,7 +1130,7 @@ Purge	Entleeren
 Purple	Violett
 Quadtone	Quadruplex
 Quality	Qualität
-Quick Export Layer as PNG…	Schnellexport der Ebene als PNG…
+Quick Export Selected Layers…	Schnellexport der ausgewählten Ebenen…
 Quit	Beenden
 RGB Color	RGB-Farbe
 Radial Blur…	Radialer Weichzeichner…
@@ -1676,3 +1680,8 @@ Make	Erstellen
 There is no path; draw one or select it in the Paths panel	Es gibt keinen Pfad; zeichnen Sie einen oder wählen Sie ihn im Pfade-Bedienfeld aus
 Reverse pages	Seiten umkehren
 Convert to sRGB	In sRGB konvertieren
+Use GPU	GPU verwenden
+Quick Export	Schnell-Export
+The active layer, alone	Die aktive Ebene, allein
+{n} selected layers, each to its own file	{n} ausgewählte Ebenen, jede in eine eigene Datei
+An SVG is resolution-free: it is written at canvas size	Eine SVG ist auflösungsunabhängig: Sie wird in Arbeitsflächengröße geschrieben

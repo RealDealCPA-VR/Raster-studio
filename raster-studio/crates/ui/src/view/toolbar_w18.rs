@@ -76,8 +76,9 @@ pub(super) fn published_pending(tool: ToolId) -> bool {
     bar::pending_for(tool) == Some(true)
 }
 
-/// Photopea's Cancel cross: the held edit is abandoned as Escape abandons
-/// it (the shell takes the request on its next frame).
+/// Photopea's Cancel cross: the held edit is discarded (a Type run too,
+/// which Escape would commit; the shell takes the request on its next
+/// frame).
 pub(super) fn cancel_button(ui: &mut Ui, tool: ToolId) {
     let response = super::super::icon_button_id(
         ui,

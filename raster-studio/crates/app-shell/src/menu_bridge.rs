@@ -287,6 +287,14 @@ pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
     // W18-C: the Channels panel's selected colour components are the write
     // mask of every pixel edit (`edit_target::channel_edit_w18`).
     crate::edit_target::channel_edit_w18::sync(editor, &workspace.channels);
+    // W18-G: whichever road opens Export As next (a menu row, a chord, Search
+    // Commands), its "convert to sRGB" is offered over a document with a
+    // profile. Here, not in `draw`: the chrome builds this context every
+    // frame, in every screen mode, while Full Screen draws no menu bar.
+    ui::dialogs::export_as::note_document_profile(w18g::document_has_profile(editor));
+    ui::dialogs::export_as::note_document_depth(
+        editor.active().is_some_and(|d| d.is_sixteen_bit()),
+    );
     let recent_files = editor
         .recent()
         .entries()
@@ -335,6 +343,8 @@ pub fn context(editor: &mut Editor, workspace: &Workspace) -> MenuContext {
     context.theme = editor.preferences().theme.resolve(design::Theme::Dark);
     // W16-N: Window > Glass Menus' tick.
     context.glass_menus = editor.preferences().glass_menus;
+    // W18-I.
+    context.use_gpu = editor.preferences().use_gpu;
     // W9-G: Layer ▸ Vector Mask ▸ Current Path reads the Paths panel, which
     // is the workspace's; `perform` only holds the editor, so the path the
     // menu was enabled for is parked here, frame by frame.
@@ -567,6 +577,13 @@ fn shell_action(action: MenuAction, editor: &Editor) -> Option<Pick> {
     if action == MenuAction::ToggleGlassMenus {
         let mut prefs = editor.preferences().clone();
         prefs.glass_menus = !prefs.glass_menus;
+        return Some(Pick::Preferences(Box::new(prefs)));
+    }
+    // W18-I: Window > Use GPU is a preference too; the shell says it applies
+    // at the next start (the window's device is made once, at start).
+    if action == MenuAction::ToggleUseGpu {
+        let mut prefs = editor.preferences().clone();
+        prefs.use_gpu = !prefs.use_gpu;
         return Some(Pick::Preferences(Box::new(prefs)));
     }
     if action == MenuAction::EditAdjustmentLayer {
@@ -855,9 +872,6 @@ pub fn draw(
     context: &MenuContext,
     on_click: &mut dyn FnMut(Intent),
 ) {
-    // W18-G: whichever road opens Export As next (a row here, a chord),
-    // its "convert to sRGB" is offered over a document with a profile.
-    ui::dialogs::export_as::note_document_profile(w18g::document_has_profile(editor));
     let menus = menus(editor);
     // W16-N: Window > Glass Menus fills the menus translucently.
     ui::menu::with_glass_menus(ctx, editor.preferences().glass_menus, || {
@@ -873,7 +887,9 @@ pub fn draw(
                 egui::menu::bar(ui, |ui| {
                     for menu in &menus {
                         ui.menu_button(menu.title, |ui| {
-                            entries(ui, &menu.entries, context, editor, on_click);
+                            fit_to_screen(ui, |ui| {
+                                entries(ui, &menu.entries, context, editor, on_click);
+                            });
                         });
                     }
                 });
@@ -882,6 +898,9 @@ pub fn draw(
     // W13-K: the File > Script window, when open. Run clicks the Script row
     // through `on_click`, so the run is routed like any menu click.
     crate::script::draw_window(ctx, on_click);
+    // W18-I: the Quick Export window (format and scale); its Export… clicks
+    // the Quick Export row through `on_click`.
+    crate::tool_input::quick_export::draw_window(ctx, on_click);
     // W13-N: the Styles panel's list, and the Magic Cut / Resize Images /
     // Generate Mockups windows, whose OK clicks their row through `on_click`.
     w13n_ops::frame(ctx, editor, on_click);
@@ -889,6 +908,24 @@ pub fn draw(
     panel_menus_w16::publish(ctx, editor);
     // W18-I: the Swatches list's folders are kept across sessions.
     library_w18::sync_swatch_folders(ctx, editor);
+}
+
+/// W18-K: a menu (or submenu) list taller than the window scrolls instead of
+/// running off its bottom edge. egui's menu popup is moved to fit the screen
+/// but never clipped to it, so without this a long list (Window > Language,
+/// 38 rows) left its last rows below the window, where no pointer reaches.
+/// The cap is the window's height less the popup frame's own margins. It is
+/// also the list's minimum scrolled height: the popup's first (sizing) frame
+/// lays out in egui's default area size, and without the floor the list would
+/// stay that short; a list shorter than the cap still shrinks to its rows.
+fn fit_to_screen(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    let frame = ui.spacing().menu_margin.sum().y + ui.spacing().item_spacing.y;
+    let cap = (ui.ctx().screen_rect().height() - frame).max(ui.spacing().interact_size.y);
+    egui::ScrollArea::vertical()
+        .max_height(cap)
+        .min_scrolled_height(cap)
+        .auto_shrink([true, true])
+        .show(ui, add);
 }
 
 fn entries(
@@ -916,7 +953,9 @@ fn entries(
                     .any(|a| resolve_intent(a, context, editor).is_ok());
                 if live {
                     ui.menu_button(*label, |ui| {
-                        self::entries(ui, children, context, editor, on_click);
+                        fit_to_screen(ui, |ui| {
+                            self::entries(ui, children, context, editor, on_click);
+                        });
                     });
                 } else {
                     ui.add_enabled(false, egui::Button::new(*label))

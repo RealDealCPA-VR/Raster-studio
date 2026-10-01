@@ -18,6 +18,10 @@ Right-click inside a path	Klikněte pravým tlačítkem dovnitř cesty
 Select or draw a path first	Nejprve vyberte nebo nakreslete cestu
 Right-click on a text layer	Klikněte pravým tlačítkem na textovou vrstvu
 Right-click inside a slice	Klikněte pravým tlačítkem dovnitř řezu
+Share…	Sdílet…
+Remove BG	Odstranit pozadí
+Publishing online is not part of this build	Online publikování není součástí této verze
+Background removal is not part of this build	Odstranění pozadí není součástí této verze
 Divide Slices	Rozdělit řezy
 N equal parts	N stejných částí
 N pixels per part	N pixelů na část
@@ -1110,7 +1114,7 @@ Purge	Vyčistit
 Purple	Fialová
 Quadtone	Quadtón
 Quality	Kvalita
-Quick Export Layer as PNG…	Rychlý export vrstvy jako PNG…
+Quick Export Selected Layers…	Rychlý export vybraných vrstev…
 Quit	Ukončit
 RGB Color	Barva RGB
 Radial Blur…	Kruhové rozostření…
@@ -1658,7 +1662,7 @@ Minify the file	Zmenšit soubor
 RAW…	RAW…
 Save PSD/PSB	Uložit PSD/PSB
 Save PSD/PSB…	Uložit PSD/PSB…
-Cancel (Esc)	Zrušit (Esc)
+Cancel	Zrušit
 All Documents	Všechny dokumenty
 Select Source	Vybrat zdroj
 Alt	Alt
@@ -1676,3 +1680,8 @@ Purge All	Vyčistit vše
 Make	Vytvořit
 Reverse pages	Obrátit pořadí stránek
 Convert to sRGB	Převést do sRGB
+Use GPU	Používat GPU
+Quick Export	Rychlý export
+The active layer, alone	Aktivní vrstva, samostatně
+{n} selected layers, each to its own file	{n} vybraných vrstev, každá do vlastního souboru
+An SVG is resolution-free: it is written at canvas size	SVG nezávisí na rozlišení: zapíše se ve velikosti plátna

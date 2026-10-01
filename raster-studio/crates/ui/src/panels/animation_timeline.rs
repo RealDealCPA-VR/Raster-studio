@@ -718,8 +718,10 @@ pub(super) fn timeline_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
         );
     }
 
-    // W18-I: the wheel over the ruler and the rows scrolls the axis through
-    // time and Ctrl+wheel zooms it; the panel does not scroll under it.
+    // W18-I: the wheel over the ruler and the rows scrolls the zoomed axis
+    // through time and Ctrl+wheel zooms it; only then does the panel not
+    // scroll under it. A plain wheel over the unzoomed axis is left to the
+    // dock, so the panel still scrolls over its rows.
     let area = Rect::from_min_max(axis.min, Pos2::new(axis.right(), rows_bottom));
     let pointer = ui.input(|i| i.pointer.hover_pos());
     if pointer.is_some_and(|p| area.contains(p) && ui.clip_rect().contains(p)) {
@@ -732,11 +734,14 @@ pub(super) fn timeline_body(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             });
             (i.raw_scroll_delta, i.modifiers.command || on_event)
         });
+        let used = zoom || view.span_ms != 0;
         if delta != Vec2::ZERO {
             let at = pointer.map_or(0.5, |p| (p.x - axis.left()) / axis.width().max(1.0));
             view.wheel(tl, delta, zoom, at, axis.width());
         }
-        ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+        if used {
+            ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+        }
     }
 
     if view.playing {
@@ -1551,6 +1556,55 @@ mod tests {
             timeline_view(&live.ctx).window(&live.doc.timeline).span_ms,
             3000
         );
+        assert_eq!(live.history.undo_depth(), 0);
+    }
+
+    /// W18-I: a plain wheel over the rows of an unzoomed timeline is not the
+    /// timeline's: the dock column holding the Animation panel scrolls, so
+    /// a 60-layer timeline's lower rows can be reached with the wheel.
+    #[test]
+    fn a_plain_wheel_over_unzoomed_rows_scrolls_the_dock() {
+        let mut doc = Document::new(64, 48, "video");
+        let mut last = None;
+        for i in 0..60 {
+            last = Some(
+                doc.layers
+                    .push_root(Layer::raster(format!("L{i}")))
+                    .unwrap(),
+            );
+        }
+        doc.set_active_layer(last).unwrap();
+        model::set_mode(&doc, true)
+            .unwrap()
+            .apply(&mut doc)
+            .unwrap();
+        let mut live = Live::new(doc);
+        for _ in 0..3 {
+            live.frame(Vec::new());
+        }
+        let before = live.rect(ids::bar(2));
+        let over = before.center();
+        for _ in 0..20 {
+            live.frame(vec![
+                egui::Event::PointerMoved(over),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -200.0),
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+            live.time += 0.05;
+        }
+        for _ in 0..30 {
+            live.frame(vec![egui::Event::PointerMoved(over)]);
+            live.time += 0.05;
+        }
+        let after = live.rect(ids::bar(2));
+        assert!(
+            after.top() < before.top() - 100.0,
+            "the dock did not scroll: {before:?} {after:?}"
+        );
+        assert_eq!(timeline_view(&live.ctx).span_ms, 0, "the axis stayed whole");
         assert_eq!(live.history.undo_depth(), 0);
     }
 }

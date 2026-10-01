@@ -83,6 +83,7 @@ impl Window {
     /// leading spaces for its tick gutter, so the match is on the trimmed
     /// text) and return what that frame meant.
     fn click_text(&mut self, editor: &mut Editor, label: &str) -> ChromeOutput {
+        self.scroll_language_list_to(editor, label);
         let rect = self
             .texts(editor)
             .into_iter()
@@ -111,6 +112,54 @@ impl Window {
             ],
         );
         out
+    }
+
+    /// W18-K: Window > Language holds 39 rows, taller than this 900-point
+    /// window, so its list scrolls. A language is reached the way a user
+    /// reaches it, with the mouse wheel over the list: the first and last
+    /// rows by scrolling to that end, any other until it is drawn and is not
+    /// a row the list's top or bottom edge cuts through.
+    fn scroll_language_list_to(&mut self, editor: &mut Editor, label: &str) {
+        let names: Vec<&str> = ui::strings::Locale::ALL
+            .iter()
+            .map(|l| l.display_name())
+            .collect();
+        let Some(target) = names.iter().position(|n| *n == label) else {
+            return;
+        };
+        let at_end = target == 0 || target == names.len() - 1;
+        for step in 0..80 {
+            let mut rows: Vec<(usize, egui::Pos2)> = self
+                .texts(editor)
+                .into_iter()
+                .filter_map(|(g, pos)| {
+                    let index = names.iter().position(|n| *n == g.text().trim())?;
+                    Some((index, egui::Rect::from_min_size(pos, g.size()).center()))
+                })
+                .collect();
+            if rows.is_empty() {
+                return;
+            }
+            rows.sort_by(|a, b| a.1.y.total_cmp(&b.1.y));
+            let (first, last) = (rows[0].0, rows[rows.len() - 1].0);
+            let inside = first < target && target < last;
+            if (at_end && step >= 60) || (!at_end && inside) {
+                return;
+            }
+            // Positive y moves the content down, revealing rows above.
+            let up = target <= first;
+            self.frame(
+                editor,
+                vec![
+                    egui::Event::PointerMoved(rows[rows.len() / 2].1),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Line,
+                        delta: egui::vec2(0.0, if up { 1.0 } else { -1.0 }),
+                        modifiers: egui::Modifiers::default(),
+                    },
+                ],
+            );
+        }
     }
 
     /// Open `menu` > `submenu` and click `row`, applying the preferences the

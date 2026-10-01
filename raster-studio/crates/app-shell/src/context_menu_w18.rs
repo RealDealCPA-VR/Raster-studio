@@ -449,6 +449,40 @@ mod tests {
                 .collect()
         }
 
+        /// The colour of the text the drawer painted on each row, read like
+        /// [`Self::drawn_rows`].
+        fn drawn_row_colours(&self) -> Vec<egui::Color32> {
+            let inset = design::Space::Small.pt();
+            let full = self.last.as_ref().unwrap();
+            (0..)
+                .map_while(|i| self.ctx.read_response(context_item(i)))
+                .map(|r| {
+                    full.shapes
+                        .iter()
+                        .rev()
+                        .find_map(|c| match &c.shape {
+                            egui::Shape::Text(t)
+                                if (t.pos.x - (r.rect.left() + inset)).abs() < 0.5
+                                    && t.pos.y >= r.rect.top()
+                                    && t.pos.y < r.rect.bottom() =>
+                            {
+                                Some(t.override_text_color.unwrap_or_else(|| {
+                                    t.galley.rows.first().map_or(t.fallback_color, |row| {
+                                        row.visuals
+                                            .mesh
+                                            .vertices
+                                            .first()
+                                            .map_or(t.fallback_color, |v| v.color)
+                                    })
+                                }))
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or(egui::Color32::TRANSPARENT)
+                })
+                .collect()
+        }
+
         /// The open submenu's rows, read like [`Self::drawn_rows`].
         fn drawn_subrows(&self) -> Vec<String> {
             let inset = design::Space::Small.pt();
@@ -563,12 +597,19 @@ mod tests {
             vec![
                 "Red ink".to_string(),
                 background_name.clone(),
-                "Cut".to_string(),
-                "Copy".to_string(),
-                "Paste".to_string(),
+                ui::strings::tr("ui.canvas_menu.share").to_string(),
+                ui::strings::tr("ui.canvas_menu.remove_bg").to_string(),
             ],
-            "the Move menu: the layers under the pointer, then the clipboard"
+            "the Move menu (Photopea's X.pj YY): the layers under the pointer, then Share... and Remove BG, and no clipboard rows"
         );
+        // The two layer rows are drawn in the enabled text colour; Share...
+        // and Remove BG in the greyed one, since this build has neither
+        // online publishing nor background removal.
+        let colours = rig.drawn_row_colours();
+        assert_eq!(colours.len(), 4);
+        assert_eq!(colours[0], colours[1], "both layer rows are enabled");
+        assert_eq!(colours[2], colours[3], "Share... and Remove BG look alike");
+        assert_ne!(colours[0], colours[2], "Share... and Remove BG are greyed");
         assert_eq!(
             rig.editor.active().unwrap().document.active_layer(),
             Some(top),

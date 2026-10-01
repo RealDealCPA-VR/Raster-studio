@@ -208,6 +208,40 @@ fn with_alpha() -> Document {
     doc
 }
 
+/// Photopea's spot channel rows carry an eye like every other channel: a
+/// click hides the ink (one undo step, undone by undo), a second shows it.
+/// The eye sits left of the ink swatch and a click on it does not pick the
+/// row.
+#[test]
+fn a_spot_channel_row_has_an_eye_that_hides_and_shows_its_ink() {
+    use crate::panels::channels::{spot_eye_id, spot_ids};
+    let mut doc = one_layer();
+    doc.spot_channels
+        .push(editor_core::spot::SpotChannel::empty(
+            "Gold",
+            [200, 160, 0],
+            50,
+        ));
+    let mut h = Harness::new(doc, PanelId::Channels);
+    let eye = h.drawn(spot_eye_id(0)).expect("the spot row has an eye");
+    let swatch = h.drawn(spot_ids::spot_swatch(0)).unwrap();
+    assert!(eye.right() <= swatch.left() + 0.5, "{eye:?} {swatch:?}");
+    let hid = h.click(spot_eye_id(0));
+    assert_eq!(documents(&hid), 1, "{hid:?}");
+    assert!(h.doc.spot_channels[0].hidden, "the ink is hidden");
+    assert_eq!(h.history.undo_depth(), 1);
+    assert_eq!(
+        crate::panels::panel_menus_w16::picked_spot(&h.ctx),
+        None,
+        "the eye's click is not the row's"
+    );
+    let shown = h.click(spot_eye_id(0));
+    assert_eq!(documents(&shown), 1, "{shown:?}");
+    assert!(!h.doc.spot_channels[0].hidden, "shown again");
+    h.history.undo(&mut h.doc).unwrap();
+    assert!(h.doc.spot_channels[0].hidden, "undo hides it again");
+}
+
 /// Photopea: "double-click the name of an independent channel to rename
 /// it". The saved selection keeps its coverage; the rename is one undo step.
 #[test]

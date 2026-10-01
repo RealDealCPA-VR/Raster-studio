@@ -107,6 +107,10 @@ use crate::doc::OpenDocument;
 use crate::editor::Editor;
 use crate::tool_input::{self, SnapPolicy};
 
+// W18-I: the smart guides' distance labels.
+#[path = "smart_guides_w18.rs"]
+mod smart_guides_w18;
+
 // W18-A: the canvas menu each tool builds, measured at the right-click.
 #[path = "context_menu_w18.rs"]
 pub(crate) mod context_menu_w18;
@@ -173,6 +177,9 @@ pub struct ExtrasReport {
     pub guides: usize,
     /// How many smart-guide lines were painted.
     pub smart_guides: usize,
+    /// W18-I: how many smart-guide distances (a gap and its label) were
+    /// painted.
+    pub smart_guide_distances: usize,
     /// How many layer outlines were painted.
     pub layer_edges: usize,
     /// W10-J: how many committed slices View > Show > Slices painted.
@@ -370,6 +377,20 @@ impl CanvasExtras {
                 let hits = smart_guide_hits(doc, &slices, &corners, policy);
                 paint::smart_guides(&painter, &camera, &viewport, &hits, &style);
                 report.smart_guides = hits.len();
+                // W18-I: the gap to the nearest layer on each side, labelled.
+                let gaps = smart_guides_w18::distances(doc, &corners);
+                let tokens = design::current_theme(ctx).tokens();
+                let font = design::egui_theme::font_id(tokens, design::TypeRole::Caption);
+                let pad = Space::XSmall.pt() * 0.5;
+                let radius = design::Radius::Small.resolve(&tokens.radii, font.size);
+                report.smart_guide_distances = paint::smart_guide_distances(
+                    &painter,
+                    &camera,
+                    &viewport,
+                    &gaps,
+                    &style,
+                    (&font, pad, radius),
+                );
             }
         }
 

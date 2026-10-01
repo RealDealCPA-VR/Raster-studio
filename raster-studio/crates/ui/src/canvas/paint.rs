@@ -466,6 +466,52 @@ pub fn smart_guides(
     }
 }
 
+/// W18-I: one distance Photopea's smart guides label while a layer moves:
+/// the gap from the moving box to its nearest neighbour on one side, from
+/// `a` to `b` in document coordinates, `px` document pixels long.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GuideDistance {
+    pub a: Vec2,
+    pub b: Vec2,
+    pub px: f32,
+}
+
+/// W18-I: the label a smart-guide distance wears: whole pixels, `24 px`.
+pub fn guide_distance_label(px: f32) -> String {
+    format!("{} px", px.round() as i64)
+}
+
+/// W18-I: Photopea's smart-guide distances: each gap drawn as a smart-guide
+/// line with its length in a filled label at the middle. `font`, `pad` and
+/// `radius` come from the caller's design tokens. Answers how many were
+/// drawn.
+pub fn smart_guide_distances(
+    painter: &egui::Painter,
+    camera: &CanvasCamera,
+    viewport: &Viewport,
+    distances: &[GuideDistance],
+    style: &CanvasStyle,
+    (font, pad, radius): (&egui::FontId, f32, f32),
+) -> usize {
+    let mut drawn = 0;
+    for d in distances {
+        let a = to_pos2(camera.screen_pt_of(viewport, d.a));
+        let b = to_pos2(camera.screen_pt_of(viewport, d.b));
+        if a.any_nan() || b.any_nan() {
+            continue;
+        }
+        painter.line_segment([a, b], style.hairline(style.smart_guide));
+        let galley =
+            painter.layout_no_wrap(guide_distance_label(d.px), font.clone(), style.handle_fill);
+        let mid = a + (b - a) * 0.5;
+        let bubble = egui::Rect::from_center_size(mid, galley.size() + egui::vec2(pad, pad) * 2.0);
+        painter.rect_filled(bubble, radius, style.smart_guide);
+        painter.galley(bubble.min + egui::vec2(pad, pad), galley, style.handle_fill);
+        drawn += 1;
+    }
+    drawn
+}
+
 /// One outline per layer bounding box — View ▸ Layer Edges.
 ///
 /// Projected corner by corner rather than drawn as a screen-space rectangle, so

@@ -1087,7 +1087,7 @@ Purge	Purga
 Purple	Lila
 Quadtone	Quadritò
 Quality	Qualitat
-Quick Export Layer as PNG…	Exportació ràpida de la capa com a PNG…
+Quick Export Selected Layers…	Exportació ràpida de les capes seleccionades…
 Quit	Surt
 RGB Color	Color RGB
 Radial Blur…	Difuminat radial…
@@ -1643,6 +1643,10 @@ Save PSD/PSB…	Desa PSD/PSB…
 Select or draw a path first	Primer seleccioneu o dibuixeu un traçat
 Right-click on a text layer	Feu clic dret en una capa de text
 Right-click inside a slice	Feu clic dret dins d'un sector
+Share…	Comparteix…
+Remove BG	Elimina el fons
+Publishing online is not part of this build	La publicació en línia no forma part d'aquesta versió
+Background removal is not part of this build	L'eliminació del fons no forma part d'aquesta versió
 Divide Slices	Divideix els sectors
 N equal parts	N parts iguals
 N pixels per part	N píxels per part
@@ -1650,7 +1654,7 @@ N	N
 Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Talla el sector on heu fet clic dret, o el llenç si no n'hi havia cap, en una quadrícula de sectors.
 Tick Horizontally or Vertically	Marqueu Horitzontalment o Verticalment
 These settings make no cut: raise N or pick a smaller pixel count	Aquesta configuració no fa cap tall: augmenteu N o trieu un nombre de píxels més petit
-Cancel (Esc)	Cancel·la (Esc)
+Cancel	Cancel·la
 All Documents	Tots els documents
 Select Source	Selecciona l'origen
 Alt	Alt
@@ -1676,3 +1680,8 @@ User Slices	Sectors d'usuari
 Put the file into ZIP	Posa el fitxer en un ZIP
 Reverse pages	Inverteix les pàgines
 Convert to sRGB	Converteix a sRGB
+Use GPU	Utilitza la GPU
+Quick Export	Exportació ràpida
+The active layer, alone	La capa activa, sola
+{n} selected layers, each to its own file	{n} capes seleccionades, cadascuna al seu fitxer
+An SVG is resolution-free: it is written at canvas size	Un SVG no depèn de la resolució: s'escriu a la mida del llenç

@@ -1087,7 +1087,7 @@ Purge	Počisti pomnilnik
 Purple	Vijolična
 Quadtone	Štiribarvno
 Quality	Kakovost
-Quick Export Layer as PNG…	Hitri izvoz plasti kot PNG…
+Quick Export Selected Layers…	Hitri izvoz izbranih plasti…
 Quit	Izhod
 RGB Color	Barve RGB
 Radial Blur…	Krožna zameglitev…
@@ -1643,6 +1643,10 @@ Save PSD/PSB…	Shrani PSD/PSB…
 Select or draw a path first	Najprej izberite ali narišite pot
 Right-click on a text layer	Z desno tipko kliknite besedilno plast
 Right-click inside a slice	Z desno tipko kliknite znotraj rezine
+Share…	Deli…
+Remove BG	Odstrani ozadje
+Publishing online is not part of this build	Spletno objavljanje ni del te različice
+Background removal is not part of this build	Odstranjevanje ozadja ni del te različice
 Divide Slices	Razdeli rezine
 N equal parts	N enakih delov
 N pixels per part	N slikovnih pik na del
@@ -1650,7 +1654,7 @@ N	N
 Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Razreže rezino, ki ste jo kliknili z desno tipko, ali platno, če je ni bilo, v mrežo rezin.
 Tick Horizontally or Vertically	Označite Vodoravno ali Navpično
 These settings make no cut: raise N or pick a smaller pixel count	Te nastavitve ne režejo ničesar: povečajte N ali izberite manjše število slikovnih pik
-Cancel (Esc)	Prekliči (Esc)
+Cancel	Prekliči
 All Documents	Vsi dokumenti
 Select Source	Izberi vir
 Alt	Alt
@@ -1676,3 +1680,8 @@ User Slices	Uporabniške rezine
 Put the file into ZIP	Postavi datoteko v ZIP
 Reverse pages	Obrni vrstni red strani
 Convert to sRGB	Pretvori v sRGB
+Use GPU	Uporabi GPU
+Quick Export	Hitri izvoz
+The active layer, alone	Aktivna plast, sama
+{n} selected layers, each to its own file	{n} izbranih plasti, vsaka v svojo datoteko
+An SVG is resolution-free: it is written at canvas size	SVG ni odvisen od ločljivosti: zapiše se v velikosti platna

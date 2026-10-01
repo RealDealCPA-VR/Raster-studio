@@ -591,7 +591,9 @@ pub(crate) fn export_parked(
 /// enabled row, `<name><suffix>.<ext>`; an SVG, EXR, PDF, EMF or DXF row at
 /// 100% rewritten from the layers as `jobs::run_export` does), except that
 /// with Photopea's PDF option "reverse pages" a PDF row's pages (one per
-/// artboard, in reading order) are written last first.
+/// artboard, in reading order) are written last first, and a 16-bit sRGB
+/// document's RAW row at 16 Bits and 100% is written from its 16-bit
+/// samples ([`ExportExtras::deep_raw`]).
 fn export_whole(
     editor: &mut Editor,
     job: &ui::dialogs::ExportJob,
@@ -661,6 +663,36 @@ fn export_whole(
                 )?)
             })
             .map_err(err)?;
+        }
+        // A 16-bit sRGB document's RAW row at 16 Bits: its own 16-bit
+        // samples, where the batch writer wrote its 8-bit composite widened.
+        // In another space the batch's conversion to sRGB (8-bit) stands.
+        if let raster::ExportFormat::Raw(layout) = format {
+            if extras.deep_raw
+                && layout.sixteen_bit
+                && doc.is_sixteen_bit()
+                && matches!(doc.document.meta.color_space, color::ColorSpace::Srgb)
+            {
+                let rect = doc.canvas_rect();
+                let rgba16 = compositor::composite_region(
+                    &doc.document,
+                    &doc.tiles,
+                    rect,
+                    0,
+                    compositor::CompositeOptions::default(),
+                )
+                .map_err(|e| format!("Export As: {}: {e}", path.display()))?
+                .to_rgba16(&doc.document.meta.color_space);
+                raster::encode_to_path(
+                    path,
+                    format,
+                    rect.width,
+                    rect.height,
+                    raster::EncodedPixels::Rgba16(&rgba16),
+                    &raster::EncodeOptions::default(),
+                )
+                .map_err(|e| format!("Export As: {}: {e}", path.display()))?;
+            }
         }
         if format == raster::ExportFormat::Pdf && (extras.reverse_pages || extras.pages != 0) {
             let mut scene =

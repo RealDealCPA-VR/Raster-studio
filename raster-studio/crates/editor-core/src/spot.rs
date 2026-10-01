@@ -38,6 +38,15 @@ pub struct SpotChannel {
     /// How much ink each document pixel carries. [`Selection::None`] would
     /// mean "everywhere", so an empty channel is stored as an empty rect.
     pub coverage: Selection,
+    /// W18-I: the row's eye is off — the ink is not laid over the image
+    /// (Photopea's channel eye). Appended with its default and skipped on
+    /// write while shown, so a document written before it loads unchanged.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hidden: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl SpotChannel {
@@ -51,6 +60,7 @@ impl SpotChannel {
                 min: IVec2::ZERO,
                 max: IVec2::ZERO,
             },
+            hidden: false,
         }
     }
 
@@ -71,6 +81,18 @@ pub fn next_spot_name(doc: &Document) -> String {
         .map(|n| format!("Spot Color {n}"))
         .find(|name| doc.spot_channels.iter().all(|c| &c.name != name))
         .unwrap_or_default()
+}
+
+/// W18-I: the spot row's eye: the command that shows (`visible`) or hides
+/// channel `index`, one undo step; `None` when it is already so or gone.
+pub fn set_spot_visible(doc: &Document, index: usize, visible: bool) -> Option<Command> {
+    let channel = doc.spot_channels.get(index)?;
+    if channel.hidden != visible {
+        return None;
+    }
+    let mut channels = doc.spot_channels.clone();
+    channels[index].hidden = !visible;
+    Some(Command::SetSpotChannels { channels })
 }
 
 /// Channels ▸ New Spot Channel: the command that appends a channel named

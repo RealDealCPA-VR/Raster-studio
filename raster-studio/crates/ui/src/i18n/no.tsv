@@ -18,6 +18,10 @@ Right-click inside a path	Høyreklikk inne i en bane
 Select or draw a path first	Velg eller tegn en bane først
 Right-click on a text layer	Høyreklikk på et tekstlag
 Right-click inside a slice	Høyreklikk inne i et stykke
+Share…	Del…
+Remove BG	Fjern bakgrunn
+Publishing online is not part of this build	Nettpublisering er ikke en del av denne versjonen
+Background removal is not part of this build	Fjerning av bakgrunn er ikke en del av denne versjonen
 Divide Slices	Del opp stykker
 N equal parts	N like store deler
 N pixels per part	N piksler per del
@@ -323,7 +327,7 @@ Columns	Kolonner
 Columns and rows with gutters between them, inside optional margins, in pixels.	Kolonner og rader med mellomrom imellom, innenfor valgfrie marger, i piksler.
 Combine Shapes	Kombiner figurer
 Commit (Enter)	Bekreft (Enter)
-Cancel (Esc)	Avbryt (Esc)
+Cancel	Avbryt
 All Documents	Alle dokumenter
 RAW…	RAW…
 Save PSD/PSB	Lagre PSD/PSB
@@ -1126,7 +1130,7 @@ Purge	Tøm
 Purple	Lilla
 Quadtone	Firetone
 Quality	Kvalitet
-Quick Export Layer as PNG…	Hurtigeksporter lag som PNG…
+Quick Export Selected Layers…	Hurtigeksporter valgte lag…
 Quit	Avslutt
 RGB Color	RGB-farge
 Radial Blur…	Radial uskarphet…
@@ -1676,3 +1680,8 @@ Purge All	Tøm alt
 Make	Lag
 Reverse pages	Reverser sider
 Convert to sRGB	Konverter til sRGB
+Use GPU	Bruk GPU
+Quick Export	Hurtigeksport
+The active layer, alone	Det aktive laget, alene
+{n} selected layers, each to its own file	{n} valgte lag, hvert til sin egen fil
+An SVG is resolution-free: it is written at canvas size	En SVG er oppløsningsuavhengig: den skrives i lerretets størrelse

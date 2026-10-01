@@ -121,7 +121,7 @@ fn a_drop_with_no_position_places() {
 /// Two layers — "Blue" (left half blue) and "Green" (right half green) —
 /// over the red image, both selected.
 fn two_selected(dir: &std::path::Path, target: &std::path::Path) -> Editor {
-    let mut editor = editor(dir, ScriptedDialogs::new().saving_to(target));
+    let mut editor = editor(dir, ScriptedDialogs::new().exporting_to(target));
     let mut ids = Vec::new();
     for (name, colour, left) in [
         ("Blue", [0, 0, 255, 255], true),
@@ -155,18 +155,110 @@ fn px(rgba: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
     [rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]
 }
 
-/// Quick Export with two layers selected and a `@2x` name: one PNG per
-/// layer, each the layer alone, at twice the canvas size, named after the
-/// pick and the layer with the suffix kept; an export is no edit.
+/// One frame of the real chrome over the shell's editor, its output applied
+/// the way the shell applies it (menu picks performed).
+fn chrome_frame(
+    shell: &mut Shell,
+    ctx: &egui::Context,
+    events: Vec<egui::Event>,
+) -> egui::FullOutput {
+    let mut out = crate::chrome::ChromeOutput::default();
+    let full = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ctx| {
+            out = shell.chrome.ui(ctx, &mut shell.editor);
+        },
+    );
+    shell.apply_chrome(out);
+    full
+}
+
+/// Where `text` was painted, if it was.
+fn text_at(full: &egui::FullOutput, text: &str) -> Option<egui::Pos2> {
+    fn walk(shape: &egui::Shape, text: &str) -> Option<egui::Pos2> {
+        match shape {
+            egui::Shape::Text(t) if t.galley.text() == text => {
+                Some(t.galley.rect.translate(t.pos.to_vec2()).center())
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| walk(s, text)),
+            _ => None,
+        }
+    }
+    full.shapes.iter().find_map(|c| walk(&c.shape, text))
+}
+
+fn click_text(shell: &mut Shell, ctx: &egui::Context, text: &str) {
+    let full = chrome_frame(shell, ctx, Vec::new());
+    let at = text_at(&full, text).unwrap_or_else(|| panic!("{text:?} is not drawn"));
+    let button = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    };
+    let _ = chrome_frame(
+        shell,
+        ctx,
+        vec![egui::Event::PointerMoved(at), button(true), button(false)],
+    );
+    let _ = chrome_frame(shell, ctx, Vec::new());
+}
+
+/// Photopea's quick export takes a scale, PNG or SVG, and the selected
+/// layers. The Quick Export row opens the Quick Export window; 2x and
+/// Export… there ask where (the Export picker, offered `<doc>@2x.png`) and
+/// write one PNG per selected layer, each the layer alone at twice the
+/// canvas size, named after the pick and the layer with the suffix kept. An
+/// export is no edit.
 #[test]
-fn quick_export_writes_each_selected_layer_at_the_picked_scale() {
+fn quick_export_writes_each_selected_layer_at_the_scale_picked_in_its_window() {
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("icons@2x.png");
-    let mut editor = two_selected(dir.path(), &target);
-    let depth = editor.active().unwrap().history_depth();
-    let status = crate::menu_bridge::perform(ui::menu::MenuAction::QuickExportLayer, &mut editor);
-    assert!(status.is_ok(), "{status:?}");
-    assert_eq!(editor.active().unwrap().history_depth(), depth);
+    let mut shell = Shell::new(two_selected(dir.path(), &target), Vec::new());
+    let ctx = egui::Context::default();
+    crate::chrome::install_theme(&ctx, design::Theme::Dark);
+    let _ = chrome_frame(&mut shell, &ctx, Vec::new());
+    let depth = shell.editor.active().unwrap().history_depth();
+    // The File row names what the window writes: the selected layers, in
+    // the format picked there (not "Layer as PNG").
+    assert_eq!(
+        ui::menu::MenuAction::QuickExportLayer.label(),
+        "Quick Export Selected Layers…"
+    );
+    let opened =
+        crate::menu_bridge::perform(ui::menu::MenuAction::QuickExportLayer, &mut shell.editor);
+    assert!(opened.is_ok(), "{opened:?}");
+    assert!(crate::tool_input::quick_export::window_is_open());
+    // A new window is laid out unseen on its first frame (egui's sizing
+    // pass), so it is read on the second.
+    let _ = chrome_frame(&mut shell, &ctx, Vec::new());
+    let full = chrome_frame(&mut shell, &ctx, Vec::new());
+    for label in ["PNG", "SVG", "1x", "2x", "3x", "4x"] {
+        assert!(text_at(&full, label).is_some(), "the window offers {label}");
+    }
+    assert!(
+        text_at(&full, "0.5x").is_none(),
+        "Photopea's Scale for exported files is 1x to 4x"
+    );
+    assert!(
+        text_at(&full, "2 selected layers, each to its own file").is_some(),
+        "the window says what it writes"
+    );
+    assert!(
+        !dir.path().join("icons-Blue@2x.png").exists(),
+        "nothing yet"
+    );
+    click_text(&mut shell, &ctx, "2x");
+    click_text(&mut shell, &ctx, "Export…");
+    assert!(!crate::tool_input::quick_export::window_is_open(), "closed");
+    assert_eq!(shell.editor.active().unwrap().history_depth(), depth);
 
     let blue = raster::decode_path(&dir.path().join("icons-Blue@2x.png")).unwrap();
     let green = raster::decode_path(&dir.path().join("icons-Green@2x.png")).unwrap();
@@ -184,20 +276,40 @@ fn quick_export_writes_each_selected_layer_at_the_picked_scale() {
     assert!(!target.exists(), "the pick names the set, not a file");
 }
 
-/// Quick Export to a `.svg` writes the layer alone as an SVG document at
-/// canvas size.
+/// SVG in the Quick Export window writes the active layer alone as an SVG
+/// document at canvas size, the picked name's extension set to `.svg`; the
+/// other layers are not in it.
 #[test]
-fn quick_export_to_an_svg_name_writes_svg() {
+fn quick_export_as_svg_from_its_window_writes_the_layer_alone() {
     let dir = tempfile::tempdir().unwrap();
-    let target = dir.path().join("mark.svg");
-    let mut editor = two_selected(dir.path(), &target);
-    let only = editor.active().unwrap().document.active_layer().unwrap();
-    editor.set_layer_selection(vec![only], Some(only));
-    crate::menu_bridge::perform(ui::menu::MenuAction::QuickExportLayer, &mut editor).unwrap();
-    let svg = std::fs::read_to_string(&target).unwrap();
+    let target = dir.path().join("mark.png");
+    let editor = two_selected(dir.path(), &target);
+    let mut shell = Shell::new(editor, Vec::new());
+    let only = shell
+        .editor
+        .active()
+        .unwrap()
+        .document
+        .active_layer()
+        .unwrap();
+    shell.editor.set_layer_selection(vec![only], Some(only));
+    let ctx = egui::Context::default();
+    crate::chrome::install_theme(&ctx, design::Theme::Dark);
+    let _ = chrome_frame(&mut shell, &ctx, Vec::new());
+    crate::menu_bridge::perform(ui::menu::MenuAction::QuickExportLayer, &mut shell.editor).unwrap();
+    let _ = chrome_frame(&mut shell, &ctx, Vec::new());
+    let full = chrome_frame(&mut shell, &ctx, Vec::new());
+    assert!(text_at(&full, "The active layer, alone").is_some());
+    click_text(&mut shell, &ctx, "SVG");
+    click_text(&mut shell, &ctx, "Export…");
+    let svg_path = dir.path().join("mark.svg");
+    let svg = std::fs::read_to_string(&svg_path).unwrap();
     assert!(svg.contains("<svg"), "{svg}");
     assert!(svg.contains(&format!("width=\"{W}\"")), "{svg}");
-    assert!(!dir.path().join("mark.png").exists());
+    assert!(!target.exists(), "the format set the extension");
+    // Each visible raster layer is one embedded image: the active layer
+    // (Green) alone is in it, Blue and the red base are not.
+    assert_eq!(svg.matches("<image ").count(), 1, "{svg}");
 }
 
 #[test]
@@ -208,4 +320,51 @@ fn the_export_suffix_names_a_scale() {
     assert_eq!(scale_suffix("icon"), ("icon", None));
     assert_eq!(scale_suffix("me@home"), ("me@home", None));
     assert_eq!(scale_suffix("big@50x"), ("big@50x", None));
+}
+
+/// Photopea's More ▸ Use WebGL is Window ▸ Use GPU here: a checked row of
+/// the Window menu, on by default. Clicked, it stores "off" through the
+/// shell's own preferences path, the status line says it applies at the next
+/// start, and the saved file keeps it — the start reads it to ask for the
+/// software adapter (`render::context::adapter_attempts`).
+#[test]
+fn window_use_gpu_is_a_stored_switch_that_the_next_start_reads() {
+    use ui::menu::{Entry, MenuAction};
+    let dir = tempfile::tempdir().unwrap();
+    let mut shell = Shell::new(editor(dir.path(), ScriptedDialogs::new()), Vec::new());
+    let menus = crate::menu_bridge::menus(&shell.editor);
+    let window = menus.iter().find(|m| m.title == "Window").unwrap();
+    assert!(
+        window
+            .entries
+            .iter()
+            .any(|e| matches!(e, Entry::Item(MenuAction::ToggleUseGpu))),
+        "Window lists Use GPU"
+    );
+    let ctx = crate::menu_bridge::context(&mut shell.editor, &ui::Workspace::new());
+    assert_eq!(MenuAction::ToggleUseGpu.checked(&ctx), Some(true), "on");
+    let intent = crate::menu_bridge::resolve_intent(MenuAction::ToggleUseGpu, &ctx, &shell.editor)
+        .expect("the row is live");
+    let pick = crate::menu_bridge::pick(&intent, &shell.editor).expect("the row has a route");
+    let mut out = crate::chrome::ChromeOutput::default();
+    crate::menu_bridge::record(pick, &mut out);
+    shell.apply_chrome(out);
+    assert!(!shell.editor.preferences().use_gpu, "stored off");
+    assert!(
+        shell
+            .editor
+            .status()
+            .is_some_and(|s| s.contains("software renderer") && s.contains("next start")),
+        "{:?}",
+        shell.editor.status()
+    );
+    let ctx = crate::menu_bridge::context(&mut shell.editor, &ui::Workspace::new());
+    assert_eq!(MenuAction::ToggleUseGpu.checked(&ctx), Some(false));
+    shell.editor.persist().unwrap();
+    let saved = Preferences::load(&AppPaths::rooted(dir.path().join("config")).preferences_file());
+    assert!(!saved.use_gpu, "the next start reads Use GPU off");
+    assert!(
+        render::context::adapter_attempts(saved.use_gpu)[0].force_fallback_adapter,
+        "and asks for the software adapter first"
+    );
 }

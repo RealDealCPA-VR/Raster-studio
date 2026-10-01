@@ -325,14 +325,16 @@ impl LayersState {
         let Some(layer) = doc.layers.get(id) else {
             return Vec::new();
         };
-        let hidden = self.hidden_effects.get(&id);
+        // W18-I: the switched-off effects ride in the style itself
+        // (`StyleExtras::hidden`), so they are saved with the document.
+        let hidden = layer.effects.extras.hidden.as_deref();
         PANEL_ORDER
             .iter()
             .copied()
             .filter_map(|slot| {
                 if slot.is_set(&layer.effects) {
                     Some(EffectRow { slot, on: true })
-                } else if hidden.is_some_and(|h| h.iter().any(|(s, _)| *s == slot)) {
+                } else if hidden.is_some_and(|h| slot.is_set(h)) {
                     Some(EffectRow { slot, on: false })
                 } else {
                     None
@@ -369,21 +371,24 @@ impl LayersState {
             if slot.is_set(&effects) {
                 return None;
             }
-            let stash = self.hidden_effects.get_mut(&id)?;
-            let at = stash.iter().position(|(s, _)| *s == slot)?;
-            let (_, kept) = stash.remove(at);
-            if stash.is_empty() {
-                self.hidden_effects.remove(&id);
+            // W18-I: the parameters come back out of the saved stash.
+            let mut stash = *effects.extras.hidden.take()?;
+            if !slot.is_set(&stash) {
+                return None;
             }
+            let kept = take_slot(&mut stash, slot);
+            effects.extras.hidden = (!stash.is_empty()).then(|| Box::new(stash));
             put_slot(&mut effects, kept, slot);
         } else {
             if !slot.is_set(&effects) {
                 return None;
             }
+            // W18-I: the parameters go into the style's saved stash.
             let kept = take_slot(&mut effects, slot);
-            let stash = self.hidden_effects.entry(id).or_default();
-            stash.retain(|(s, _)| *s != slot);
-            stash.push((slot, kept));
+            let mut stash = effects.extras.hidden.take().map(|b| *b).unwrap_or_default();
+            let _ = take_slot(&mut stash, slot);
+            put_slot(&mut stash, kept, slot);
+            effects.extras.hidden = Some(Box::new(stash));
         }
         Some(effects_patch(id, effects))
     }
@@ -393,7 +398,6 @@ impl LayersState {
     /// with it.
     pub fn clear_effects(&mut self, doc: &Document, id: LayerId) -> Option<Command> {
         let layer = doc.layers.get(id)?;
-        self.hidden_effects.remove(&id);
         if layer.effects == LayerEffects::default() {
             return None;
         }
@@ -409,15 +413,16 @@ impl LayersState {
         slot: EffectSlot,
     ) -> Option<Command> {
         let layer = doc.layers.get(id)?;
-        if let Some(stash) = self.hidden_effects.get_mut(&id) {
-            stash.retain(|(s, _)| *s != slot);
-            if stash.is_empty() {
-                self.hidden_effects.remove(&id);
-            }
-        }
         let mut effects = layer.effects.clone();
+        // W18-I: a hidden effect dropped on the trash leaves the stash.
+        let mut hidden_gone = false;
+        if let Some(mut stash) = effects.extras.hidden.take().map(|b| *b) {
+            hidden_gone = slot.is_set(&stash);
+            let _ = take_slot(&mut stash, slot);
+            effects.extras.hidden = (!stash.is_empty()).then(|| Box::new(stash));
+        }
         if !slot.is_set(&effects) {
-            return None;
+            return hidden_gone.then(|| effects_patch(id, effects));
         }
         let _ = take_slot(&mut effects, slot);
         Some(effects_patch(id, effects))
@@ -563,7 +568,6 @@ impl LayersState {
     /// Drop W16-D state about layers that left the document.
     pub fn prune_w16(&mut self, doc: &Document) {
         self.effects_folded.retain(|id| doc.layers.contains(*id));
-        self.hidden_effects.retain(|id, _| doc.layers.contains(*id));
         if self
             .effect_drag
             .is_some_and(|(id, _)| !doc.layers.contains(id))

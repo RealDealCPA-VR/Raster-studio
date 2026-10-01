@@ -50,6 +50,7 @@ const W18_LANGUAGES: &[(Locale, &str, &str)] = &[
     (Locale::Eo, "eo", "Esperanto"),
     (Locale::Sq, "sq", "Shqip"),
     (Locale::Tl, "tl", "Tagalog"),
+    (Locale::Kk, "kk", "\u{49a}\u{430}\u{437}\u{430}\u{49b}\u{448}\u{430}"),
 ];
 
 fn ready(ctx: &egui::Context) {
@@ -164,9 +165,9 @@ fn every_w18_language_is_offered_under_its_own_name_and_translates_the_bar() {
             "{locale:?} leaves the bar in English: {titles:?}"
         );
     }
-    // English, the twelve wave-16 languages and these twenty-five.
-    assert_eq!(Locale::ALL.len(), 38, "{} languages", Locale::ALL.len());
-    assert_eq!(W18_LANGUAGES.len(), 25);
+    // English, the twelve wave-16 languages and these twenty-six.
+    assert_eq!(Locale::ALL.len(), 39, "{} languages", Locale::ALL.len());
+    assert_eq!(W18_LANGUAGES.len(), 26);
 }
 
 /// No table carries Hebrew, Arabic or other right-to-left text: the layout
@@ -577,6 +578,20 @@ const PHOTOPEA_TITLES: &[(Locale, &[(&str, &str)])] = &[
             ("Help", "Tulong"),
         ],
     ),
+    (
+        Locale::Kk,
+        &[
+            ("File", "\u{424}\u{430}\u{439}\u{43b}"),
+            ("Edit", "\u{4e8}\u{4a3}\u{434}\u{435}\u{443}"),
+            ("Image", "\u{421}\u{443}\u{440}\u{435}\u{442}"),
+            ("Layer", "\u{49a}\u{430}\u{431}\u{430}\u{442}"),
+            ("Select", "\u{422}\u{430}\u{4a3}\u{434}\u{430}\u{443}"),
+            ("Filter", "\u{421}\u{4af}\u{437}\u{433}\u{456}"),
+            ("View", "\u{41a}\u{4e9}\u{440}\u{443}"),
+            ("Window", "\u{422}\u{435}\u{440}\u{435}\u{437}\u{435}"),
+            ("Help", "\u{41a}\u{4e9}\u{43c}\u{435}\u{43a}"),
+        ],
+    ),
 ];
 
 #[test]
@@ -599,4 +614,34 @@ fn the_menu_titles_are_photopeas_own_words_for_each_w18_language() {
     }
     let bg_edit = with_locale(Locale::Bg, || tr_en("Edit").to_string());
     assert_ne!(bg_edit, "ya");
+}
+
+/// W18-K: the Kazakh table writes the Cyrillic letters Kazakh adds to the
+/// Russian alphabet (the glyph gate above then draws every row of it), and
+/// egui's own faces, with no bundled face installed, draw all eighteen of
+/// those letters in both families: Kazakh needs no extra font.
+#[test]
+fn the_kazakh_table_uses_the_kazakh_letters_and_needs_no_bundled_face() {
+    let table = catalogue(Locale::Kk).expect("a Kazakh table");
+    let text: String = table.rows.values().copied().collect();
+    for letter in "\u{4d9}\u{493}\u{49b}\u{4a3}\u{4e9}\u{4b1}\u{4af}\u{456}\u{49a}\u{4e8}\u{4b0}\u{4ae}\u{406}\u{4d8}".chars() {
+        assert!(text.contains(letter), "no {letter:?} in the Kazakh table");
+    }
+    let ctx = egui::Context::default();
+    ready(&ctx);
+    let (body, mono) = fonts();
+    let letters = "\u{4d8}\u{4d9}\u{492}\u{493}\u{49a}\u{49b}\u{4a2}\u{4a3}\u{4e8}\u{4e9}\u{4b0}\u{4b1}\u{4ae}\u{4af}\u{4ba}\u{4bb}\u{406}\u{456}";
+    assert_eq!(letters.chars().count(), 18);
+    for letter in letters.chars().map(String::from) {
+        assert!(
+            ctx.fonts(|f| f.has_glyphs(&body, &letter) && f.has_glyphs(&mono, &letter)),
+            "egui's own faces lack {letter:?}"
+        );
+    }
+    assert!(!Locale::Kk.needs_cjk_font());
+    assert!(!Locale::Kk.needs_vietnamese_font());
+    assert_eq!(
+        with_locale(Locale::Kk, || tr_en("Layers").to_string()),
+        "\u{49a}\u{430}\u{431}\u{430}\u{442}\u{442}\u{430}\u{440}"
+    );
 }

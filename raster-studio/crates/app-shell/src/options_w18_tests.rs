@@ -291,6 +291,52 @@ fn a_show_transform_controls_drag_is_held_until_enter_lands_it() {
     assert!((m.matrix2.x_axis.x - 0.5).abs() < 1e-4, "{m:?}");
 }
 
+/// The layer's x scale.
+fn active_scale(editor: &Editor) -> f32 {
+    let doc = &editor.active().unwrap().document;
+    let layer = doc.layers.get(doc.active_layer().unwrap()).unwrap();
+    layer.transform.matrix2.x_axis.x
+}
+
+#[test]
+fn picking_another_tool_lands_a_held_show_transform_controls_drag() {
+    let _clean = Clean::new();
+    let dir = tempfile::tempdir().unwrap();
+    let mut editor = editor(dir.path());
+    editor.set_tool(ToolId::Move);
+    let settings = vec![("show_transform".to_string(), ToolSetting::Bool(true))];
+    let mut pointer = ToolPointer::new();
+    pointer.begin_pending_session(&mut editor, &settings);
+    let before = depth(&editor);
+    let steps = drag(
+        &mut pointer,
+        &mut editor,
+        &[(64.0, 64.0), (48.0, 48.0), (32.0, 32.0)],
+        &settings,
+    );
+    assert_eq!(steps, 0, "the release keeps the session open");
+    assert!(pointer.has_pending_commit());
+    // The palette's pick, then the shell's per-frame step.
+    editor.set_tool(ToolId::Brush);
+    pointer.begin_pending_session(&mut editor, &[]);
+    assert!(!pointer.has_pending_commit(), "the held drag is landed");
+    assert_eq!(depth(&editor), before + 1, "as one step");
+    assert!((active_scale(&editor) - 0.5).abs() < 1e-4);
+    // The next tool works on top of it.
+    let brush = drag(
+        &mut pointer,
+        &mut editor,
+        &[(10.0, 10.0), (20.0, 12.0)],
+        &[],
+    );
+    assert_eq!(brush, 1);
+    assert_eq!(depth(&editor), before + 2);
+    assert!((active_scale(&editor) - 0.5).abs() < 1e-4);
+    assert!(editor.active_mut().unwrap().undo().unwrap());
+    assert!(editor.active_mut().unwrap().undo().unwrap());
+    assert!((active_scale(&editor) - 1.0).abs() < 1e-4, "undoable");
+}
+
 #[test]
 fn crop_by_current_layer_clicked_on_the_bar_sets_the_box_and_enter_crops() {
     let _clean = Clean::new();
@@ -580,14 +626,23 @@ fn the_pencil_bars_smoothing_reaches_the_stroke() {
         let dir = tempfile::tempdir().unwrap();
         let mut editor = editor(dir.path());
         editor.set_tool(ToolId::Pencil);
-        // Smoothing is a brush-shared key: the bar's value reaches the
-        // stroke through the Pencil's brush (`chrome::brush_from_options`
-        // writes it there), which the press hands the tool.
-        let brush = tools::BrushSettings {
-            size: 2.0,
-            smoothing,
-            ..*editor.brush()
-        };
+        // The Pencil bar's Smoothing field, as the bar emits it: the chrome
+        // absorbs the option only when the Pencil's schema declares the key,
+        // and its `set_brush` (`chrome::brush_from_options`) is what the
+        // shell applies and the press hands the tool.
+        let mut chrome = Chrome::new();
+        let ctx = egui::Context::default();
+        install_theme(&ctx, design::Theme::Dark);
+        for (key, value) in [("size", 2.0), ("smoothing", smoothing)] {
+            chrome.emit(ui::Intent::SetToolOption {
+                tool: ToolId::Pencil,
+                key,
+                value: ui::OptionValue::Float(value),
+            });
+        }
+        let out = chrome_frame(&ctx, &mut chrome, &mut editor, Vec::new());
+        let brush = out.set_brush.expect("the bar's edit reaches the brush");
+        assert_eq!(brush.smoothing, smoothing, "the Pencil bar's Smoothing");
         editor.set_brush(brush);
         let mut pointer = ToolPointer::new();
         assert_eq!(drag(&mut pointer, &mut editor, &zigzag, &[]), 1);

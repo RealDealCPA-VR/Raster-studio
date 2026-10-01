@@ -2312,10 +2312,10 @@ pub enum MenuAction {
     PrintAsPdf,
 
     // ---- W13-I: the Move options bar's Quick Export ------------------------
-    /// File ▸ Export ▸ Quick Export Layer as PNG…, also the Move tool options
-    /// bar's Quick Export button: the active layer composited alone (every
-    /// unrelated layer hidden) over transparent, at canvas size, written as
-    /// one PNG where the user picks.
+    /// File ▸ Export ▸ Quick Export Selected Layers…, also the Move tool options
+    /// bar's Quick Export button: opens the Quick Export window, which writes
+    /// every selected layer (each composited alone over transparent) as PNG
+    /// or SVG at 1x-4x where the user picks.
     QuickExportLayer,
 
     // ---- W16-N: Window > Language, Window > Glass Menus --------------------
@@ -2327,6 +2327,10 @@ pub enum MenuAction {
     /// as in Photopea's More ▸ Themes): menus drawn over a translucent fill,
     /// the document showing through. Stored in preferences.
     ToggleGlassMenus,
+    /// W18-I: Window ▸ Use GPU (Photopea's More ▸ Use WebGL): draw on the
+    /// graphics card, or, off, on the software renderer. Stored in
+    /// preferences; it applies at the next start.
+    ToggleUseGpu,
     // ---- W16-K: View ▸ Mode, Layer ▸ New ▸ Artboard, bar-only rows ------
     /// View ▸ Mode ▸ Fullscreen / Standard / Menu Bar and Canvas: Photopea's
     /// three screen modes, the ones `F` steps through.
@@ -2740,6 +2744,8 @@ pub struct MenuContext {
     pub w13f: W13fFacts,
     /// W16-N: Window ▸ Glass Menus is on (the preference).
     pub glass_menus: bool,
+    /// W18-I: Window ▸ Use GPU is on (the preference).
+    pub use_gpu: bool,
 }
 
 /// W10-I: the active layer's smart object, if it is one.
@@ -2808,6 +2814,7 @@ impl Default for MenuContext {
             layer_extra: LayerExtraFacts::default(),
             w13f: W13fFacts::default(),
             glass_menus: false,
+            use_gpu: true,
         }
     }
 }
@@ -3219,6 +3226,8 @@ impl MenuAction {
                 .map(MenuAction::SetLanguage),
         );
         out.push(MenuAction::ToggleGlassMenus);
+        // W18-I.
+        out.push(MenuAction::ToggleUseGpu);
         // ---- Help ----
         out.extend([
             MenuAction::Help,
@@ -3561,6 +3570,7 @@ impl MenuAction {
             // W16-N: a language is named in itself, never translated.
             MenuAction::SetLanguage(l) => l.display_name().into(),
             MenuAction::ToggleGlassMenus => "Glass Menus".into(),
+            MenuAction::ToggleUseGpu => "Use GPU".into(),
 
             MenuAction::Help => "Raster Studio Help".into(),
             MenuAction::ReleaseNotes => "Release Notes".into(),
@@ -3601,7 +3611,7 @@ impl MenuAction {
             // W13-K
             MenuAction::Script => "Script…".into(),
             // W13-I
-            MenuAction::QuickExportLayer => "Quick Export Layer as PNG…".into(),
+            MenuAction::QuickExportLayer => "Quick Export Selected Layers…".into(),
             // W16-K
             MenuAction::SetScreenMode(m) => m.label().into(),
             MenuAction::NewArtboard => "Artboard".into(),
@@ -3815,6 +3825,7 @@ impl MenuAction {
             MenuAction::SetTheme(theme) => ctx.theme == theme,
             MenuAction::SetLanguage(locale) => crate::strings::active() == locale,
             MenuAction::ToggleGlassMenus => ctx.glass_menus,
+            MenuAction::ToggleUseGpu => ctx.use_gpu,
             MenuAction::ApplyLayout(layout) => ctx.dock.layout() == Some(layout),
             MenuAction::SetColorMode(mode) => ctx.color_mode == mode,
             MenuAction::SetBitDepth(depth) => ctx.bit_depth == depth,
@@ -4549,6 +4560,7 @@ impl MenuAction {
                 act(self),
             ),
             MenuAction::ToggleGlassMenus => act(self),
+            MenuAction::ToggleUseGpu => act(self),
 
             // ---- Help ------------------------------------------------------
             MenuAction::Help
@@ -5565,6 +5577,8 @@ fn window_menu() -> Menu {
         "Language",
         items(crate::strings::Locale::ALL, MenuAction::SetLanguage),
     ));
+    // W18-I: Photopea's More ▸ Use WebGL, under its Language and Themes.
+    entries.push(item(MenuAction::ToggleUseGpu));
     Menu {
         title: "Window",
         entries,

@@ -5747,6 +5747,7 @@ fn spot_channel_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
     let mut clicked: Option<(usize, bool)> = None;
     let mut edit: Option<usize> = None;
     let mut delete: Option<usize> = None;
+    let mut eye: Option<(usize, bool)> = None;
     for (index, channel) in doc.spot_channels.iter().enumerate() {
         let row = list_row_layout(
             ui,
@@ -5755,6 +5756,18 @@ fn spot_channel_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             |ui| {
                 let t = current_tokens(ui);
                 let height = t.metrics.list_row_height - Space::XSmall.pt();
+                // W18-I: the eye shows or hides the ink, as Photopea's does.
+                if icon_toggle_id(
+                    ui,
+                    "eye",
+                    !channel.hidden,
+                    crate::strings::tr("ui.docks.show.hide.channel"),
+                    Some(crate::panels::channels::spot_eye_id(index)),
+                )
+                .clicked()
+                {
+                    eye = Some((index, channel.hidden));
+                }
                 let rgba = [
                     from_byte(channel.ink[0]),
                     from_byte(channel.ink[1]),
@@ -5805,6 +5818,11 @@ fn spot_channel_rows(w: &mut Workspace, ui: &mut Ui, doc: &Document) {
             let command = ui.input(|i| i.modifiers.command);
             clicked = Some((index, command));
         }
+    }
+    if let Some(command) =
+        eye.and_then(|(i, show)| editor_core::spot::set_spot_visible(doc, i, show))
+    {
+        w.emit(Intent::Document(command));
     }
     if let Some((index, command)) = clicked {
         if command {

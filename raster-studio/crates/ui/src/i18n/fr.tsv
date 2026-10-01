@@ -30,6 +30,10 @@ Save PSD/PSB…	Enregistrer en PSD/PSB…
 Select or draw a path first	Sélectionnez ou dessinez d’abord un tracé
 Right-click on a text layer	Faites un clic droit sur un calque de texte
 Right-click inside a slice	Faites un clic droit à l’intérieur d’une tranche
+Share…	Partager…
+Remove BG	Supprimer l'arrière-plan
+Publishing online is not part of this build	La publication en ligne ne fait pas partie de cette version
+Background removal is not part of this build	La suppression de l'arrière-plan ne fait pas partie de cette version
 Divide Slices	Diviser les tranches
 N equal parts	N parties égales
 N pixels per part	N pixels par partie
@@ -326,7 +330,7 @@ Columns	Colonnes
 Columns and rows with gutters between them, inside optional margins, in pixels.	Colonnes et rangées séparées par des gouttières, dans des marges facultatives, en pixels.
 Combine Shapes	Combiner les formes
 Commit (Enter)	Valider (Entrée)
-Cancel (Esc)	Annuler (Échap)
+Cancel	Annuler
 All Documents	Tous les documents
 Select Source	Sélectionner la source
 Alt	Alt
@@ -1126,7 +1130,7 @@ Purge	Purger
 Purple	Violet
 Quadtone	Quadrichromie
 Quality	Qualité
-Quick Export Layer as PNG…	Export rapide du calque en PNG…
+Quick Export Selected Layers…	Export rapide des calques sélectionnés…
 Quit	Quitter
 RGB Color	Couleurs RVB
 Radial Blur…	Flou radial…
@@ -1676,3 +1680,8 @@ Make	Créer
 There is no path; draw one or select it in the Paths panel	Aucun tracé ; dessinez-en un ou sélectionnez-le dans le panneau Tracés
 Reverse pages	Inverser les pages
 Convert to sRGB	Convertir en sRGB
+Use GPU	Utiliser le GPU
+Quick Export	Exportation rapide
+The active layer, alone	Le calque actif, seul
+{n} selected layers, each to its own file	{n} calques sélectionnés, chacun dans son propre fichier
+An SVG is resolution-free: it is written at canvas size	Un SVG est indépendant de la résolution : il est écrit à la taille de la zone de travail

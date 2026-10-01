@@ -436,6 +436,12 @@ pub fn alpha_eye_id(index: usize) -> egui::Id {
     egui::Id::new(("channels-alpha-eye", index))
 }
 
+/// W18-I: the eye of the `index`th spot channel row: it shows or hides that
+/// channel's ink (`editor_core::spot::set_spot_visible`, one undo step).
+pub fn spot_eye_id(index: usize) -> egui::Id {
+    egui::Id::new(("channels-spot-eye", index))
+}
+
 // ---------------------------------------------------------------------------
 // W18-I: renaming an alpha channel in place
 // ---------------------------------------------------------------------------

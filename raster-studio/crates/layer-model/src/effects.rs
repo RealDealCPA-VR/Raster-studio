@@ -1239,6 +1239,14 @@ pub struct StyleExtras {
     pub color_overlays: Vec<ColorOverlayEffect>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub gradient_overlays: Vec<GradientOverlayEffect>,
+    /// W18-I: the effects whose eye is off in the Layers panel, with the
+    /// parameters the eye puts back (Photopea keeps a hidden effect in the
+    /// style). Never drawn: only the slots of the style itself are.
+    /// Appended, and skipped on write while empty, so a document written
+    /// before it loads unchanged and an unhidden style is byte-for-byte as
+    /// before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<Box<LayerEffects>>,
 }
 
 impl StyleExtras {
@@ -1372,6 +1380,36 @@ mod tests {
         };
         assert!(blend_only.is_empty());
         assert!(!blend_only.is_default());
+    }
+
+    /// W18-I: a hidden effect rides in the style, survives the saved
+    /// document and is never counted as a drawn effect; a style written
+    /// before it existed loads with nothing hidden.
+    #[test]
+    fn hidden_effects_are_saved_with_the_style_and_never_drawn() {
+        let plain = LayerEffects::default();
+        let before = serde_json::to_string(&plain).unwrap();
+        assert!(!before.contains("hidden"), "{before}");
+        let hidden = LayerEffects {
+            stroke: Some(StrokeEffect::default()),
+            ..Default::default()
+        };
+        let e = LayerEffects {
+            extras: StyleExtras {
+                hidden: Some(Box::new(hidden.clone())),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(e.is_empty(), "a hidden effect is not drawn");
+        assert!(!e.affects_composite());
+        assert_eq!(e.count(), 0);
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains("hidden"), "{json}");
+        let back: LayerEffects = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.extras.hidden.as_deref(), Some(&hidden));
+        let old: LayerEffects = serde_json::from_str(&before).unwrap();
+        assert!(old.extras.hidden.is_none());
     }
 
     #[test]

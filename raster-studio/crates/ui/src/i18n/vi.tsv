@@ -1087,7 +1087,7 @@ Purge	Giải phóng
 Purple	Tím
 Quadtone	Bốn tông màu
 Quality	Chất lượng
-Quick Export Layer as PNG…	Xuất nhanh lớp dưới dạng PNG…
+Quick Export Selected Layers…	Xuất nhanh các lớp đã chọn…
 Quit	Thoát
 RGB Color	Màu RGB
 Radial Blur…	Mờ xuyên tâm…
@@ -1643,6 +1643,10 @@ Save PSD/PSB…	Lưu PSD/PSB…
 Select or draw a path first	Hãy chọn hoặc vẽ một đường dẫn trước
 Right-click on a text layer	Nhấp chuột phải vào một lớp văn bản
 Right-click inside a slice	Nhấp chuột phải bên trong một lát cắt
+Share…	Chia sẻ…
+Remove BG	Xóa nền
+Publishing online is not part of this build	Xuất bản trực tuyến không có trong phiên bản này
+Background removal is not part of this build	Xóa nền không có trong phiên bản này
 Divide Slices	Chia lát cắt
 N equal parts	N phần bằng nhau
 N pixels per part	N điểm ảnh mỗi phần
@@ -1650,7 +1654,7 @@ N	N
 Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Cắt lát cắt bạn đã nhấp chuột phải, hoặc khung vẽ nếu không có, thành một lưới lát cắt.
 Tick Horizontally or Vertically	Đánh dấu Theo chiều ngang hoặc Theo chiều dọc
 These settings make no cut: raise N or pick a smaller pixel count	Các cài đặt này không tạo đường cắt nào: tăng N hoặc chọn số điểm ảnh nhỏ hơn
-Cancel (Esc)	Hủy (Esc)
+Cancel	Hủy
 All Documents	Tất cả tài liệu
 Select Source	Chọn nguồn
 Alt	Alt
@@ -1676,3 +1680,8 @@ User Slices	Lát cắt của người dùng
 Put the file into ZIP	Đưa tệp vào ZIP
 Reverse pages	Đảo ngược trang
 Convert to sRGB	Chuyển sang sRGB
+Use GPU	Dùng GPU
+Quick Export	Xuất nhanh
+The active layer, alone	Lớp đang hoạt động, riêng lẻ
+{n} selected layers, each to its own file	{n} lớp đã chọn, mỗi lớp vào một tệp riêng
+An SVG is resolution-free: it is written at canvas size	SVG không phụ thuộc độ phân giải: được ghi theo kích thước canvas

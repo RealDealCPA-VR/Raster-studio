@@ -82,6 +82,7 @@ pub enum Locale {
     Eo,
     Sq,
     Tl,
+    Kk,
 }
 
 impl Locale {
@@ -118,6 +119,7 @@ impl Locale {
         Locale::Tr,
         Locale::El,
         Locale::Bg,
+        Locale::Kk,
         Locale::Mk,
         Locale::Ru,
         Locale::Sr,
@@ -179,6 +181,7 @@ impl Locale {
             Self::Eo => "eo",
             Self::Sq => "sq",
             Self::Tl => "tl",
+            Self::Kk => "kk",
         }
     }
 
@@ -245,6 +248,7 @@ impl Locale {
             Self::Eo => include_str!("i18n/eo.tsv"),
             Self::Sq => include_str!("i18n/sq.tsv"),
             Self::Tl => include_str!("i18n/tl.tsv"),
+            Self::Kk => include_str!("i18n/kk.tsv"),
         })
     }
 
@@ -1039,6 +1043,10 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.canvas_menu.no_path", &[(Locale::En, "Select or draw a path first")]),
     ("ui.canvas_menu.no_text", &[(Locale::En, "Right-click on a text layer")]),
     ("ui.canvas_menu.no_slice", &[(Locale::En, "Right-click inside a slice")]),
+    ("ui.canvas_menu.share", &[(Locale::En, "Share…")]),
+    ("ui.canvas_menu.remove_bg", &[(Locale::En, "Remove BG")]),
+    ("ui.canvas_menu.no_share", &[(Locale::En, "Publishing online is not part of this build")]),
+    ("ui.canvas_menu.no_remove_bg", &[(Locale::En, "Background removal is not part of this build")]),
     ("ui.divide_slice.title", &[(Locale::En, "Divide Slices")]),
     ("ui.divide_slice.horizontally", &[(Locale::En, "Horizontally")]),
     ("ui.divide_slice.vertically", &[(Locale::En, "Vertically")]),
@@ -1404,7 +1412,7 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.toolbar.commit.hint", &[(Locale::En, "Commit (Enter)")]),
     // W18-F: the bar's Cancel cross, the Zoom / Hand toggles, the clone
     // source toggle and the Paint Bucket's pattern picker.
-    ("ui.w18f.cancel.hint", &[(Locale::En, "Cancel (Esc)")]),
+    ("ui.w18f.cancel.hint", &[(Locale::En, "Cancel")]),
     ("ui.w18f.zoom_in", &[(Locale::En, "Zoom In")]),
     ("ui.w18f.zoom_out", &[(Locale::En, "Zoom Out")]),
     ("ui.w18f.all_documents", &[(Locale::En, "All Documents")]),
@@ -1733,6 +1741,14 @@ const TABLE: &[(&str, &[(Locale, &str)])] = &[
     ("ui.w18.memory.purge.clipboard", &[(Locale::En, "Purge Clipboard")]),
     ("ui.w18.memory.purge.histories", &[(Locale::En, "Purge Histories")]),
     ("ui.w18.memory.purge.all", &[(Locale::En, "Purge All")]),
+    // W18-I: the Quick Export window.
+    ("ui.w18.quick_export.title", &[(Locale::En, "Quick Export")]),
+    ("ui.w18.quick_export.format", &[(Locale::En, "Format")]),
+    ("ui.w18.quick_export.scale", &[(Locale::En, "Scale")]),
+    ("ui.w18.quick_export.one", &[(Locale::En, "The active layer, alone")]),
+    ("ui.w18.quick_export.many", &[(Locale::En, "{n} selected layers, each to its own file")]),
+    ("ui.w18.quick_export.svg_scale", &[(Locale::En, "An SVG is resolution-free: it is written at canvas size")]),
+    ("ui.w18.quick_export.ok", &[(Locale::En, "Export…")]),
 ];
 
 /// Keys that must resolve. The tests walk this list, so a table row whose key
@@ -1836,6 +1852,13 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.w18.memory.purge.clipboard",
     "ui.w18.memory.purge.histories",
     "ui.w18.memory.purge.all",
+    "ui.w18.quick_export.title",
+    "ui.w18.quick_export.format",
+    "ui.w18.quick_export.scale",
+    "ui.w18.quick_export.one",
+    "ui.w18.quick_export.many",
+    "ui.w18.quick_export.svg_scale",
+    "ui.w18.quick_export.ok",
     "ui.w16.notes.author",
     "ui.docks.channels.spot.hint",
     // W13X-7.
@@ -2126,6 +2149,10 @@ const KNOWN_KEYS: &[&str] = &[
     "ui.canvas_menu.no_path",
     "ui.canvas_menu.no_text",
     "ui.canvas_menu.no_slice",
+    "ui.canvas_menu.share",
+    "ui.canvas_menu.remove_bg",
+    "ui.canvas_menu.no_share",
+    "ui.canvas_menu.no_remove_bg",
     "ui.divide_slice.title",
     "ui.divide_slice.horizontally",
     "ui.divide_slice.vertically",

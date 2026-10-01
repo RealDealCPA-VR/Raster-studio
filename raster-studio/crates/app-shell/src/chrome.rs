@@ -4850,6 +4850,98 @@ mod tests {
         assert_eq!(during, 0, "Smart Guides off draws none");
     }
 
+    /// W18-I: Photopea's smart guides label the distance to the neighbours
+    /// while a layer moves. The 2x2 ink block (doc 0..2) dragged 3.2 px right
+    /// at 800% snaps its centre to the canvas centre (doc 3..5); a second
+    /// layer's ink at doc x 7..8 faces it 2 px away, so a smart-guide line
+    /// runs from doc x 5 to 7 (screen 708 to 724) across the overlap's middle
+    /// (doc y 1, screen 426) with "2 px" in its label. With Smart Guides off
+    /// the same drag labels nothing.
+    #[test]
+    fn a_move_drag_labels_the_distance_to_the_nearest_layer() {
+        let mut rgba = vec![0u8; 8 * 8 * 4];
+        for y in 0..2 {
+            for x in 0..2 {
+                let i = (y * 8 + x) * 4;
+                rgba[i..i + 4].copy_from_slice(&[200, 30, 30, 255]);
+            }
+        }
+        let held = |smart: bool| -> (Vec<egui::Shape>, usize, ExtrasFrame) {
+            let on: &[ui::ViewFlag] = if smart {
+                &[ui::ViewFlag::SmartGuides]
+            } else {
+                &[]
+            };
+            let mut frame = extras_frame_of(on, 8.0, &rgba);
+            let base = frame
+                .editor
+                .active()
+                .unwrap()
+                .document
+                .active_layer()
+                .unwrap();
+            let neighbour = layer_model::Layer::raster("Neighbour");
+            let id = neighbour.id;
+            frame
+                .editor
+                .apply_command(editor_core::Command::create_layer(neighbour));
+            let mut ink = vec![0u8; 8 * 8 * 4];
+            for y in 0..2 {
+                let i = (y * 8 + 7) * 4;
+                ink[i..i + 4].copy_from_slice(&[30, 30, 200, 255]);
+            }
+            let paint = {
+                let doc = frame.editor.active_mut().unwrap();
+                crate::menu_bridge::pixels::write_layer(doc, id, &ink, "Fixture").unwrap()
+            };
+            frame.editor.apply_command(paint);
+            frame.editor.set_layer_selection(vec![base], Some(base));
+            frame.editor.set_tool(tools::ToolId::Move);
+            let ctx = egui::Context::default();
+            install_theme(&ctx, design::Theme::Dark);
+            let from = egui::pos2(676.0, 426.0);
+            let to = egui::pos2(676.0 + 3.2 * 8.0, 426.0);
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            };
+            let _ = extras_step(&ctx, &mut frame, vec![egui::Event::PointerMoved(from)]);
+            let _ = extras_step(&ctx, &mut frame, vec![egui::Event::PointerMoved(from)]);
+            let _ = extras_step(&ctx, &mut frame, vec![button(from, true)]);
+            let shapes = extras_step(&ctx, &mut frame, vec![egui::Event::PointerMoved(to)]);
+            let during = frame.chrome.extras_report().smart_guide_distances;
+            let _ = extras_step(&ctx, &mut frame, vec![button(to, false)]);
+            (shapes, during, frame)
+        };
+        let labelled = |shapes: &[egui::Shape], text: &str| {
+            shapes.iter().any(|s| match s {
+                egui::Shape::Text(t) => t.galley.text() == text,
+                _ => false,
+            })
+        };
+        let (shapes, during, frame) = held(true);
+        assert_eq!(during, 1, "one gap faces the moving box");
+        assert!(labelled(&shapes, "2 px"), "no \"2 px\" label");
+        let lines = segments_in(&shapes, frame.style.smart_guide, frame.content);
+        assert!(
+            lines.iter().any(|[a, b]| {
+                (a.y - 426.0).abs() < 0.5
+                    && (b.y - 426.0).abs() < 0.5
+                    && (a.x.min(b.x) - 708.0).abs() < 0.5
+                    && (a.x.max(b.x) - 724.0).abs() < 0.5
+            }),
+            "no distance line from 708 to 724 at y 426: {lines:?}"
+        );
+        let (shapes, during, _) = held(false);
+        assert_eq!(during, 0);
+        assert!(
+            !labelled(&shapes, "2 px"),
+            "Smart Guides off labels nothing"
+        );
+    }
+
     /// W3-A: the `--shot` fixture's View toggles parse from their variant
     /// names, case-insensitively, skipping unknown ones.
     #[test]

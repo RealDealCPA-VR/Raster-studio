@@ -1,7 +1,11 @@
 //! W18-I: the library exports and the swatch folders, driven through the
 //! application's own chrome: the panel is docked, its menu is opened and
-//! its rows clicked with real pointer events, and what the export wrote is
-//! read back by the readers File ▸ Open uses.
+//! its rows clicked with real pointer events. What the export wrote is read
+//! back with `asset_store` parsers: the `.asl` with `parse_asl`, the reader
+//! the Styles import uses, and the `.abr` with `parse_abr` (the tips, the
+//! reader File ▸ Open uses) and `parse_abr_presets` (names and dynamics),
+//! which only these tests call: File ▸ Open of an `.abr` reads its tips
+//! only.
 
 use std::path::Path;
 
@@ -109,8 +113,9 @@ impl Window {
 }
 
 /// Brushes ▸ Export as .ABR names each brush and carries its dynamics: the
-/// file read back gives the panel's names, diameters, spacing and jitters,
-/// not just the tips.
+/// file read back with `parse_abr_presets` gives the panel's names,
+/// diameters, spacing and jitters, not just the tips (no import in the app
+/// reads them yet).
 #[test]
 fn brushes_export_as_abr_writes_names_and_dynamics() {
     let dir = tempfile::tempdir().unwrap();

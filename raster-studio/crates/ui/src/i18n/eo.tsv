@@ -1087,7 +1087,7 @@ Purge	Purigi memoron
 Purple	Purpura
 Quadtone	Kvartono
 Quality	Kvalito
-Quick Export Layer as PNG…	Rapide eksporti tavolon kiel PNG…
+Quick Export Selected Layers…	Rapida eksporto de elektitaj tavoloj…
 Quit	Eliri
 RGB Color	RGB-koloro
 Radial Blur…	Radiusa nebuligo…
@@ -1643,6 +1643,10 @@ Save PSD/PSB…	Konservi PSD/PSB…
 Select or draw a path first	Unue elektu aŭ desegnu vojon
 Right-click on a text layer	Dekstre alklaku tekstan tavolon
 Right-click inside a slice	Dekstre alklaku ene de tranĉaĵo
+Share…	Kunhavigi…
+Remove BG	Forigi fonon
+Publishing online is not part of this build	Reta publikigo ne estas parto de ĉi tiu versio
+Background removal is not part of this build	Fonforigo ne estas parto de ĉi tiu versio
 Divide Slices	Dividi tranĉaĵojn
 N equal parts	N egalaj partoj
 N pixels per part	N rastrumeroj po parto
@@ -1650,7 +1654,7 @@ N	N
 Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Tranĉas la tranĉaĵon, kiun vi dekstre alklakis, aŭ la kanvason se estis neniu, en kradon de tranĉaĵoj.
 Tick Horizontally or Vertically	Marku Horizontale aŭ Vertikale
 These settings make no cut: raise N or pick a smaller pixel count	Ĉi tiuj agordoj faras neniun tranĉon: plialtigu N aŭ elektu pli malgrandan nombron de rastrumeroj
-Cancel (Esc)	Nuligi (Esc)
+Cancel	Nuligi
 All Documents	Ĉiuj dosieroj
 Select Source	Elekti fonton
 Alt	Alt
@@ -1676,3 +1680,8 @@ User Slices	Uzantaj tranĉaĵoj
 Put the file into ZIP	Meti la dosieron en ZIP
 Reverse pages	Inversigi paĝojn
 Convert to sRGB	Konverti al sRGB
+Use GPU	Uzi GPU
+Quick Export	Rapida eksporto
+The active layer, alone	La aktiva tavolo, sola
+{n} selected layers, each to its own file	{n} elektitaj tavoloj, ĉiu al sia propra dosiero
+An SVG is resolution-free: it is written at canvas size	SVG ne dependas de distingivo: ĝi estas skribita je la grando de la kanvaso

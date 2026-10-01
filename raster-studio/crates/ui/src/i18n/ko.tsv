@@ -30,6 +30,10 @@ Save PSD/PSB…	PSD/PSB 저장…
 Select or draw a path first	먼저 패스를 선택하거나 그리세요
 Right-click on a text layer	텍스트 레이어를 마우스 오른쪽 버튼으로 클릭하세요
 Right-click inside a slice	분할 영역 안쪽을 마우스 오른쪽 버튼으로 클릭하세요
+Share…	공유…
+Remove BG	배경 제거
+Publishing online is not part of this build	온라인 게시는 이 버전에 포함되어 있지 않습니다
+Background removal is not part of this build	배경 제거는 이 버전에 포함되어 있지 않습니다
 Divide Slices	분할 영역 나누기
 N equal parts	N개의 균등 분할
 N pixels per part	부분당 N 픽셀
@@ -326,7 +330,7 @@ Columns	열
 Columns and rows with gutters between them, inside optional margins, in pixels.	간격을 둔 열과 행(픽셀 단위, 선택적 여백 안).
 Combine Shapes	모양 결합
 Commit (Enter)	확정(Enter)
-Cancel (Esc)	취소 (Esc)
+Cancel	취소
 All Documents	모든 문서
 Select Source	소스 선택
 Alt	Alt
@@ -1126,7 +1130,7 @@ Purge	제거
 Purple	보라
 Quadtone	4도
 Quality	품질
-Quick Export Layer as PNG…	레이어를 PNG로 빠른 내보내기…
+Quick Export Selected Layers…	선택한 레이어 빠른 내보내기…
 Quit	종료
 RGB Color	RGB 색상
 Radial Blur…	방사형 흐림 효과…
@@ -1676,3 +1680,8 @@ Make	만들기
 There is no path; draw one or select it in the Paths panel	패스가 없습니다. 패스를 그리거나 패스 패널에서 선택하세요
 Reverse pages	페이지 역순
 Convert to sRGB	sRGB로 변환
+Use GPU	GPU 사용
+Quick Export	빠른 내보내기
+The active layer, alone	활성 레이어만
+{n} selected layers, each to its own file	선택한 레이어 {n}개, 각각 별도 파일로
+An SVG is resolution-free: it is written at canvas size	SVG는 해상도와 무관합니다: 캔버스 크기로 기록됩니다

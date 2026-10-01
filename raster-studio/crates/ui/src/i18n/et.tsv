@@ -1087,7 +1087,7 @@ Purge	Vabasta mälu
 Purple	Lilla
 Quadtone	Kvadrotoon
 Quality	Kvaliteet
-Quick Export Layer as PNG…	Kiht kiireksportimisega PNG-na…
+Quick Export Selected Layers…	Valitud kihtide kiireksport…
 Quit	Välju
 RGB Color	RGB-värv
 Radial Blur…	Radiaalne udu…
@@ -1643,6 +1643,10 @@ Save PSD/PSB…	Salvesta PSD/PSB…
 Select or draw a path first	Vali või joonista esmalt tee
 Right-click on a text layer	Paremklõpsa tekstikihti
 Right-click inside a slice	Paremklõpsa lõigu sees
+Share…	Jaga…
+Remove BG	Eemalda taust
+Publishing online is not part of this build	Veebis avaldamine ei kuulu sellesse versiooni
+Background removal is not part of this build	Tausta eemaldamine ei kuulu sellesse versiooni
 Divide Slices	Jaga lõigud
 N equal parts	N võrdset osa
 N pixels per part	N pikslit osa kohta
@@ -1650,7 +1654,7 @@ N	N
 Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Lõikab lõigu, mida paremklõpsasid, või lõuendi, kui lõiku polnud, lõikude ruudustikuks.
 Tick Horizontally or Vertically	Märgi Horisontaalselt või Vertikaalselt
 These settings make no cut: raise N or pick a smaller pixel count	Need sätted ei lõika midagi: suurenda N-i või vali väiksem pikslite arv
-Cancel (Esc)	Loobu (Esc)
+Cancel	Loobu
 All Documents	Kõik dokumendid
 Select Source	Vali allikas
 Alt	Alt
@@ -1676,3 +1680,8 @@ User Slices	Kasutaja lõigud
 Put the file into ZIP	Pane fail ZIP-i
 Reverse pages	Pööra lehed ümber
 Convert to sRGB	Teisenda sRGB-ks
+Use GPU	Kasuta GPU-d
+Quick Export	Kiireksport
+The active layer, alone	Aktiivne kiht, üksi
+{n} selected layers, each to its own file	{n} valitud kihti, igaüks omaette faili
+An SVG is resolution-free: it is written at canvas size	SVG ei sõltu eraldusvõimest: see kirjutatakse lõuendi suuruses

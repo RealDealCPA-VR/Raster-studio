@@ -9,15 +9,28 @@
 //!   Border, Smooth, Expand, Contract, Feather), Refine Edge | Save Selection, Make Work Path |
 //!   Layer Via Copy, Layer Via Cut, New Layer | Free Transform, Transform
 //!   Selection | Fill, Stroke.
-//! * **Move** (`X.pj`): the layers under the pointer, top first — a click
-//!   selects that layer — then Cut, Copy, Paste.
+//! * **Move** (`X.pj`'s `YY`): the layers under the pointer, top first — a
+//!   click selects that layer — then Share… and Remove BG. Both of those rows
+//!   are drawn greyed with the reason: Share… is Photopea's online publishing
+//!   (its `publishOnline` dialog, PSD format) and Remove BG its cloud
+//!   background-removal service (`bgrm`), and this build has neither. Photopea
+//!   lists no Cut, Copy or Paste here. Two Move cases are not built: Ctrl+right-
+//!   click (Photopea selects the top layer without a list) and a right-click
+//!   on the rulers (Photopea's ruler list).
 //! * **During Free Transform** (`jD.ab$`, whichever tool holds the session):
 //!   Again | Scale, Rotate, Skew, Distort, Perspective | Warp | Rotate 90° CW,
 //!   Rotate 90° CCW, Rotate 180°, Flip Horizontal, Flip Vertical.
-//! * **Pen and path tools** (`X.S$`): Remove Anchor Point, Remove Path |
-//!   Make Selection, Fill, Stroke — on the path under the pointer.
+//! * **Pen and path tools** (`X.S$`, `lV.mE`): Remove Anchor Point, Remove
+//!   Path | Make Selection, Fill, Stroke — on the path under the pointer. Fill
+//!   applies at once with the foreground colour, as Photopea's does. Make
+//!   Selection and Stroke differ: Photopea opens its Make Selection dialog
+//!   (`makesel`: feather, anti-alias, operation) and its Stroke Path dialog
+//!   (`strokepath`); this build has neither dialog, so Make Selection loads
+//!   the path as a new selection and Stroke strokes it with the foreground
+//!   colour at the Brush size, both at once.
 //! * **Type** (`al` "showpan"): Edit (the text layer under the pointer) |
-//!   Warp Text.
+//!   Warp Text. Photopea's other Type list, shown while text is being edited
+//!   (`B.aqQ`: Select All and the text-editing rows), is not built.
 //! * **Zoom** (`X.aX`): Zoom In, Zoom Out | Fit on Screen, 100%.
 //! * **Slice tools** (`X.oP`): Delete, Slice Options…, Divide… — the
 //!   right-click picks the slice under it first, as Photopea's does.
@@ -244,9 +257,17 @@ pub fn rows(ctx: &MenuContext, menu: &CanvasMenu) -> Vec<MenuItem> {
                 ));
             }
             rule(&mut rows);
-            rows.extend(items(
-                ctx,
-                &[MenuAction::Cut, MenuAction::Copy, MenuAction::Paste],
+            // Photopea's two rows after the layers; neither service exists
+            // in this build, so both stay greyed with the reason.
+            rows.push(custom(
+                tr("ui.canvas_menu.share"),
+                MenuAction::SaveAsPsd,
+                &Err(tr("ui.canvas_menu.no_share")),
+            ));
+            rows.push(custom(
+                tr("ui.canvas_menu.remove_bg"),
+                MenuAction::SelectSubject,
+                &Err(tr("ui.canvas_menu.no_remove_bg")),
             ));
         }
         Family::Transform => {
@@ -469,6 +490,31 @@ mod tests {
             transform[11].action,
             MenuAction::Transform(TransformOp::FlipVertical)
         );
+        // Move: the layers under the pointer, then Photopea's Share… and
+        // Remove BG (greyed here), and no clipboard rows.
+        let mut moving = CanvasMenu::bare(ToolId::Move);
+        moving.layers_under = vec![
+            (LayerId::new(), "Top".into()),
+            (LayerId::new(), "Bottom".into()),
+        ];
+        let moving = rows(&ctx, &moving);
+        assert_eq!(
+            labels(&moving),
+            vec![
+                "Top".to_string(),
+                "Bottom".to_string(),
+                tr("ui.canvas_menu.share").to_string(),
+                tr("ui.canvas_menu.remove_bg").to_string(),
+            ]
+        );
+        assert!(moving[1].separator_after);
+        assert!(matches!(moving[0].resolution, Resolution::Enabled(_)));
+        assert!(matches!(moving[2].resolution, Resolution::Disabled(_)));
+        assert!(matches!(moving[3].resolution, Resolution::Disabled(_)));
+        assert!(!moving.iter().any(|r| matches!(
+            r.action,
+            MenuAction::Cut | MenuAction::Copy | MenuAction::Paste
+        )));
         // A tool Photopea gives no list keeps the general one.
         let brush = rows(&ctx, &CanvasMenu::bare(ToolId::Brush));
         assert_eq!(labels(&brush), labels(&super::super::canvas_items(&ctx)));

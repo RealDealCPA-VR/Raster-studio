@@ -18,6 +18,10 @@ Right-click inside a path	Napsauta hiiren oikealla polun sisällä
 Select or draw a path first	Valitse tai piirrä ensin polku
 Right-click on a text layer	Napsauta hiiren oikealla tekstitasoa
 Right-click inside a slice	Napsauta hiiren oikealla viipaleen sisällä
+Share…	Jaa…
+Remove BG	Poista tausta
+Publishing online is not part of this build	Verkkojulkaisu ei kuulu tähän versioon
+Background removal is not part of this build	Taustan poisto ei kuulu tähän versioon
 Divide Slices	Jaa viipaleet
 N equal parts	N yhtä suurta osaa
 N pixels per part	N kuvapistettä osaa kohden
@@ -1110,7 +1114,7 @@ Purge	Tyhjennä muisti
 Purple	Violetti
 Quadtone	Nelisävy
 Quality	Laatu
-Quick Export Layer as PNG…	Pikavie taso PNG-muodossa…
+Quick Export Selected Layers…	Valittujen tasojen pikavienti…
 Quit	Lopeta
 RGB Color	RGB-väri
 Radial Blur…	Säteittäinen sumennus…
@@ -1658,7 +1662,7 @@ Minify the file	Pienennä tiedostoa
 RAW…	RAW…
 Save PSD/PSB	Tallenna PSD/PSB
 Save PSD/PSB…	Tallenna PSD/PSB…
-Cancel (Esc)	Peruuta (Esc)
+Cancel	Peruuta
 All Documents	Kaikki dokumentit
 Select Source	Valitse lähde
 Alt	Alt
@@ -1676,3 +1680,8 @@ Purge All	Tyhjennä kaikki
 Make	Tee
 Reverse pages	Käännä sivujärjestys
 Convert to sRGB	Muunna sRGB:ksi
+Use GPU	Käytä GPU:ta
+Quick Export	Pikavienti
+The active layer, alone	Aktiivinen taso yksinään
+{n} selected layers, each to its own file	{n} valittua tasoa, kukin omaan tiedostoonsa
+An SVG is resolution-free: it is written at canvas size	SVG on resoluutiosta riippumaton: se kirjoitetaan piirtoalueen kokoisena

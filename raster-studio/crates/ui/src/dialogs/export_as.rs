@@ -356,10 +356,17 @@ pub struct ExportAsDialog {
     /// and the ids the last frame drew their controls with.
     extras: ExportExtras,
     extras_drawn: [Option<egui::Id>; 5],
+    /// W18-G: the ids the last frame drew a RAW row's Channels, Depth and
+    /// Byte Order combos with (`None` when the row is not a RAW).
+    raw_drawn: [Option<egui::Id>; 3],
     /// W18-G: whether the document carries an embedded profile other than
     /// sRGB ([`note_document_profile`]), which is when Photopea offers
     /// "convert to sRGB".
     has_profile: bool,
+    /// W18-G: whether the document is 16 bits a channel
+    /// ([`note_document_depth`]): a RAW row at 16 Bits then carries its
+    /// samples whole rather than its 8-bit composite widened.
+    sixteen_bit_doc: bool,
     /// W18-G: a PDF row's "Pages" field as typed (Photopea's `pags`).
     pdf_pages: String,
 }
@@ -415,7 +422,9 @@ impl ExportAsDialog {
             embed_metadata: true,
             extras: ExportExtras::default(),
             extras_drawn: [None; 5],
+            raw_drawn: [None; 3],
             has_profile: DOCUMENT_PROFILE.with(Cell::get),
+            sixteen_bit_doc: DOCUMENT_SIXTEEN_BIT.with(Cell::get),
             pdf_pages: String::new(),
         }
     }
@@ -605,6 +614,14 @@ impl ExportAsDialog {
             };
             if !entry.preset.format.supports_16_bit() {
                 entry.preset.bit_depth = BitDepth::Eight;
+            }
+            // W18-G: a RAW row has one Depth, its layout's.
+            if let ExportFormat::Raw(layout) = entry.preset.format {
+                entry.preset.bit_depth = if layout.sixteen_bit {
+                    BitDepth::Sixteen
+                } else {
+                    BitDepth::Eight
+                };
             }
         }
     }
@@ -1081,6 +1098,7 @@ impl ExportAsDialog {
             });
         }
         // W18-G: a RAW row's layout, Photopea's three RAW options.
+        self.raw_drawn = [None; 3];
         if let Some(layout) = self.raw_layout() {
             self.raw_fields(ui, layout);
         }
@@ -1152,28 +1170,33 @@ impl ExportAsDialog {
             }
         });
         let supports_16 = entry.preset.format.supports_16_bit();
-        design::inspector_field(ui, "Depth", |ui| {
-            let mut depth = entry.preset.bit_depth;
-            if combo(
-                ui,
-                "ex-depth",
-                &mut depth,
-                &[BitDepth::Eight, BitDepth::Sixteen],
-                |d| match d {
-                    BitDepth::Eight => crate::strings::tr("ui.export_as.8.bit").to_string(),
-                    BitDepth::Sixteen => crate::strings::tr("ui.export_as.16.bit").to_string(),
-                },
-                |d| {
-                    (d == BitDepth::Sixteen && !supports_16).then_some(crate::strings::tr(
-                        "ui.export_as.this.format.stores.8.bits.per",
-                    ))
-                },
-            ) {
-                if let Some(entry) = self.entry_mut(index) {
-                    entry.preset.bit_depth = depth;
+        // W18-G: a RAW row's Depth is its layout's (drawn with Channels and
+        // Byte Order above), the one Depth Photopea's RAW export has.
+        let raw_row = matches!(entry.preset.format, ExportFormat::Raw(_));
+        if !raw_row {
+            design::inspector_field(ui, "Depth", |ui| {
+                let mut depth = entry.preset.bit_depth;
+                if combo(
+                    ui,
+                    "ex-depth",
+                    &mut depth,
+                    &[BitDepth::Eight, BitDepth::Sixteen],
+                    |d| match d {
+                        BitDepth::Eight => crate::strings::tr("ui.export_as.8.bit").to_string(),
+                        BitDepth::Sixteen => crate::strings::tr("ui.export_as.16.bit").to_string(),
+                    },
+                    |d| {
+                        (d == BitDepth::Sixteen && !supports_16).then_some(crate::strings::tr(
+                            "ui.export_as.this.format.stores.8.bits.per",
+                        ))
+                    },
+                ) {
+                    if let Some(entry) = self.entry_mut(index) {
+                        entry.preset.bit_depth = depth;
+                    }
                 }
-            }
-        });
+            });
+        }
 
         if self.offers_animation() {
             let mut animated = entry.animated;
@@ -1275,6 +1298,7 @@ impl ExportAsDialog {
     fn raw_fields(&mut self, ui: &mut egui::Ui, layout: raster::codec::RawLayout) {
         let mut next = layout;
         design::inspector_field(ui, crate::strings::tr("ui.w18g.raw.channels"), |ui| {
+            self.raw_drawn[0] = Some(ui.make_persistent_id(egui::Id::new("ex-raw-channels")));
             combo(
                 ui,
                 "ex-raw-channels",
@@ -1285,6 +1309,7 @@ impl ExportAsDialog {
             )
         });
         design::inspector_field(ui, crate::strings::tr("ui.w18g.raw.depth"), |ui| {
+            self.raw_drawn[1] = Some(ui.make_persistent_id(egui::Id::new("ex-raw-depth")));
             combo(
                 ui,
                 "ex-raw-depth",
@@ -1302,6 +1327,7 @@ impl ExportAsDialog {
             )
         });
         design::inspector_field(ui, crate::strings::tr("ui.w18g.raw.byte.order"), |ui| {
+            self.raw_drawn[2] = Some(ui.make_persistent_id(egui::Id::new("ex-raw-byte-order")));
             combo(
                 ui,
                 "ex-raw-byte-order",
@@ -1354,6 +1380,12 @@ impl ExportAsDialog {
             } else {
                 0
             },
+            deep_raw: self.sixteen_bit_doc
+                && self.entries.iter().any(|e| {
+                    e.enabled
+                        && e.preset.scale == 1.0
+                        && matches!(e.preset.format, ExportFormat::Raw(l) if l.sixteen_bit)
+                }),
         }
     }
 
@@ -1408,6 +1440,12 @@ impl ExportAsDialog {
     /// checkbox and the PDF's Pages field with (`None` when not offered).
     pub fn drawn_extras(&self) -> [Option<egui::Id>; 5] {
         self.extras_drawn
+    }
+
+    /// W18-G: the ids the last frame drew the RAW row's Channels, Depth and
+    /// Byte Order combo buttons with (`None` when the row is not a RAW).
+    pub fn drawn_raw_fields(&self) -> [Option<egui::Id>; 3] {
+        self.raw_drawn
     }
 
     /// W18-G: Photopea's "Artboards" checkbox and "Slices" choice, shown
@@ -1544,6 +1582,10 @@ pub struct ExportExtras {
     /// A PDF row's "Pages": bit `n` set writes page `n + 1` (one page per
     /// artboard); `0` writes every page ([`page_mask`]).
     pub pages: u128,
+    /// A 16-bit document with a RAW row at 16 Bits and 100%: the row is
+    /// written from the document's 16-bit samples, not the batch writer's
+    /// 8-bit composite widened (whose two bytes are always equal).
+    pub deep_raw: bool,
 }
 
 impl ExportExtras {
@@ -1554,6 +1596,7 @@ impl ExportExtras {
             && !self.reverse_pages
             && !self.keep_profile
             && self.pages == 0
+            && !self.deep_raw
     }
 
     /// Whether the PDF's page `index` (from 0) of `count` is written: every
@@ -1573,18 +1616,36 @@ impl ExportExtras {
 /// word that is not a page number (or is below 1) is dropped. Bit `n` of the
 /// mask is page `n + 1`; pages past 128 cannot be named.
 pub fn page_mask(text: &str) -> u128 {
-    let spaced = text.replace(',', " ").replace('-', " - ");
-    let words: Vec<&str> = spaced.split_whitespace().collect();
+    // Tokens: `None` is a range dash, `Some(word)` a run of other
+    // characters (commas and whitespace separate runs).
+    let mut words: Vec<Option<String>> = Vec::new();
+    let mut run = String::new();
+    for c in text.chars() {
+        if c == '-' || c == ',' || c.is_whitespace() {
+            if !run.is_empty() {
+                words.push(Some(std::mem::take(&mut run)));
+            }
+            if c == '-' {
+                words.push(None);
+            }
+        } else {
+            run.push(c);
+        }
+    }
+    if !run.is_empty() {
+        words.push(Some(run));
+    }
+    let number = |w: Option<&Option<String>>| {
+        w.and_then(|w| w.as_deref())
+            .and_then(|w| w.parse::<i64>().ok())
+    };
     let mut pages: Vec<i64> = Vec::new();
     for (i, word) in words.iter().enumerate() {
-        if *word == "-" {
-            if let (Some(from), Some(to)) = (
-                pages.pop(),
-                words.get(i + 1).and_then(|w| w.parse::<i64>().ok()),
-            ) {
+        if word.is_none() {
+            if let (Some(from), Some(to)) = (pages.pop(), number(words.get(i + 1))) {
                 pages.extend(from..to.min(from.saturating_add(128)));
             }
-        } else if let Ok(n) = word.parse::<i64>() {
+        } else if let Some(n) = number(Some(word)) {
             pages.push(n);
         }
     }
@@ -1615,6 +1676,9 @@ thread_local! {
     /// W18-G: whether the document Export As is about to open over carries
     /// an embedded non-sRGB profile ([`note_document_profile`]).
     static DOCUMENT_PROFILE: Cell<bool> = const { Cell::new(false) };
+    /// W18-G: whether that document is 16 bits a channel
+    /// ([`note_document_depth`]).
+    static DOCUMENT_SIXTEEN_BIT: Cell<bool> = const { Cell::new(false) };
     /// W18-G: the Export As job parked for its per-artboard / per-slice
     /// writer, and whether the File ▸ Export row is still to be asked for.
     static PARKED_EXPORT: RefCell<Option<(ExportJob, ExportExtras)>> =
@@ -1635,6 +1699,13 @@ pub fn park_export(job: ExportJob, extras: ExportExtras) {
 /// offers Photopea's "convert to sRGB".
 pub fn note_document_profile(has: bool) {
     DOCUMENT_PROFILE.with(|slot| slot.set(has));
+}
+
+/// W18-G: the host says whether the active document is 16 bits a channel,
+/// before Export As opens over it; a RAW row at 16 Bits then writes its
+/// samples whole ([`ExportExtras::deep_raw`]).
+pub fn note_document_depth(sixteen_bit: bool) {
+    DOCUMENT_SIXTEEN_BIT.with(|slot| slot.set(sixteen_bit));
 }
 
 /// W18-G: the parked Export As job and its options, taken.
@@ -2832,5 +2903,49 @@ mod tests {
             ..ExportExtras::default()
         }
         .is_plain());
+    }
+
+    /// W18-G: a RAW row has one Depth, its layout's (Photopea's RAW export
+    /// has one): the generic "8 bit" / "16 bit" Depth is not drawn on it,
+    /// and picking RAW makes the row's bit depth the layout's, so the two
+    /// cannot disagree. Another format keeps the generic Depth.
+    #[test]
+    fn a_raw_row_draws_one_depth_and_its_bit_depth_is_the_layouts() {
+        use raster::codec::RawLayout;
+        let mut dialog = dialog();
+        dialog.entry_mut(0).unwrap().preset.bit_depth = BitDepth::Sixteen;
+        let png = drawn_texts(&mut dialog);
+        assert_eq!(png.iter().filter(|t| *t == "Depth").count(), 1, "{png:?}");
+        assert!(png.iter().any(|t| t == "16 bit"), "{png:?}");
+        assert_eq!(dialog.drawn_raw_fields(), [None; 3]);
+
+        dialog.set_format(ExportFormat::Raw(RawLayout::DEFAULT));
+        assert_eq!(
+            dialog.entries()[0].preset.bit_depth,
+            BitDepth::Eight,
+            "picking RAW takes the layout's depth"
+        );
+        assert!(dialog.set_raw_layout(RawLayout {
+            sixteen_bit: true,
+            ..RawLayout::DEFAULT
+        }));
+        let raw = drawn_texts(&mut dialog);
+        assert_eq!(raw.iter().filter(|t| *t == "Depth").count(), 1, "{raw:?}");
+        assert!(raw.iter().any(|t| t == "16 Bits"), "{raw:?}");
+        assert!(
+            !raw.iter().any(|t| t == "8 bit" || t == "16 bit"),
+            "no second Depth: {raw:?}"
+        );
+        assert!(dialog.drawn_raw_fields().iter().all(Option::is_some));
+        assert_eq!(dialog.entries()[0].preset.bit_depth, BitDepth::Sixteen);
+
+        // An 8-bit row picked as a 16 Bits RAW takes the layout's depth too.
+        let mut eight = self::dialog();
+        assert_eq!(eight.entries()[0].preset.bit_depth, BitDepth::Eight);
+        eight.set_format(ExportFormat::Raw(RawLayout {
+            sixteen_bit: true,
+            ..RawLayout::DEFAULT
+        }));
+        assert_eq!(eight.entries()[0].preset.bit_depth, BitDepth::Sixteen);
     }
 }

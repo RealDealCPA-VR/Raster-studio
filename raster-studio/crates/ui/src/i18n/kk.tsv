@@ -1,0 +1,1687 @@
+# Raster Studio interface strings, kk. One row per line: the English source, a TAB,
+# the translation. Placeholders in braces ({name}, {n}) and menu ellipses are kept.
+# Escapes: \n, \t, \\. The gate is strings::tests::every_language_table_translates_every_catalogue_string.
+@name	Қазақша
+ fps	 кадр/с
+ frames	 кадр
+ ms	 мс
+ px	 пикс.
+0 bytes	0 байт
+16 Bits/Channel	16 бит/арна
+16 bit	16 бит
+32 Bits/Channel	32 бит/арна
+3D	3D
+50% Grey	50% сұр
+50% Threshold	50% шегі
+8 Bits/Channel	8 бит/арна
+8 bit	8 бит
+90° Clockwise	Сағат тілімен 90°
+90° Counter Clockwise	Сағат тіліне қарсы 90°
+A CSV row has the wrong number of fields, at line	CSV жолындағы өрістер саны дұрыс емес, жол
+A blank canvas at any size	Кез келген өлшемдегі бос кенеп
+A colour channel cannot be deleted	Түс арнасын өшіруге болмайды
+A layered raster editor	Қабаттары бар растрлық редактор
+A palette holds 2 to 256 colours	Палитрада 2-ден 256-ға дейін түс болады
+A saved selection already has that name	Бұл атау сақталған таңдауда бар
+A saved selection: click to open Select > Load Selection, then choose it by name there	Сақталған таңдау: Таңдау > Таңдауды жүктеу ашу үшін басыңыз да, оны сол жерден атауы бойынша таңдаңыз
+A slice needs a name	Кесіндіге атау қажет
+AV1 (smaller, newer players)	AV1 (кішірек, жаңа ойнатқыштар)
+About Raster Studio	Raster Studio туралы
+Absolute Colorimetric	Абсолютті колориметриялық
+Action sets	Әрекет жинақтары
+Actions	Әрекеттер
+Adaptive (median cut)	Бейімделгіш (медиана бойынша бөлу)
+Add "copy" to copied layers	Көшірілген қабаттарға «көшірме» қосу
+Add Artboard Above	Тақтаны жоғарыға қосу
+Add Artboard Below	Тақтаны төменге қосу
+Add Artboard Left	Тақтаны солға қосу
+Add Artboard Right	Тақтаны оңға қосу
+Add Filter Mask	Фильтр Маскасын Қосу
+Add Media	Медиа қосу
+Add Noise…	Шу қосу…
+Add a layer mask	Қабат маскасын қосу
+Add a smart filter mask	Смарт-сүзгі маскасын қосу
+Place an image or video file (File > Place Embedded); a video becomes a video layer at the playhead	Сурет не бейне файлын орналастыру (Файл > Ендіріп орналастыру); бейне ойнату нүктесінде бейне қабатына айналады
+Add an adjustment layer	Түзету қабатын қосу
+Add another instance of this effect	Бұл әсердің тағы бір данасын қосу
+Add current colour	Ағымдағы түсті қосу
+Add export	Экспорт қосу
+Add frame	Кадр қосу
+Add or remove room around the image. Pixels are not resampled.	Суреттің айналасына орын қосу не алып тастау. Пиксельдер қайта дискреттелмейді.
+Add shortcut	Пернелер тіркесімін қосу
+Add to Selection	Таңдауға қосу
+Adds one guide at a document coordinate, in pixels.	Құжаттың бір координатасына бір бағыттауыш қосады, пиксельмен.
+Adjustment	Түзету
+Adjustments	Түзетулер
+Advanced	Кеңейтілген
+Again	Қайтадан
+Again with Copy	Көшірмемен қайталау
+Aliased (pencil)	Тегістеусіз (қарындаш)
+Align	Туралау
+Align the bottom edge to the canvas	Төменгі шетін кенепке туралау
+Align the left edge to the canvas	Сол жақ шетін кенепке туралау
+Align the right edge to the canvas	Оң жақ шетін кенепке туралау
+Align the top edge to the canvas	Жоғарғы шетін кенепке туралау
+Align with layer	Қабатпен туралау
+All	Барлығы
+All Caps	Барлығы бас әріппен
+All Caps shapes every lowercase letter as its capital; Small Caps shapes it as a capital at 70 % size. The stored text keeps the case you typed.	«Барлығы бас әріппен» әр кіші әріпті бас әріп етіп салады; «Кіші бас әріптер» оны 70 % өлшемдегі бас әріп етіп салады. Сақталған мәтін сіз терген регистрді сақтайды.
+All Layers	Барлық қабаттар
+Alpha	Альфа
+Already used by	Мына жерде қолданылып тұр:
+Alt Tag	Alt тегі
+Amount	Саны
+An export needs at least one output	Экспортқа кемінде бір нәтиже қажет
+An image or project from this computer	Осы компьютердегі сурет не жоба
+Angle	Бұрыш
+Angle (degrees)	Бұрыш (градус)
+Angle jitter	Бұрыштың ауытқуы
+Animation	Анимация
+Another slice already has this name	Бұл атау басқа кесіндіде бар
+Appearance	Сыртқы түрі
+Applied	Қолданылған
+Apply	Қолдану
+Apply Guides	Бағыттауыштарды қолдану
+Apply Image	Сыртқы арна
+Apply Image…	Сыртқы арна…
+Apply Mask	Масканы қолдану
+Apply Style	Стильді қолдану
+Apply Style 1	1-стильді қолдану
+Apply Style Preset…	Стиль үлгісін қолдану…
+Apply the next comp	Келесі композицияны қолдану
+Apply the previous comp	Алдыңғы композицияны қолдану
+Apply this mask	Бұл масканы қолдану
+Approximate. The composited result is what the canvas shows.	Шамамен. Кенепте көрінетін нәрсе — біріктірілген нәтиже.
+Arbitrary…	Ерікті…
+Arc	Арка
+Arc Lower	Төменгі арка
+Arc Upper	Жоғарғы арка
+Arch	Арка
+Arrange	Орналастыру
+Artboard	Тақта
+Artboard from Layers	Қабаттардан тақта
+Artboards in one document	Бір құжаттағы тақталар
+Artboards to Files…	Тақталарды файлдарға…
+Assign Profile	Профильді тағайындау
+Assigned {name}: the pixel numbers are unchanged, so the colours look different	{name} тағайындалды: пиксель мәндері өзгерген жоқ, сондықтан түстер басқаша көрінеді
+Author	Автор
+Auto Color	Авто-түсті түзету
+Auto Contrast	Автоконтарст
+Auto Tone	Автотон
+Auto leading	Авто жоларалық
+Auto-Align Layers…	Қабаттарды автотуралау…
+Auto-Blend Layers…	Қабаттарды автоараластыру…
+Automate	Автоматтандыру
+Autosaves of never-saved documents go here; empty uses the default	Ешқашан сақталмаған құжаттардың автосақтаулары осында түседі; бос болса, әдепкі орын қолданылады
+Average	Орташа
+BMP…	BMP…
+Back to the colour this opened on	Ашылған кездегі түске оралу
+Background — double-click for the picker	Артқы план — түс таңдағышты ашу үшін екі рет басыңыз
+Based On	Негізі
+Baseline shift	Негізгі сызық ауыстыру
+Baseline to baseline. Auto leading follows the type size.	Негізгі сызықтан негізгі сызыққа дейін. Авто жоларалық қаріп өлшеміне сәйкес келеді.
+Batch	Топтама
+Batch…	Топтама…
+Bend	Иілу
+Bevel	Қиғаш жиек
+Bevel & Emboss	Қиғаш жиек және бедер
+Bevel & Emboss…	Қиғаш жиек және бедер…
+Bind a text replacement variable to a text layer, or a visibility variable to any layer.	Мәтінді алмастыру айнымалысын мәтін қабатына, ал көріну айнымалысын кез келген қабатқа байлаңыз.
+Bitmap	Битмап
+Bitmap…	Битмап…
+Black	Қара
+Black & White	Қара & Ақ
+Black & White…	Қара & Ақ…
+Black to Transparent	Қарадан мөлдірге
+Black to White	Қарадан аққа
+Black to white through the inks	Бояулар арқылы қарадан аққа
+Blacks	Қаралар
+Blend If	Егер араластырсақ
+Blend Mode: Color	Араластыру режимі: Түс
+Blend Mode: Color Burn	Араластыру режимі: Түс күйдіру
+Blend Mode: Color Dodge	Араластыру режимі: Түс жарықтандыру
+Blend Mode: Darken	Араластыру режимі: Қараңғылау
+Blend Mode: Difference	Араластыру режимі: Айырмашылық
+Blend Mode: Dissolve	Араластыру режимі: Еріту
+Blend Mode: Exclusion	Араластыру режимі: Шеттету
+Blend Mode: Hard Light	Араластыру режимі: Қатты жарық
+Blend Mode: Hard Mix	Араластыру режимі: Қатты араластыру
+Blend Mode: Hue	Араластыру режимі: Реңк
+Blend Mode: Lighten	Араластыру режимі: Жарықтандыру
+Blend Mode: Linear Burn	Араластыру режимі: Сызықтық күйдіру
+Blend Mode: Linear Dodge (Add)	Араластыру режимі: Сызықтық жарықтандыру (Қосу)
+Blend Mode: Linear Light	Араластыру режимі: Сызықтық жарық
+Blend Mode: Luminosity	Араластыру режимі: Жарықтылық
+Blend Mode: Multiply	Араластыру режимі: Көбейту
+Blend Mode: Normal	Араластыру режимі: Қалыпты
+Blend Mode: Overlay	Араластыру режимі: Қабаттасу
+Blend Mode: Pin Light	Араластыру режимі: Түйреуіш жарық
+Blend Mode: Saturation	Араластыру режимі: Қанықтылық
+Blend Mode: Screen	Араластыру режимі: Экран
+Blend Mode: Soft Light	Араластыру режимі: Жұмсақ жарық
+Blend Mode: Vivid Light	Араластыру режимі: Жарқын жарық
+Blending	Араластыру
+Blending Options	Араластыру параметрлері
+Blending Options…	Араластыру параметрлері…
+Blending options	Араластыру параметрлері
+Blends a source document, layer or channel into the active layer as one step.	Дереккөз құжатты, қабатты не арнаны белсенді қабатқа бір қадаммен араластырады.
+Blends one channel of each of two sources into a new channel, a selection or a new document.	Екі дереккөздің әрқайсысынан бір арнаны жаңа арнаға, таңдауға не жаңа құжатқа араластырады.
+Blue	Көк
+Blues	Көктер
+Blur	Бұлыңғыр
+Blur Gallery	Бұлыңғыр галерея
+Blur More	Көбірек бұлыңғырту
+Bold	Жуан
+Border Selection	Таңдау жиегі
+Border…	Жиек…
+Both axes	Екі ось те
+Bottom	Төменгі
+Bottom Edges	Төменгі шеттер
+Bottom Left	Төменгі сол
+Bottom Right	Төменгі оң
+Bottom Right Pixel Color	Төменгі оң жақ пиксель түсі
+Bottom left	Төменгі сол
+Bottom right	Төменгі оң
+Box Blur…	Шаршы бұлыңғырлық…
+Box height	Шаршының биіктігі
+Brightness	Ашықтық
+Brightness jitter	Жарықтықтың ауытқуы
+Brightness/Contrast	Жарықтық / Контраст
+Brightness/Contrast…	Жарықтық / Контраст…
+Bring Forward	Жылжыту
+Bring to Front	Алдыңғы Қатарға
+Brush Editor	Қылқалам редакторы
+Brush: Background	Қылқалам: Артқы план
+Brush: Foreground	Қылқалам: Алдыңғы план
+Brushes	Қылқаламдар
+Bulge	Ісіну
+Butt	Тегіс
+CMYK Color	CMYK түсі
+Calculations	Есептеулер
+Calculations…	Есептеулер…
+Camera Raw…	Camera Raw…
+Canvas Size	Кенеп өлшемі
+Canvas Size…	Кенеп өлшемі…
+Canvas extension	Кенепті кеңейту
+Caps	Қақпақтар
+Carries the XMP; the source's EXIF goes into JPEG only	XMP сақталады; дереккөздің EXIF деректері тек JPEG-ке жазылады
+Cell size (pixels)	Ұяшық өлшемі (пиксель)
+Center	Орталық
+Center horizontally on the canvas	Кенепте көлденеңінен ортаға қою
+Center vertically on the canvas	Кенепте тігінен ортаға қою
+Centimeters	Сантиметрлер
+Centre	Орта
+Centre the view on this note	Көріністі осы ескертпеге ортаға қою
+Change Bit Depth	Бит тереңдігін өзгерту
+Change Colour Mode	Түс режимін өзгерту
+Change Layer Properties	Қабат қасиеттерін өзгерту
+Change how many pixels the document has, or how large it prints.	Құжаттағы пиксельдер санын не оның басылатын өлшемін өзгерту.
+Channel	Канал
+Channel Mixer	Арна миксері
+Channel Mixer…	Арна миксері…
+Channel thumbnail	Арна нобайы
+Channels	Арналар
+Character	Символ
+Character Style	Символ стилі
+Character Styles	Символ стильдері
+Checkerboard	Шахмат тақтасы
+Choose 2 to 256 colours	2-ден 256-ға дейін түс таңдаңыз
+Choose a colour profile	Түс профилін таңдаңыз
+Choose a destination folder	Мақсатты қалтаны таңдаңыз
+Choose a source folder	Дереккөз қалтаны таңдаңыз
+Choose at least one page to open	Ашу үшін кемінде бір бетті таңдаңыз
+Choose at least one side to trim	Қию үшін кемінде бір жақты таңдаңыз
+Choose the Action to play	Ойнатылатын әрекетті таңдаңыз
+Choose the open grayscale document each channel of the new RGB document comes from.	Жаңа RGB құжатының әр арнасы алынатын ашық сұр реңкті құжатты таңдаңыз.
+Choose the pages to open, their resolution and how they open.	Ашылатын беттерді, олардың ажыратымдылығын және қалай ашылатынын таңдаңыз.
+Choose the source and the destination folders.	Дереккөз және мақсатты қалталарды таңдаңыз.
+Choose…	Таңдау…
+Clear	Тазалау
+Clear All	Барлығын тазалау
+Clear Guides	Нұсқауларды тазалау
+Clear History	Тарихты тазалау
+Clear Layer Style	Қабат стилін тазалау
+Clear Slices	Кесінділерді тазалау
+Clear Strokes	Сызықтарды тазалау
+Clear existing guides	Бар бағыттауыштарды тазалау
+Clear the {noun} from the active text layer	Белсенді мәтін қабатынан {noun} тазалау
+Cleared {n} slice(s)	{n} кесінді тазаланды
+Click an item in the panel first	Алдымен панельдегі элементті басыңыз
+Click anywhere to sample a colour	Түс үлгісін алу үшін кез келген жерді басыңыз
+Click anywhere to sample a colour, or press Escape.	Түс үлгісін алу үшін кез келген жерді басыңыз немесе Escape пернесін басыңыз.
+Click the graph to add a point, drag a point to bend the curve, drag it off the graph to remove it	Нүкте қосу үшін графикті басыңыз, қисықты иілту үшін нүктені сүйреңіз, оны жою үшін графиктен тыс сүйреп шығарыңыз
+Click the preview to sample a colour from it	Алдын ала көріністен түс үлгісін алу үшін оны басыңыз
+Click the preview to sample the colour to replace	Алмастырылатын түстің үлгісін алу үшін алдын ала көріністі басыңыз
+Click the ramp to edit its stops.	Нүктелерін өңдеу үшін шкаланы басыңыз.
+Clip to layer below	Төмендегі қабатқа қию
+Clipboard	Алмасу буфері
+Clipping	Қию
+Close	Жабу
+Close All	Барлығын жабу
+Close Alpha Channel	Альфа арнасын жабу
+Close Others	Басқаларын жабу
+Close panel	Панельді жабу
+Clouds	Бұлттар
+Codec	Кодек
+Color	Түс
+Color Balance	Түс балансы
+Color Balance…	Түс балансы…
+Color Burn	Түс күйдіру
+Color Dodge	Түс жарықтандыру
+Color Dynamics	Түс динамикасы
+Color Halftone…	Түсті жартылай тон…
+Color Intensity	Түс қарқындылығы
+Color Label	Түс белгісі
+Color Lookup	Түсті іздеу
+Color Lookup Tables…	Түсті іздеу кестелері…
+Color Lookup…	Түсті іздеу…
+Color Overlay	Түс қабаты
+Color Overlay…	Түс қабаты…
+Color Picker	Түс таңдау
+Color Range	Түс Диапазоны
+Color Range…	Түс диапазоны…
+Color fringe cleanup: pulls the boundary pixels' color toward the nearby interior ink — a separate edit from mask refinement.	Түсті жиекті тазалау: шекаралық пиксельдердің түсін жақын ішкі бояуға тартады — бұл маска нақтылаудан бөлек өңдеу.
+Color to Alpha…	Түсті альфаға…
+Colors	Түстер
+Colour	Түс
+Colour varies once per stroke.	Түс әр сызықта бір рет өзгереді.
+Colours	Түстер
+Colours must be 1 to 64, the tolerance above 0 and the corner length at least 1	Түстер саны 1-ден 64-ке дейін, рұқсат 0-ден үлкен, ал бұрыш ұзындығы кемінде 1 болуы керек
+Columns	Бағандар
+Columns and rows with gutters between them, inside optional margins, in pixels.	Арасында аралықтары бар бағандар мен жолдар, қалауыңызша шеттік өрістердің ішінде, пиксельмен.
+Combine Shapes	Пішіндерді біріктіру
+Commit (Enter)	Растау (Enter)
+Commit Contents	Мазмұнды растау
+Composite	Біріктірілген
+Condensed	Сығылған
+Cone	Конус
+Constant	Тұрақты
+Constrain proportions	Пропорцияларды сақтау
+Content-Aware	Мазмұнға сезімтал
+Content-Aware Scale	Мазмұнға сезімтал масштабтау
+Contour	Контур
+Contract Selection	Таңдауды қысу
+Contract by	Қысу мөлшері
+Contract…	Қысу…
+Contrast	Контраст
+Conversion Options	Түрлендіру параметрлері
+Convert Formats	Пішімдерді түрлендіру
+Convert Formats…	Пішімдерді түрлендіру…
+Convert for Smart Filters	Смарт-сүзгілер үшін түрлендіру
+Convert to Layers	Қабаттарға түрлендіру
+Convert to Linked…	Байланыстырылғанға түрлендіру…
+Convert to Paragraph Text	Параграф мәтініне түрлендіру
+Convert to Point Text	Нүктелік мәтінге түрлендіру
+Convert to Profile	Профильге түрлендіру
+Convert to Profile works on 8- and 16-bit documents	«Профильге түрлендіру» 8 және 16 биттік құжаттарда жұмыс істейді
+Convert to Profile…	Профильге түрлендіру…
+Convert to Shape	Пішінге Түрлендіру
+Convert to Smart Object	Смарт-объектке түрлендіру
+Converted to {name} ({intent}): the numbers changed so the colours look the same	{name} профиліне түрлендірілді ({intent}): түстер бұрынғыдай көрінуі үшін мәндер өзгерді
+Cool	Салқын
+Copper	Мыс
+Copy	Көшіру
+Copy Layer Style	Қабат стилін көшіру
+Copy Merged	Көшірмелерді Біріктіру
+Copyright Notice	Авторлық құқық туралы ескерту
+Corner length	Бұрыш ұзындығы
+Corner radius	Бұрыш радиусы
+Corner radius applies to rectangles; this path has no corners to round	Бұрыш радиусы тіктөртбұрыштарға қолданылады; бұл контурда дөңгелектейтін бұрыш жоқ
+Corners	Бұрыштар
+Count jitter	Санның ауытқуы
+Create Clipping Mask	Кесу маскасын жасау
+Create Layer	Қабат жасау
+Create Layers	Қабаттар жасау
+Crop	Қию
+Crop and Straighten Photos	Фотосуреттерді қию және түзету
+Crops the canvas to the content, judged by the basis below.	Кенепті төмендегі негізге қарай мазмұнға дейін қияды.
+Crystallize…	Кристалдау…
+Current Layer	Ағымдағы қабат
+Current Path	Ағымдағы жол
+Curve tolerance	Қисық рұқсаты
+Curves	Қисықтар
+Curves…	Қисықтар…
+Custom	Арнайы
+Custom Brush	Арнайы қылқалам
+Custom: with the Move tool, drag the 16 mesh handles on the canvas	Арнайы: Жылжыту құралымен кенептегі тордың 16 тұтқасын сүйреңіз
+Custom…	Арнайы…
+Cut	Кесу
+Cyan	Көгілдір
+Cyan / Red	Көгілдір / Қызыл
+Cyans	Көгілдірлер
+DDS…	DDS…
+DXF…	DXF…
+Dark	Қараңғы
+Dark Blue	Қою көк
+Dark Grey	Қою сұр
+Darken	Қараңғылау
+Darker Color	Қараңғы түс
+Dash	Үзік сызық
+Data Set	Деректер жинағы
+Data Sets	Деректер жинақтары
+Data Sets…	Деректер жинақтары…
+Default	Әдепкі
+Default colours  (D)	Әдепкі түстер  (D)
+Default colours (D)	Әдепкі түстер (D)
+Define	Анықтау
+Define Brush Preset…	Қылқалам үлгісін анықтау…
+Define Custom Shape…	Арнайы пішінді анықтау…
+Define New	Жаңа анықтау
+Define Pattern…	Үлгіні анықтау…
+Define…	Анықтау…
+Delete	Өшіру
+Delete Filter Mask	Фильтр Маскасын Сөндіру
+Delete Layer	Қабатты Жою
+Delete Mask	Масканы өшіру
+Delete Vector Mask	Вектор Маскасын Жою
+Delete action	Әрекетті өшіру
+Delete channel	Арнаны өшіру
+Delete frame	Кадрды өшіру
+Delete path	Контурды өшіру
+Delete selected layers	Таңдалған қабаттарды өшіру
+Delete set and its actions	Жинақты және оның әрекеттерін өшіру
+Delete stop	Нүктені өшіру
+Delete the applied comp	Қолданылған композицияны өшіру
+Delete the selected keyframe	Таңдалған негізгі кадрды өшіру
+Delete the selected tool preset	Таңдалған құрал үлгісін өшіру
+Delete the selected {noun}	Таңдалған {noun} өшіру
+Delete the smart filter mask	Смарт-сүзгі маскасын өшіру
+Delete this note	Бұл ескертпені өшіру
+Delete this smart filter	Бұл смарт-сүзгіні өшіру
+Delete this spot channel	Бұл нүктелік түс арнасын өшіру
+Density	Тығыздық
+Dents…	Ойықтар…
+Desaturate	Қанықтылықты азайту
+Description	Сипаттама
+Deselect	Таңдауды Болдырмау
+Deselect Layers	Қабаттардан таңдауды алу
+Despeckle	Дақтарды жою
+Destination	Мақсат
+Destination Space	Мақсатты кеңістік
+Detail	Мәлімет
+Detail scales	Бөлшек масштабтары
+Diamond	Алмаз
+Difference	Айырмашылық
+Difference Clouds	Айырмашылық бұлттар
+Diffuse…	Шашырату…
+Diffusion	Шашырау
+Diffusion Dither	Шашыраңқы дизеринг
+Disable / Enable Filter Mask	Сүзгі маскасын өшіру / қосу
+Disable / Enable Mask	Масканы өшіру / қосу
+Disable / Enable Vector Mask	Вектор маскасын өшіру / қосу
+Disable Mask	Масканы ажырату
+Disable Vector Mask	Вектор Маскасын Өшіру
+Displace…	Ығыстыру…
+Dissolve	Еріту
+Distance	Қашықтық
+Distort	Бұрмалау
+Distribute	Тарату
+Dither	Дизерлік
+Dither…	Дизеринг…
+Divide	Бөлу
+Dock this panel here	Бұл панельді осында бекіту
+Document	Құжат
+Document Bounds	Құжаттың Шекаралары
+Document Info	Құжат туралы ақпарат
+Document Title	Құжат тақырыбы
+Document size	Құжат өлшемі
+Double-click to edit in Layer Style; drag to the trash to delete	Қабат стилінде өңдеу үшін екі рет басыңыз; өшіру үшін себетке сүйреңіз
+Double-click to edit this filter's settings	Бұл сүзгінің баптауларын өңдеу үшін екі рет басыңыз
+Double-click to rename	Атауын өзгерту үшін екі рет басыңыз
+Drag a line with the Ruler first	Алдымен Сызғышпен сызық сызыңыз
+Drag to zoom the view	Көріністі масштабтау үшін сүйреңіз
+Drop Shadow	Көлеңке түсіру
+Drop Shadow…	Көлеңке түсіру…
+Duotone	Дуотон
+Duotone Options	Дуотон параметрлері
+Duotone…	Дуотон…
+Duplicate	Көшіру
+Duplicate Layer	Қабатты Көшірмелеу
+Duplicate Layer…	Қабатты көшіру…
+Duplicate frame	Кадрды көшіру
+Dust & Scratches…	Шаң және сызаттар…
+EMF…	EMF…
+EXIF and XMP writing is not implemented — only ICC is embedded	EXIF және XMP жазу іске асырылмаған — тек ICC ендіріледі
+EXR…	EXR…
+Ease In	Баяу бастау
+Ease Out	Баяу аяқтау
+Edge Glow	Жиек жарқылы
+Edge refinement: feather, shift, smooth, and contrast over the mask's existing coverage — not subject recognition.	Жиекті нақтылау: масканың бар қамтуы бойынша қауырсындау, ығыстыру, тегістеу және контраст — нысанды тану емес.
+Edges	Жиектер
+Edit	Өңдеу
+Edit Adjustment	Түзетуді өңдеу
+Edit Adjustment…	Түзетуді өңдеу…
+Edit Alpha Channel	Альфа арнасын өңдеу
+Edit Contents…	Мазмұнды өңдеу…
+Edit Document Records	Құжат жазбаларын өңдеу
+Edit Fill	Толтыруды өңдеу
+Edit Filter Mask	Сүзгі маскасын өңдеу
+Edit Generator	Генераторды өңдеу
+Edit Group	Топты өңдеу
+Edit Guides	Бағыттауыштарды өңдеу
+Edit Raster	Растрды өңдеу
+Edit Saved Selection	Сақталған таңдауды өңдеу
+Edit Shape	Пішінді өңдеу
+Edit Slices	Кесінділерді өңдеу
+Edit Smart object	Смарт-нысанды өңдеу
+Edit Text	Мәтінді өңдеу
+Edit Timeline	Уақыт шкаласын өңдеу
+Edit brush…	Қылқаламды өңдеу…
+Edit fill	Толтыруды өңдеу
+Edit gradient stops — click to open the editor	Градиент нүктелерін өңдеу — редакторды ашу үшін басыңыз
+Edit in Quick Mask Mode	Жылдам маска режимінде өңдеу
+Edit this ramp	Бұл шкаланы өңдеу
+Effects	Әсерлер
+Effects apply to the whole layer and undo as one step.	Әсерлер бүкіл қабатқа қолданылады және бір қадаммен болдырылмайды.
+Embed EXIF and XMP	EXIF және XMP ендіру
+Embed Linked	Байланыстырылғанды ендіру
+Embed colour profile	Түс профилін ендіру
+Embedded source	Ендірілген дереккөз
+Emboss…	Эмбосс…
+Enable / disable the smart filter mask	Смарт-сүзгі маскасын қосу / өшіру
+Enable Mask	Масканы қосу
+Enable Vector Mask	Вектор Маскасын Қосу
+Enable at least one export	Кемінде бір экспортты қосыңыз
+Enabled	Қосулы
+Enlarge smaller images	Кішірек суреттерді үлкейту
+Enter a colour like #3366CC	#3366CC сияқты түс енгізіңіз
+Entropy	Энтропия
+Equalize	Теңестіру
+Essentials	Негізгі
+Every enabled row is written when you export.	Экспорттағанда әр қосулы жол жазылады.
+Every image in the source folder is fitted into the box and written to the destination folder in its own format.	Дереккөз қалтадағы әр сурет шаршыға сыйғызылып, мақсатты қалтаға өз пішімінде жазылады.
+Every parameter is at its neutral value — there is nothing to clean	Әр параметр бейтарап мәнінде — тазалайтын ештеңе жоқ
+Every parameter is at its neutral value — there is nothing to refine	Әр параметр бейтарап мәнінде — нақтылайтын ештеңе жоқ
+Every variable needs a name	Әр айнымалыға атау қажет
+Exact	Дәл
+Exclude Overlapping Shapes	Қабаттасқан пішіндерді алып тастау
+Exclusion	Шеттету
+Expand Selection	Таңдауды кеңейту
+Expand by	Кеңейту мөлшері
+Expand the dock	Панель аймағын жаю
+Expanded	Кеңейтілген
+Expand…	Кеңейту…
+Export	Экспорт
+Export As	Басқаша экспорттау
+Export Color Lookup	Түсті іздеу кестесін экспорттау
+Export Contents…	Мазмұнды экспорттау…
+Export Diagnostics…	Диагностиканы экспорттау…
+Export Layers…	Қабаттарды экспорттау…
+Export PDF	PDF экспорттау
+Export as .ABR…	.ABR ретінде экспорттау…
+Export as .ACO…	.ACO ретінде экспорттау…
+Export as .ASL…	.ASL ретінде экспорттау…
+Export set as .atn	Жинақты .atn ретінде экспорттау
+Export…	Экспорттау…
+Exposure	Экспозиция
+Exposure…	Экспозиция…
+Extra Bold	Өте жуан
+Extra Condensed	Өте сығылған
+Extra Expanded	Өте кеңейтілген
+Extra Light	Өте жіңішке
+Extras	Қосымшалар
+Extrude…	Шығыңқылау…
+Eyedropper	Тамшы құралы
+Face	Қаріп түрі
+Facet	Қыр
+Fade	Сөндіру (Fade)
+Fade…	Сөндіру…
+Family	Гарнитура
+Feather	Қауырсын
+Feather Selection	Таңдауды қауырсындау
+Feather radius	Қауырсын радиусы
+Feather…	Қауырсындау…
+Fibers…	Талшықтар…
+Field Blur…	Өрістік бұлыңғырлық…
+File	Файл
+File Info	Файл Ақпараты
+File Info…	Файл туралы ақпарат…
+File name	Файл атауы
+Files that fail are listed in batch-errors.txt in the destination.	Сәтсіз файлдар мақсатты қалтадағы batch-errors.txt ішінде тізімделеді.
+Fill	Толтыру
+Fill Filter Mask	Сүзгі маскасын толтыру
+Fill Layer	Толтыру қабаты
+Fill Mask	Масканы толтыру
+Fill Screen	Экранды толтыру
+Fill in File Info, or open a file that has EXIF, to embed metadata	Метадеректерді ендіру үшін «Файл туралы ақпаратты» толтырыңыз немесе EXIF бар файлды ашыңыз
+Fill path with the foreground colour, on a new shape layer	Контурды жаңа пішін қабатында алдыңғы план түсімен толтыру
+Fill type	Толтыру түрі
+Fills the active selection with the chosen contents.	Белсенді таңдауды таңдалған мазмұнмен толтырады.
+Fill…	Толтыру…
+Filter	Сүзгі
+Filter Gallery	Фильтр галереясы
+Filter Gallery…	Сүзгілер галереясы…
+Find Edges	Шеттерді табу
+First line	Бірінші жол
+Fish	Балық
+Fisheye	Балық көзі
+Fit The Area	Ауданды сәйкестендіру
+Fit on Screen	Экранға сыйғызу
+Fit the whole image in the window	Бүкіл суретті терезеге сыйғызу
+Fixed height	Бекітілген биіктік
+Flag	Ту
+Flame…	Жалын…
+Flat Angled 40	Жалпақ қиғаш 40
+Flatten Image	Суреттерді Біріктіру
+Flip Canvas Horizontal	Кенепті көлденеңінен аудару
+Flip Canvas Vertical	Кенепті тігінен аудару
+Flip Horizontal	Көлденеңінен аудару
+Flip Vertical	Тігінен аудару
+Flip View Horizontal	Көріністі көлденеңінен аудару
+Flip View Vertical	Көріністі тігінен аудару
+Flow jitter	Ағынның ауытқуы
+Folders	Қалталар
+Font: 	Қаріп: 
+Foreground strokes mark what to keep, background strokes what to drop; Preview shows the cut.	Алдыңғы план сызықтары сақталатынды, артқы план сызықтары алынатынды белгілейді; Алдын ала көрініс қиылғанды көрсетеді.
+Foreground — double-click for the picker	Алдыңғы план — түс таңдағышты ашу үшін екі рет басыңыз
+Foreground/background jitter	Алдыңғы / артқы план ауытқуы
+Format	Формат
+Fourier	Фурье
+Fourier Transform	Фурье түрлендіруі
+Fragment	Фрагмент
+Frame	Кадр
+Frames	Кадрлар
+Free Transform	Еркін түрлендіру
+Free Transform a Copy	Көшірмені еркін түрлендіру
+From Transparency	Ашықтықтан
+Fullscreen	Толық экран
+Fuzziness	Жұмсақтық
+GIF…	GIF…
+Gamma	Гамма
+Gamut Warning	Гамут туралы ескерту
+Gaussian	Гаусс
+Gaussian Blur…	Гаусс бұлыңғырлығы…
+Generate Mockups	Макеттер жасау
+Generate Mockups…	Макеттер жасау…
+Give the brush a name	Қылқаламға атау беріңіз
+Give the export a file name	Экспортқа файл атауын беріңіз
+Glass Menus	Шыны мәзірлер
+Global light	Жалпы жарық
+Glyphs	Глифтер
+Gradient	Градиент
+Gradient Editor	Градиент редакторы
+Gradient Map	Градиент Картасы
+Gradient Map…	Градиент картасы…
+Gradient Overlay	Градиент қабаты
+Gradient Overlay…	Градиент қабаты…
+Gradient…	Градиент…
+Gray	Сұр
+Grayscale	Сұр реңк
+Green	Жасыл
+Greens	Жасылдар
+Grid	Торлар
+Grid points	Тор нүктелері
+Group	Топ
+Group Layers	Қабаттар Тобы
+Grow	Ұлғайту
+Guide Guy	Guide Guy
+Guides	Бағыттаушы
+Gutter	Аралық
+H	Б
+H.264 (plays everywhere)	H.264 (барлық жерде ойнайды)
+HDR Toning	HDR тондау
+HDR Toning…	HDR тондау…
+HSB/HSL…	HSB/HSL…
+Halftone Screen	Жартылай тон растры
+Hard Light	Қатты жарық
+Hard Mix	Қатты араластыру
+Hard Round 24	Қатты дөңгелек 24
+Hard Round 4	Қатты дөңгелек 4
+Hard edges, no blending. Pixel art only — it aliases on downscale.	Қатты жиектер, араластырусыз. Тек пиксель-арт үшін — кішірейткенде баспалдақталады.
+Harder Brush	Қаттырақ қылқалам
+Height	Биіктігі
+Height to 110%	Биіктігін 110%-ға
+Height to 125%	Биіктігін 125%-ға
+Height to 80%	Биіктігін 80%-ға
+Height to 90%	Биіктігін 90%-ға
+Help	Көмек
+Hide All	Барлығын жасыру
+Hide Layers	Қабаттарды жасыру
+Hide Selection	Таңдалған Бөлікті Жасыру
+Hide the source layer	Дереккөз қабатты жасыру
+High Contrast	Жоғары контраст
+High Pass…	Жоғары жиілік сүзгісі…
+Highlights	Жарықтар
+Histogram	Гистограмма
+Histories	Тарихтар
+History	Тарих
+Hold	Ұстау
+Horizontal Centers	Көлденең орталар
+Horizontal Distortion	Көлденең бұрмалау
+Horizontal center guide	Көлденең орталық бағыттауыш
+Horizontal scale, in percent: widens or narrows the glyphs and their spacing	Көлденең масштаб, пайызбен: глифтерді және олардың аралығын кеңейтеді не тарылтады
+Horizontally	Көлденеңінен
+Hue	Түс
+Hue jitter	Реңктің ауытқуы
+Hue/Saturation	Реңк / Қанықтылық
+Hue/Saturation…	Реңк / Қанықтылық…
+ICC profile	ICC профилі
+ICO…	ICO…
+Image	Сурет
+Image Options	Сурет параметрлері
+Image Rotation	Суретті айналдыру
+Image Size	Сурет өлшемі
+Image Size…	Сурет өлшемі…
+Image size	Сурет өлшемі
+Import CSV…	CSV импорттау…
+Import PDF	PDF импорттау
+Import a CSV of data sets first	Алдымен деректер жинақтарының CSV файлын импорттаңыз
+Import a CSV: the first row names the variables, every further row is one data set.	CSV импорттаңыз: бірінші жолда айнымалылардың атаулары, әр келесі жол бір деректер жинағы.
+In use	Қолданыста
+Inches	Дюймдер
+Indexed Color	Индекстелген түс
+Indexed Color…	Индекстелген түс…
+Inflate	Ісіну
+Info	Ақпарат
+Ink	Бояу
+Ink Color	Бояу түсі
+Ink printed at 0, 25, 50, 75 and 100% tint	0, 25, 50, 75 және 100% реңкпен басылған бояу
+Inner Glow	Ішкі жарқыл
+Inner Glow…	Ішкі жарқыл…
+Inner Radius	Ішкі радиус
+Inner Shadow	Ішкі көлеңке
+Inner Shadow…	Ішкі көлеңке…
+Inside	Ішінде
+Intent	Мақсат
+Intersect Shape Areas	Пішін аймақтарының қиылысуы
+Intersect with Selection	Таңдаумен қиылыстыру
+Inverse	Кері
+Inverse Fourier Transform	Кері Фурье түрлендіруі
+Invert	Терістеу
+Invert coverage	Қамтуды терістеу
+Invert has no parameters	Терістеудің параметрлері жоқ
+Iris Blur…	Диафрагмалық бұлыңғырлық…
+Italic	Курсив
+JPEG carries the XMP and the source's EXIF	JPEG XMP мен дереккөздің EXIF деректерін сақтайды
+JPG…	JPG…
+Justify	Ені бойынша туралау
+Kaleidoscope…	Калейдоскоп…
+Keep as it was	Бұрынғыдай қалдыру
+Kept when a comp is first applied	Композиция алғаш қолданылғанда сақталады
+Kerning	Кернинг
+Keyboard Shortcut Sheet…	Пернелер тіркесімдерінің парағы…
+Keyboard Shortcuts…	Пернетақта төте жолдары…
+Keywords	Кілтсөз
+Kind	Түрі
+Kurtosis	Эксцесс
+Lab Color	Lab түсі
+Landscape	Альбомдық
+Language	Тіл
+Large	Үлкен
+Last Document State	Құжаттың соңғы күйі
+Last Filter	Соңғы сүзгі
+Last line	Соңғы жол
+Layer	Қабат
+Layer Comps	Қабат композициялары
+Layer Edges	Қабат жиектері
+Layer Mask	Қабат маскасы
+Layer Properties	Қабат қасиеттері
+Layer Style	Қабат стилі
+Layer knocks out drop shadow	Қабат түсірілген көлеңкені тесіп шығарады
+Layer via Copy	Көшіру арқылы қабат
+Layer via Cut	Кесу арқылы қабат
+Layers	Қабаттар
+Layers panel options	Қабаттар панелінің параметрлері
+Left	Сол
+Left Edges	Сол жақ шеттер
+Left indent	Сол жақ шегініс
+Length	Ұзындық
+Lens Blur…	Объектив бұлыңғырлығы…
+Lens Correction…	Объективті түзету…
+Lens Flare…	Объектив жарқылы…
+Level	Деңгей
+Levels	Деңгейлер
+Levels…	Деңгейлер…
+Light	Жарық
+Light Grey	Ашық сұр
+Lighten	Жарықтандыру
+Lighter Color	Жарық түс
+Lighting Effects…	Жарықтандыру әсерлері…
+Lightness	Жарықтық
+Line	Сызық
+Linear	Сызықтық
+Linear Burn	Сызықтық күйдіру
+Linear Dodge (Add)	Сызықтық жарықтандыру (Қосу)
+Linear Light	Сызықтық жарық
+Link / Unlink Mask	Масканы байланыстыру / ажырату
+Link Layers	Қабаттарды Біріктіру
+Link selected layers	Таңдалған қабаттарды байланыстыру
+Link with layer	Қабатпен байланыстыру
+Linked	Байланыстырылған
+Linked file	Байланыстырылған файл
+Liquify…	Пластика…
+Live Shape	Тірі пішін
+Live preview	Тікелей алдын ала көрініс
+Live preview is off.	Тікелей алдын ала көрініс өшірулі.
+Load	Жүктеу
+Load .atn	.atn жүктеу
+Load .cube file…	.cube файлын жүктеу…
+Load Selection	Таңдауды жүктеу
+Load Selection…	Таңдауды жүктеу…
+Load actions	Әрекеттерді жүктеу
+Load channel as selection	Арнаны таңдау ретінде жүктеу
+Load path as a selection	Контурды таңдау ретінде жүктеу
+Loaded file	Жүктелген файл
+Lock	Құлып
+Lock All	Барлығын құлыптау
+Lock Guides	Нұсқауларды құлыптау
+Lock Image Pixels	Сурет пиксельдерін құлыптау
+Lock Position	Орнын құлыптау
+Lock Transparent Pixels	Мөлдір пиксельдерді құлыптау
+Lock all	Барлығын құлыптау
+Lock pixels	Пиксельдерді құлыптау
+Lock position	Орнын құлыптау
+Lock transparent pixels	Мөлдір пиксельдерді құлыптау
+Long-tap as a right click	Ұзақ басу оң жақ басу ретінде
+Lookup table	Іздеу кестесі
+Luminance	Жарықтылық
+Luminance of the preview source; the markers are the black and white points.	Алдын ала көрініс дереккөзінің жарықтылығы; белгілер — қара және ақ нүктелер.
+Luminosity	Жарықтылық (Luminosity)
+MP4…	MP4…
+Magenta	Қызғылт
+Magenta / Green	Қызыл күрең / Жасыл
+Magentas	Қызыл күреңдер
+Magic Cut	Сиқырлы қию
+Magic Cut…	Сиқырлы қию…
+Make Frames	Кадрлар жасау
+Make a selection first	Алдымен таңдау жасаңыз
+Make work path from selection	Таңдаудан жұмыс контурын жасау
+Manual	Қолмен
+Maps every colour onto one palette. The document keeps RGBA pixels; GIF and PNG export write this palette.	Әр түсті бір палитраға сәйкестендіреді. Құжат RGBA пиксельдерін сақтайды; GIF және PNG экспорты осы палитраны жазады.
+Maps the active layer onto a palette as one undo step; the document stays RGB.	Белсенді қабатты бір болдырмау қадамымен палитраға сәйкестендіреді; құжат RGB күйінде қалады.
+Margins	Шеттік өрістер
+Mark this state so you can come back to it	Кейін оралу үшін бұл күйді белгілеу
+Mask	Маска
+Mask Properties	Маска қасиеттері
+Mask source	Маска дереккөзі
+Match Color	Түске Сәйкестендіру
+Match Color…	Түсті сәйкестендіру…
+Matting	Жиекті тазалау
+Maximum	Максимум
+Maximum…	Максимум…
+Mean	Орташа мән
+Median	Медиана
+Median…	Медиана…
+Medium	Орташа
+Memory	Жад
+Menu Bar and Canvas	Мәзір жолағы және кенеп
+Merge	Біріктіру
+Merge Channels	Арналарды біріктіру
+Merge Channels…	Арналарды біріктіру…
+Merge Down	Алдыңғысымен Біріктіру
+Merge Layers	Қабаттарды Біріктіру
+Merge Visible	Көрінетіндерді біріктіру
+Merged	Біріктірілген
+Method	Әдіс
+Metrics	Метрикалық
+Metrics uses the font's own pair kerning; 0 turns kerning off; Manual puts one amount (1/1000 em) between every pair of the text as it is now, and characters typed later start unkerned; it needs at least two characters, so shorter text and the Type tool defaults do not offer it. The shaper has no optical kerning, so that mode is not offered.	«Метрикалық» қаріптің өз жұптық кернингін қолданады; 0 кернингті өшіреді; «Қолмен» мәтіннің қазіргі әр жұбының арасына бір мөлшер (1/1000 em) қояды, ал кейін терілген таңбалар кернингсіз басталады; оған кемінде екі таңба қажет, сондықтан қысқарақ мәтін мен Мәтін құралының әдепкі баптаулары оны ұсынбайды. Пішіндеуіште оптикалық кернинг жоқ, сондықтан ол режим ұсынылмайды.
+Mezzotint…	Меццо-тинто…
+Midtones	Ортаңғы тондар
+Millimeters	Миллиметрлер
+Min diameter	Ең аз диаметр
+Min roundness	Ең аз дөңгелектік
+Min size	Ең аз өлшем
+Minimal	Ең аз
+Minimum	Минимум
+Minimum size only applies when pressure controls size.	Ең аз өлшем тек басу күші өлшемді басқарғанда қолданылады.
+Minimum…	Минимум…
+Miter	Сүйір
+Mode	Режим
+Modify	Модификация
+Monochrome	Монохром
+Monotone	Монотон
+More readouts	Қосымша көрсеткіштер
+More tabs	Қосымша қойындылар
+Mosaic…	Мозаика…
+Motion Blur…	Қозғалыс бұлыңғырлығы…
+Move Layer	Қабатты жылжыту
+Move a control first: these settings would change nothing	Алдымен басқару элементін жылжытыңыз: бұл баптаулар ештеңені өзгертпейді
+Move this panel	Бұл панельді жылжыту
+Move this panel within its dock	Бұл панельді өз аймағының ішінде жылжыту
+Move to	Мұнда жылжыту
+Move with the layer	Қабатпен бірге жылжыту
+Multiply	Көбейту
+Name	Атауы
+Name Change	Атауын Өзгерту
+Name the channel first.	Алдымен арнаға атау беріңіз.
+Navigator	Навигатор
+Nearest Neighbour	Ең жақын көрші
+Neutralize	Бейтараптау
+Neutrals	Бейтараптар
+New	Жаңа
+New Adjustment Layer	Жаңа Реттеу Қабаты
+New Channel	Жаңа арна
+New Document	Жаңа құжат
+New Fill Layer	Жаңа Толтыру Қабаты
+New Folder	Жаңа Бума
+New Guide	Жаңа бағыттауыш
+New Guide Layout	Жаңа бағыттауыш макеті
+New Guide Layout…	Жаңа бағыттауыш макеті…
+New Guide…	Жаңа бағыттауыш…
+New Layer	Жаңа Қабат
+New Layer Based Slice	Қабатқа негізделген жаңа кесінді
+New Selection	Жаңа таңдау
+New Smart Object via Copy	Көшіру арқылы жаңа смарт-нысан
+New Snapshot	Жаңа сурет-көшірме
+New Spot Channel	Жаңа нүктелік түс арнасы
+New Spot Channel…	Жаңа нүктелік түс арнасы…
+New Style Preset	Жаңа стиль үлгісі
+New Video Group	Жаңа бейне тобы
+New channel	Жаңа арна
+New folder	Жаңа қалта
+New group	Жаңа топ
+New layer	Жаңа қабат
+New layer comp	Жаңа қабат композициясы
+New note at the centre of the view	Көріністің ортасында жаңа ескертпе
+New path (saves the Work Path when it is selected)	Жаңа контур (таңдалған болса, жұмыс контурын сақтайды)
+New set	Жаңа жинақ
+New size	Жаңа өлшем
+New style from the active layer	Белсенді қабаттан жаңа стиль
+New tool preset from the active tool	Белсенді құралдан жаңа құрал үлгісі
+New {noun} from the active text layer	Белсенді мәтін қабатынан жаңа {noun}
+New…	Жаңа…
+Next Blend Mode	Келесі араластыру режимі
+No Color	Түссіз
+No character styles yet. New records the active text layer's font, size and look.	Әзірге символ стильдері жоқ. «Жаңа» белсенді мәтін қабатының қарпін, өлшемін және көрінісін жазып алады.
+No command loads a channel as the selection in this build; the Select menu's Load Selection restores a saved selection instead	Бұл нұсқада арнаны таңдау ретінде жүктейтін пәрмен жоқ; оның орнына Таңдау мәзіріндегі «Таңдауды жүктеу» сақталған таңдауды қалпына келтіреді
+No commands to bind	Байлайтын пәрмендер жоқ
+No document	Құжат жоқ
+No document is open	Ашық құжат жоқ
+No export selected	Экспорт таңдалмаған
+No faces listed for this family name	Бұл гарнитура атауына қаріп түрлері тізімделмеген
+No frames yet. Add frame makes an _a_ layer: each one is a frame, bottom first.	Әзірге кадрлар жоқ. «Кадр қосу» _a_ қабатын жасайды: әрқайсысы бір кадр, төменгісінен бастап.
+No guide crosses the canvas	Кенепті ешбір бағыттауыш қиып өтпейді
+No installed family matches	Орнатылған ешбір гарнитура сәйкес келмейді
+No layer comps yet. New Layer Comp records every layer's visibility, position and appearance.	Әзірге қабат композициялары жоқ. «Жаңа қабат композициясы» әр қабаттың көрінуін, орнын және сыртқы түрін жазып алады.
+No layers yet. Add one with the + button below.	Әзірге қабаттар жоқ. Төмендегі + түймесімен қосыңыз.
+No layers yet: each top-level layer gets a bar on the timeline.	Әзірге қабаттар жоқ: әр жоғарғы деңгейлі қабат уақыт шкаласында жолақ алады.
+No notes yet. Click the canvas with the Note tool (I), or New Note pins one at the centre of the view; notes are saved with the document and never exported.	Әзірге ескертпелер жоқ. Ескертпе құралымен (I) кенепті басыңыз немесе «Жаңа ескертпе» оны көріністің ортасына бекітеді; ескертпелер құжатпен бірге сақталады және ешқашан экспортталмайды.
+No open document is the same size as this one	Ешбір ашық құжат мұнымен бірдей өлшемде емес
+No paragraph styles yet. New records the active text layer's alignment, indents and spacing.	Әзірге параграф стильдері жоқ. «Жаңа» белсенді мәтін қабатының туралауын, шегіністерін және аралықтарын жазып алады.
+No pattern chosen — the overlay paints nothing.	Үлгі таңдалмаған — қабат ештеңе салмайды.
+No patterns are defined yet	Әзірге үлгілер анықталмаған
+No profile file was chosen	Профиль файлы таңдалмады
+No recent files yet	Әзірге соңғы файлдар жоқ
+No selection has been saved	Ешбір таңдау сақталмаған
+No source recorded for this object	Бұл нысан үшін дереккөз жазылмаған
+No stop selected	Нүкте таңдалмаған
+No style presets yet. Define one with Layer > Layer Style > Define Style Preset, or add a Photoshop library with File > Open (.asl).	Әзірге стиль үлгілері жоқ. Оны Қабат > Қабат стилі > Стиль үлгісін анықтау арқылы анықтаңыз немесе Файл > Ашу (.asl) арқылы Photoshop кітапханасын қосыңыз.
+No styles yet. The + button saves the active layer's style; File > Open loads an .asl style library.	Әзірге стильдер жоқ. + түймесі белсенді қабаттың стилін сақтайды; Файл > Ашу .asl стиль кітапханасын жүктейді.
+No such command	Мұндай пәрмен жоқ
+No tool presets yet. New Tool Preset saves the active tool with its current options.	Әзірге құрал үлгілері жоқ. «Жаңа құрал үлгісі» белсенді құралды ағымдағы параметрлерімен сақтайды.
+Noise	Шу
+None	Ешқандай
+Normal	Қалыпты
+Normal Map…	Нормаль картасы…
+Not a hex colour	Он алтылық түс емес
+Not installed — shaping with	Орнатылмаған — пішіндеу қарпі:
+Not saved yet	Әлі сақталмаған
+Notes	Ескертпелер
+Nothing has changed	Ештеңе өзгерген жоқ
+Nothing in this submenu is available right now	Бұл ішкі мәзірде қазір қолжетімді ештеңе жоқ
+Nothing is left to learn the background from: paint over it with the background brush.	Артқы планды үйренетін ештеңе қалмады: оның үстінен артқы план қылқаламымен бояңыз.
+Nothing to measure yet — paint or place something on this layer first	Әзірге өлшейтін ештеңе жоқ — алдымен бұл қабатта бір нәрсе салыңыз не орналастырыңыз
+Nothing to preview.	Алдын ала көрсететін ештеңе жоқ.
+OK	ОК
+Oblique	Қиғаш
+Off: the wheel pans the view and Ctrl+wheel zooms	Өшірулі: дөңгелек көріністі жылжытады, ал Ctrl+дөңгелек масштабтайды
+Offset…	Ығысу…
+Oil Paint…	Майлы бояу…
+One page holding the flattened image; no vector content.	Біріктірілген суреті бар бір бет; векторлық мазмұнсыз.
+Onion skin	Пияз қабығы
+Only English is available in this build	Бұл нұсқада тек ағылшын тілі қолжетімді
+Only a mask channel can be loaded as a selection here	Мұнда таңдау ретінде тек маска арнасын жүктеуге болады
+Only web-safe colours	Тек веб-қауіпсіз түстер
+Opacity	Мөлдірлік
+Opacity 10%	Мөлдірлік 10%
+Opacity 100%	Мөлдірлік 100%
+Opacity 20%	Мөлдірлік 20%
+Opacity 30%	Мөлдірлік 30%
+Opacity 40%	Мөлдірлік 40%
+Opacity 50%	Мөлдірлік 50%
+Opacity 60%	Мөлдірлік 60%
+Opacity 70%	Мөлдірлік 70%
+Opacity 80%	Мөлдірлік 80%
+Opacity 90%	Мөлдірлік 90%
+Opacity jitter	Мөлдірліктің ауытқуы
+Opacity key	Мөлдірлік кілті
+Opacity must be between 0% and 100%	Мөлдірлік 0% мен 100% аралығында болуы керек
+Opacity scales the layer and its effects; Fill scales the layer's own pixels only.	Мөлдірлік қабатты және оның әсерлерін өзгертеді; Толтыру тек қабаттың өз пиксельдерін өзгертеді.
+Opacity stops sit above the bar, colour stops below it.	Мөлдірлік нүктелері жолақтың үстінде, түс нүктелері астында орналасады.
+Open	Ашу
+Open .ABR…	.ABR ашу…
+Open .ACO…	.ACO ашу…
+Open .ASL…	.ASL ашу…
+Open Recent	Соңғыларын ашу
+Open a document first	Алдымен құжатты ашыңыз
+Open a document to animate it.	Анимациялау үшін құжатты ашыңыз.
+Open a document to apply styles to its layers.	Қабаттарына стильдер қолдану үшін құжатты ашыңыз.
+Open a document to insert glyphs into its text.	Мәтініне глифтер кірістіру үшін құжатты ашыңыз.
+Open a document to keep text styles in it.	Мәтін стильдерін сақтау үшін құжатты ашыңыз.
+Open a document to lay guides out on it.	Бағыттауыштарды орналастыру үшін құжатты ашыңыз.
+Open a document to pin notes on it.	Ескертпелер бекіту үшін құжатты ашыңыз.
+Open a document to record layer comps.	Қабат композицияларын жазу үшін құжатты ашыңыз.
+Open a document to see its CSS	CSS кодын көру үшін құжатты ашыңыз
+Open a document to see its facts.	Мәліметтерін көру үшін құжатты ашыңыз.
+Open a document to see its histogram	Гистограммасын көру үшін құжатты ашыңыз
+Open a document to see its history	Тарихын көру үшін құжатты ашыңыз
+Open a document to see its properties	Қасиеттерін көру үшін құжатты ашыңыз
+Open another document, or add another pixel layer, to match its colours.	Түстерін сәйкестендіру үшін басқа құжатты ашыңыз немесе тағы бір пиксель қабатын қосыңыз.
+Open as	Былай ашу
+Open editor…	Редакторды ашу…
+Open or close the folder	Қалтаны ашу не жабу
+Open the Adjustments panel	Түзетулер панелін ашу
+Open…	Ашу…
+Operation	Операция
+Orange	Сарғылт
+Other	Басқа
+Out of gamut	Гамуттан тыс
+Outer Glow	Сыртқы жарқыл
+Outer Glow…	Сыртқы жарқыл…
+Outline the path	Контурдың сызбасын салу
+Output	Нәтиже
+Output channel	Нәтиже арнасы
+Outside	Сыртта
+Overlay	Қабаттасу
+PBM…	PBM…
+PDF Presentation…	PDF презентациясы…
+PDF…	PDF…
+PGM…	PGM…
+PNG…	PNG…
+PPM…	PPM…
+Page	Бет
+Page {n}	{n}-бет
+Page {page} opens at {w} x {h} px	{page}-бет {w} x {h} пикс. өлшемде ашылады
+Pages	Беттер
+Paint	Бояу салу
+Paint Filter Mask	Сүзгі маскасына бояу салу
+Paint Mask	Маскаға бояу салу
+Paint over the part to keep with the foreground brush first.	Алдымен сақталатын бөліктің үстінен алдыңғы план қылқаламымен бояңыз.
+Paint over what to keep and over what to drop	Сақталатынның және алынатынның үстінен бояңыз
+Paint the inside of the path	Контурдың ішін бояу
+Painting	Сурет салу
+Paints a band along the active selection's border.	Белсенді таңдаудың жиегі бойымен жолақ салады.
+Pair kerning	Жұптық кернинг
+Palette	Палитра
+Paragraph	Параграф
+Paragraph Style	Параграф стилі
+Paragraph Styles	Параграф стильдері
+Particles…	Бөлшектер…
+Paste	Қою
+Paste Into	Ішіне кірістіру
+Paste Layer Style	Қабат стилін кірістіру
+Paste Outside	Сыртына кірістіру
+Paste Special	Арнайы кірістіру
+Paste in Place	Орнына кірістіру
+Path	Жол
+Path Blur…	Контур бойымен бұлыңғырлық…
+Path editing lives in the Paths panel	Контурларды өңдеу Контурлар панелінде
+Paths	Контурлар
+Pattern	Үлгі
+Pattern Dither	Үлгілі дизеринг
+Pattern Overlay	Үлгі қабаты
+Pattern Overlay…	Үлгі қабаты…
+Pattern Preview	Үлгіні алдын ала қарау
+Pattern…	Үлгі…
+Pencil 1px	Қарындаш 1 пикс.
+Percent	Пайыз
+Perceptual	Қабылдау бойынша
+Perspective	Перспектива
+Perspective Warp	Перспективалық деформация
+Photo Filter	Фотофильтр
+Photo Filter…	Фото сүзгі…
+Photography	Фотография
+Picas	Пикалар
+Pick a filter; it applies at its default settings.	Сүзгіні таңдаңыз; ол әдепкі баптауларымен қолданылады.
+Pin Light	Түйреуіш жарық
+Pinch…	Қысу…
+Pixel Grid	Пикелді Торлар
+Pixel dimensions	Пиксель өлшемдері
+Pixel mask	Пиксель маскасы
+Pixel to Pixel	Пиксельден пиксельге
+Pixelate	Пикселдеу
+Pixels	Пиксельдер
+Place Embedded…	Ендіріп орналастыру…
+Place Linked…	Байланыстырып орналастыру…
+Play	Ойнату
+Play from step	Қадамнан бастап ойнату
+Play selection	Таңдалғанды ойнату
+Play this step (unchecked steps are passed over)	Бұл қадамды ойнату (белгіленбеген қадамдар өткізіп жіберіледі)
+Plays a recorded Action on every image in the source folder and saves each result to the destination.	Жазылған әрекетті дереккөз қалтадағы әр суретте ойнатып, әр нәтижені мақсатты қалтаға сақтайды.
+Pointer	Меңзер
+Pointillize…	Пуантилизм…
+Points	Пункттер
+Polar Coordinates…	Полярлық координаталар…
+Position	Позиция
+Position is locked — unlock it in the Layers panel to move or resize	Орны құлыпталған — жылжыту не өлшемін өзгерту үшін оны Қабаттар панелінде ашыңыз
+Position key	Орын кілті
+Posterize	Постеризация
+Posterize…	Постеризация…
+Precise Cursor	Дәл курсор
+Preferences…	Баптаулар…
+Preserve Transparency	Мөлдірлікті сақтау
+Preserve luminosity	Жарықтылықты сақтау
+Preset Manager…	Алдын ала орнату менеджері…
+Press a key…	Пернені басыңыз…
+Pressure controls flow	Басу күші ағынды басқарады
+Pressure controls size	Басу күші өлшемді басқарады
+Preview	Көз жүгірту
+Preview against	Алдын ала көрініс фоны
+Preview is off.	Алдын ала көрініс өшірулі.
+Previewed on the active layer; applied to its pixels as one undoable step.	Белсенді қабатта алдын ала көрсетіледі; оның пиксельдеріне болдырмауға болатын бір қадаммен қолданылады.
+Previous Blend Mode	Алдыңғы араластыру режимі
+Print Size	Басып шығару өлшемі
+Print as PDF…	PDF ретінде басып шығару…
+Print size	Басып шығару өлшемі
+Prints the grayscale image through one to four inks, each through its own curve. The inks are applied to the pixels when the mode changes.	Сұр реңкті суретті бірден төртке дейінгі бояумен, әрқайсысын өз қисығы арқылы басады. Режим өзгергенде бояулар пиксельдерге қолданылады.
+Print…	Басып шығару…
+Profile	Бейін
+Profile from File…	Файлдағы профиль…
+Profiles are assigned to RGB documents	Профильдер RGB құжаттарына тағайындалады
+Profiles are converted between in RGB documents	Профильдер арасында түрлендіру RGB құжаттарында жүреді
+Profiles belong to RGB documents; convert to RGB first	Профильдер RGB құжаттарына тиесілі; алдымен RGB-ге түрлендіріңіз
+Proof Colors	Түстерді тексеру
+Properties	Қасиеттер
+Puppet Warp	Қуыршақ деформациясы
+Purge	Тазарту
+Purple	Күлгін
+Quadtone	Квадротон
+Quality	Сапа
+Quick Export Selected Layers…	Таңдалған қабаттарды жылдам экспорттау…
+Quit	Шығу
+RGB Color	RGB түсі
+Radial Blur…	Радиалды бұлыңғырлық…
+Radius	Радиус
+Radius (px)	Радиус (пикс.)
+Range	Ауқым
+Raster Studio Help	Raster Studio анықтамасы
+Rasterize	Растерлеу
+Reassign anyway	Бәрібір қайта тағайындау
+Recent	Соңғылар
+Record	Жазу
+Record Source Size	Дереккөз өлшемін жазу
+Record an Action in the Actions panel first	Алдымен Әрекеттер панелінде әрекет жазыңыз
+Record an edit, then replay the whole sequence on any document with at least as many layers.	Өңдеуді жазыңыз да, бүкіл тізбекті қабаттары кемінде сонша кез келген құжатта қайта ойнатыңыз.
+Record into set	Жинаққа жазу
+Recording: every edit is captured until Stop	Жазылуда: «Тоқтату» басылғанша әр өңдеу жазылады
+Red	Қызыл
+Redefine the selected {noun} from the active text layer, restyling every layer that uses it	Таңдалған {noun} белсенді мәтін қабатынан қайта анықтап, оны қолданатын әр қабаттың стилін жаңарту
+Redo	Қайталау
+Reds	Қызылдар
+Reduce Colors	Түстерді азайту
+Reduce Colors changed nothing: the layer already uses only colours of that palette	«Түстерді азайту» ештеңені өзгертпеді: қабат онсыз да сол палитраның түстерін ғана қолданады
+Reduce Colors: the layer now uses at most {n} colours	Түстерді азайту: қабат енді ең көбі {n} түс қолданады
+Reduce Colors…	Түстерді азайту…
+Reduce Noise…	Шуды азайту…
+Reduces the grayscale image to pure black and white. The layers are flattened into one, over white.	Сұр реңкті суретті таза қара мен аққа келтіреді. Қабаттар ақ фонның үстінде біреуге біріктіріледі.
+Reference point: Bottom	Тірек нүкте: Төменгі
+Reference point: Bottom Left	Тірек нүкте: Төменгі сол
+Reference point: Bottom Right	Тірек нүкте: Төменгі оң
+Reference point: Centre	Тірек нүкте: Орта
+Reference point: Left	Тірек нүкте: Сол
+Reference point: Right	Тірек нүкте: Оң
+Reference point: Top	Тірек нүкте: Жоғарғы
+Reference point: Top Left	Тірек нүкте: Жоғарғы сол
+Reference point: Top Right	Тірек нүкте: Жоғарғы оң
+Refine	Нақтылау
+Refine Edge…	Жиекті нақтылау…
+Refine Mask	Масканы нақтылау
+Refine Mask…	Масканы нақтылау…
+Regular	Тұрақты
+Relative	Салыстырмалы
+Relative Colorimetric	Салыстырмалы колориметриялық
+Release Clipping Mask	Кесу маскасын босату
+Release Notes	Шығарылым жазбалары
+Relink to File…	Файлға қайта байланыстыру…
+Remove Black Matte	Қара жиекті алып тастау
+Remove Color Fringe	Түсті жиекті алып тастау
+Remove Color Fringe…	Түсті жиекті алып тастау…
+Remove Fringe	Жиекті алып тастау
+Remove White Matte	Ақ жиекті алып тастау
+Remove export	Экспортты алып тастау
+Remove this instance of the effect	Әсердің бұл данасын алып тастау
+Remove this shortcut	Бұл пернелер тіркесімін алып тастау
+Rename Layer	Қабат атауын өзгерту
+Rename Layer…	Қабат атауын өзгерту…
+Rename set	Жинақ атауын өзгерту
+Render	Рендер
+Rendering the preview…	Алдын ала көрініс жасалуда…
+Repeat…	Қайталау…
+Replace Color	Түсті Ауыстыру
+Replace Color…	Түсті алмастыру…
+Replace Contents	Мазмұнды алмастыру
+Replace Contents…	Мазмұнды алмастыру…
+Replace existing guides	Бар бағыттауыштарды алмастыру
+Replay	Қайта ойнату
+Report an Issue	Мәселе туралы хабарлау
+Reselect	Қайта таңдау
+Reset	Қайтару
+Reset Transform	Түрлендіруді қайтару
+Reset View Rotation	Көрініс бұрылысын қайтару
+Reset all shortcuts	Барлық пернелер тіркесімін қайтару
+Resize Canvas	Кенеп өлшемін өзгерту
+Resize Images	Суреттердің өлшемін өзгерту
+Resize Images…	Суреттердің өлшемін өзгерту…
+Resolution	Шешім
+Resolution must be greater than zero	Ажыратымдылық нөлден үлкен болуы керек
+Restore Layer	Қабатты қалпына келтіру
+Result	Нәтиже
+Return this tool to its defaults	Бұл құралды әдепкі баптауларына қайтару
+Reveal All	Барлығын көрсету
+Reveal Selection	Таңдалған Бөлікті Көрсету
+Reverse	Кері
+Revert	Қалпына келтіру
+Rewrites every pixel layer's numbers so the picture looks the same under the destination profile, as one undo step.	Сурет мақсатты профильде бұрынғыдай көрінуі үшін әр пиксель қабатының мәндерін бір болдырмау қадамымен қайта жазады.
+Right	Оң
+Right (narrow)	Оң (тар)
+Right (wide)	Оң (кең)
+Right Edges	Оң жақ шеттер
+Right indent	Оң жақ шегініс
+Right-click a swatch to remove it	Түс үлгісін алып тастау үшін оны оң жақпен басыңыз
+Ring	Сақина
+Ripple…	Толқын…
+Rise	Көтерілу
+Rotate	Айналдыру
+Rotate 180°	180° айналдыру
+Rotate 90° Clockwise	Сағат тілімен 90° айналдыру
+Rotate 90° Counter Clockwise	Сағат тіліне қарсы 90° айналдыру
+Rotate Canvas	Кенепті айналдыру
+Rotate the active layer so the measured line is level (Enter)	Өлшенген сызық түзу болуы үшін белсенді қабатты айналдыру (Enter)
+Rotates the canvas and every layer. Right angles are pixel-exact; other angles resample.	Кенепті және әр қабатты айналдырады. Тік бұрыштар пиксельге дейін дәл; басқа бұрыштар қайта дискреттеледі.
+Rotation key	Бұрылыс кілті
+Round	Дөңгелек
+Round (computed)	Дөңгелек (есептелген)
+Rounded Steps	Дөңгелектенген қадамдар
+Roundness jitter	Дөңгелектіктің ауытқуы
+Rows	Жолдар
+Rulers	Сызғыштар
+Run	Іске қосу
+SVG…	SVG…
+Same Radii	Бірдей радиустар
+Sample a colour from the canvas	Кенептен түс үлгісін алу
+Sample radius	Үлгі радиусы
+Sampled	Үлгіден алынған
+Sampled colour	Үлгіден алынған түс
+Sampled tip not loaded; painting round	Үлгіден алынған ұш жүктелмеген; дөңгелекпен салынуда
+Satin…	Жалтырақ…
+Saturation	Қанықтылық
+Saturation jitter	Қанықтылықтың ауытқуы
+Save	Сақтау
+Save As	Басқаша сақтау
+Save As…	Басқаша сақтау…
+Save Brush	Қылқаламды сақтау
+Save Selection	Таңдауды сақтау
+Save Selection…	Таңдауды сақтау…
+Save actions	Әрекеттерді сақтау
+Save as PSD…	PSD ретінде сақтау…
+Save current brush	Ағымдағы қылқаламды сақтау
+Save selection as channel	Таңдауды арна ретінде сақтау
+Saves every image in the source folder to the destination in another format, quality or size.	Дереккөз қалтадағы әр суретті мақсатты қалтаға басқа пішімде, сапада не өлшемде сақтайды.
+Scale	Масштаб
+Scale %	Масштаб %
+Scale Effects	Масштаб Эффектілері
+Scale Effects…	Әсерлерді масштабтау…
+Scale H	Көлденең масштаб
+Scale V	Тік масштаб
+Scale key	Масштаб кілті
+Scale:	Масштаб:
+Scales every size and distance of the active layer's style as one undo step.	Белсенді қабат стилінің әр өлшемі мен қашықтығын бір болдырмау қадамымен масштабтайды.
+Scaling by 100% changes nothing	100%-ға масштабтау ештеңені өзгертпейді
+Scratch directory	Уақытша файлдар қалтасы
+Screen	Экран
+Screen, print and social presets	Экран, баспа және әлеуметтік желі үлгілері
+Script…	Жазба…
+Scroll wheel zooms instead of scrolling	Айналдыру дөңгелегі айналдырудың орнына масштабтайды
+Search Commands…	Пәрмендерді іздеу…
+Search layers	Қабаттарды іздеу
+Search layers by name	Қабаттарды атауы бойынша іздеу
+Select	Таңдау
+Select All	Барлығын таңдау
+Select Bottom Layer	Төменгі қабатты таңдау
+Select Layer Above	Жоғарыдағы қабатты таңдау
+Select Layer Below	Төмендегі қабатты таңдау
+Select Linked Layers	Байланыстырылған қабаттарды таңдау
+Select None	Ештеңе таңдамау
+Select Top Layer	Жоғарғы қабатты таңдау
+Select a layer first	Алдымен қабатты таңдаңыз
+Select a layer to see its CSS	CSS кодын көру үшін қабатты таңдаңыз
+Select a layer to see its properties	Қасиеттерін көру үшін қабатты таңдаңыз
+Select a layer: a click on a style applies it to the active layer.	Қабатты таңдаңыз: стильді басқанда ол белсенді қабатқа қолданылады.
+Select a path first	Алдымен контурды таңдаңыз
+Select a text layer, or type into one: a click inserts the glyph at the caret.	Мәтін қабатын таңдаңыз немесе оған мәтін теріңіз: басқанда глиф курсор орнына кірістіріледі.
+Select a text layer to edit its type	Мәтінін өңдеу үшін мәтін қабатын таңдаңыз
+Select every pixel near one colour	Бір түске жақын әр пиксельді таңдау
+Selection	Таңдау
+Selection Edges	Таңдау жиектері
+Selection: white is replaced, black is kept.	Таңдау: ақ алмастырылады, қара сақталады.
+Selective Color	Таңдамалы Түс
+Selective Color…	Таңдамалы түс…
+Selects a band of this width along the selection's edge	Таңдау жиегі бойымен осы ендегі жолақты таңдайды
+Semi Condensed	Жартылай сығылған
+Semi Expanded	Жартылай кеңейтілген
+Semibold	Жартылай жуан
+Send Backward	Артқа Жіберу
+Send to Back	Соңғы Қатарға
+Separate documents	Бөлек құжаттар
+Separate keywords with commas or semicolons.	Кілт сөздерді үтірмен не нүктелі үтірмен бөліңіз.
+Sepia	Сепия
+Set	Жинақ
+Set the History Brush to paint from this state (the marked row)	Тарих қылқаламын осы күйден (белгіленген жолдан) салатындай ету
+Shadows	Көлеңкелер
+Shadows/Highlights	Көлеңкелер / Жарық жерлер
+Shadows/Highlights…	Көлеңкелер / Жарық жерлер…
+Shape	Пішін
+Shape Dynamics	Пішін динамикасы
+Shape Mosaic…	Пішінді мозаика…
+Shape Properties	Пішін қасиеттері
+Sharpen	Айқындау
+Sharpen Edges	Шеттерін айқындау
+Sharpen More	Көбірек айқындау
+Sharpest, with a little ringing on hard edges.	Ең айқын, қатты жиектерде аздаған жаңғырығы бар.
+Shear…	Ығысу деформациясы…
+Shift Edge	Жиекті жылжыту
+Show	Көрсету
+Show / Hide Layer	Қабатты көрсету / жасыру
+Show / hide layer	Қабатты көрсету / жасыру
+Show / hide the effects list	Әсерлер тізімін көрсету / жасыру
+Show / hide the layer style	Қабат стилін көрсету / жасыру
+Show / hide this channel	Бұл арнаны көрсету / жасыру
+Show / hide this effect	Бұл әсерді көрсету / жасыру
+Show / hide this path	Бұл контурды көрсету / жасыру
+Show / hide this smart filter	Бұл смарт-сүзгіні көрсету / жасыру
+Show Layers	Қабаттарды көрсету
+Show every layer	Әр қабатты көрсету
+Show or hide the position, size and alignment fields	Орын, өлшем және туралау өрістерін көрсету не жасыру
+Show or hide the recorded steps	Жазылған қадамдарды көрсету не жасыру
+Show or hide the set's actions	Жинақтың әрекеттерін көрсету не жасыру
+Show this alpha channel alone in grayscale and paint into it; click again to store it	Бұл альфа арнасын сұр реңкте жалғыз көрсетіп, оған бояу салу; сақтау үшін қайта басыңыз
+Sides	Жақтар
+Similar	Ұқсас
+Size	Өлшем
+Size jitter	Өлшемнің ауытқуы
+Skew	Қисайту
+Skewness	Асимметрия
+Slice Options	Бөлім опциялары
+Slice Options…	Кесінді параметрлері…
+Slices	Кесінділер
+Slices from Guides	Гидтерден үзінділер
+Slices…	Кесінділер…
+Small	Кіші
+Small Caps	Кіші бас әріптер
+Smart Blur…	Ақылды бұлыңғырлық…
+Smart Filter	Смарт-сүзгі
+Smart Filters	Ақылды фильтрлер
+Smart Guides	Ақылды бағыттауыштар
+Smart Object	Смарт-нысан
+Smart Sharpen…	Ақылды айқындау…
+Smart filter mask: click to paint on it	Смарт-сүзгі маскасы: оған бояу салу үшін басыңыз
+Smooth	Жұмсақ
+Smooth Selection	Таңдауды тегістеу
+Smooth draws grey-scale edges; None draws hard, aliased edges. The glyph scaler has one smooth mode, so Sharp, Crisp and Strong are not offered.	«Тегіс» сұр реңкті жиектер салады; «Жоқ» қатты, баспалдақты жиектер салады. Глиф масштабтағышында бір ғана тегіс режим бар, сондықтан «Өткір», «Айқын» және «Күшті» ұсынылмайды.
+Smooth…	Тегістеу…
+Snap	Байлау
+Snap To	Басқа Нысанға Байлау
+Soft Light	Жұмсақ жарық
+Soft Round 100	Жұмсақ дөңгелек 100
+Soft Round 24	Жұмсақ дөңгелек 24
+Soft and cheap. Good for a small enlargement.	Жұмсақ әрі жеңіл. Аздап үлкейтуге жарайды.
+Softer Brush	Жұмсағырақ қылқалам
+Solarize	Соляризация
+Solid Color…	Тұтас түс…
+Solidity	Тығыздық
+Source	Дереккөз
+Source 1	Дереккөз 1
+Source 2	Дереккөз 2
+Source Space	Дереккөз кеңістігі
+Spectrum	Спектр
+Spherize…	Сфералау…
+Spin Blur…	Айналмалы бұлыңғырлық…
+Splits the active layer into Linear Light detail layers over a residual, finest on top; together they recomposite to the layer.	Белсенді қабатты қалдық қабаттың үстіндегі «Сызықтық жарық» бөлшек қабаттарына бөледі, ең ұсағы жоғарыда; бірге олар қайтадан сол қабатты құрайды.
+Spot Channel	Нүктелік түс арнасы
+Spot Channel Options…	Нүктелік түс арнасының параметрлері…
+Spot channel: composited over the image as its ink	Нүктелік түс арнасы: суреттің үстіне өз бояуы ретінде біріктіріледі
+Square	Шаршы
+Squeeze	Қысу
+Stack Mode	Стек Режимі
+Stamp Visible	Көрінетіндерді таңбалау
+Standard	Стандартты
+Standard Deviation	Стандартты ауытқу
+Standard ligatures	Стандартты лигатуралар
+Step Backward	Артқа Қадам
+Step Forward	Алға Қадам
+Stop	Тоқтату
+Straighten Layer	Қабатты түзету
+Strength	Күш
+Stroke	Сызық
+Stroke path with the foreground colour at the brush size, on a new shape layer	Контурды жаңа пішін қабатында алдыңғы план түсімен қылқалам өлшемінде сызу
+Stroke…	Сызық…
+Style	Стиль
+Styles	Стильдер
+Styles enabled	Стильдер қосулы
+Stylize	Стильдеу
+Sub	Төменгі
+Subject	Нысан
+Subtract	Алу
+Subtract Front Shape	Алдыңғы пішінді алу
+Subtract from Selection	Таңдаудан алу
+Summation	Қосынды
+Sunset	Күн батуы
+Super	Жоғарғы
+Superscript raises and shrinks the text; subscript lowers and shrinks it.	Жоғарғы индекс мәтінді көтеріп, кішірейтеді; төменгі индекс оны түсіріп, кішірейтеді.
+Surface Blur…	Беттік бұлыңғырлық…
+Swap colours  (X)	Түстерді ауыстыру  (X)
+Swap foreground and background (X)	Алдыңғы және артқы планды ауыстыру (X)
+Swatches	Түстер
+TGA…	TGA…
+TIF…	TIF…
+Templates	Үлгілер
+Text	Мәтін
+Text Properties	Мәтін қасиеттері
+Text overflows the box	Мәтін шаршыдан асып кетеді
+Text replacement	Мәтінді алмастыру
+Texture Dilation…	Текстураны кеңейту…
+That channel is no longer in the document	Ол арна енді құжатта жоқ
+That file could not be used:	Ол файлды қолдану мүмкін болмады:
+The CSV ends inside a quoted field	CSV тырнақшадағы өрістің ішінде аяқталады
+The CSV has a header but no data sets	CSV-де тақырып бар, бірақ деректер жинақтары жоқ
+The CSV is empty	CSV бос
+The CSV names a variable that is not defined:	CSV анықталмаған айнымалыны атайды:
+The active layer is not in the document	Белсенді қабат құжатта жоқ
+The active smart object shows each image of the source folder in turn; each result is exported as a PNG to the destination folder.	Белсенді смарт-нысан дереккөз қалтаның әр суретін кезекпен көрсетеді; әр нәтиже мақсатты қалтаға PNG ретінде экспортталады.
+The amount must be within	Мөлшер мына аралықта болуы керек:
+The angle must be a finite number of degrees	Бұрыш градустың шектеулі саны болуы керек
+The balanced default for photographs.	Фотосуреттер үшін теңгерімді әдепкі.
+The canvas grows to fit the rotated image.	Кенеп бұрылған суретке сыйатындай ұлғаяды.
+The canvas must be at least 1 x 1 pixel	Кенеп кемінде 1 x 1 пиксель болуы керек
+The cell size must be 2 to 200 pixels	Ұяшық өлшемі 2-ден 200 пиксельге дейін болуы керек
+The cut is empty: paint more of the part to keep.	Қиылған бөлік бос: сақталатын бөлікті көбірек бояңыз.
+The destination is the profile the document already has	Мақсат — құжатта бұрыннан бар профиль
+The destination must be another folder than the source.	Мақсатты қалта дереккөзден басқа қалта болуы керек.
+The document has no layers	Құжатта қабаттар жоқ
+The document is already in {name}	Құжат қазірдің өзінде {name} режимінде
+The document is already tagged with this profile	Құжат қазірдің өзінде осы профильмен белгіленген
+The document is already tagged {name}	Құжат қазірдің өзінде {name} деп белгіленген
+The document's own profile: {error}	Құжаттың өз профилі: {error}
+The first {shown} of {n} pages are listed; a longer file opens only those.	{n} беттің алғашқы {shown} беті тізімделген; ұзынырақ файлда тек солар ашылады.
+The image has no opaque pixels to count	Суретте санайтын мөлдір емес пиксельдер жоқ
+The ink is laid over the image; the selection, if there is one, is where it prints.	Бояу суреттің үстіне жағылады; таңдау болса, ол сол жерде басылады.
+The last stop has no segment after it.	Соңғы нүктеден кейін сегмент жоқ.
+The layer has no pixels to cut.	Қабатта қиятын пиксельдер жоқ.
+The layer's pixels are locked	Қабаттың пиксельдері құлыпталған
+The list is empty	Тізім бос
+The margins and gutters leave no room for a column or a row	Шеттік өрістер мен аралықтар баған не жол үшін орын қалдырмайды
+The margins and gutters leave no room for a column or a row.	Шеттік өрістер мен аралықтар баған не жол үшін орын қалдырмайды.
+The name cannot be empty	Атау бос болмауы керек
+The name has not changed	Атау өзгерген жоқ
+The name is the file File > Export > Slices writes this slice as. The URL and Alt Tag go into the HTML page it writes beside the images.	Атау — Файл > Экспорт > Кесінділер осы кесіндіні жазатын файл. URL мен Alt тегі суреттердің жанына жазылатын HTML бетіне түседі.
+The new canvas is smaller — content outside it will be clipped.	Жаңа кенеп кішірек — одан тыс мазмұн қиылады.
+The next text layer the Type tool creates starts with this style.	Мәтін құралы жасайтын келесі мәтін қабаты осы стильмен басталады.
+The panel is already on this side	Панель қазірдің өзінде осы жақта
+The path encloses no pixel of the canvas	Контур кенептің ешбір пикселін қоршамайды
+The position must be a finite number	Орын шектеулі сан болуы керек
+The preview runs the real brush engine.	Алдын ала көрініс нақты қылқалам қозғалтқышымен жұмыс істейді.
+The resolution must be 1 to 2400 ppi	Ажыратымдылық 1-ден 2400 ppi-ге дейін болуы керек
+The resolution must be {min} to {max} dpi	Ажыратымдылық {min}-ден {max} dpi-ге дейін болуы керек
+The rulers and the size readouts use this unit	Сызғыштар мен өлшем көрсеткіштері осы бірлікті қолданады
+The scale must be between 1% and 1000%	Масштаб 1% мен 1000% аралығында болуы керек
+The selection is kept with the document under this name	Таңдау құжатпен бірге осы атаумен сақталады
+The source and destination must be different folders	Дереккөз бен мақсат әртүрлі қалталар болуы керек
+The steps this snapshot named have been discarded	Бұл сурет-көшірме атаған қадамдар алынып тасталды
+The table needs a name	Кестеге атау қажет
+The warp has not changed	Деформация өзгерген жоқ
+There are no guides to slice along	Бойымен кесетін бағыттауыштар жоқ
+There are no slices to clear	Тазалайтын кесінділер жоқ
+There is no history to clear	Тазалайтын тарих жоқ
+There is no live selection to combine with	Біріктіретін белсенді таңдау жоқ
+These are matrix-shaper profiles, which carry no perceptual or saturation tables: those two intents convert as Relative Colorimetric.	Бұл — қабылдау немесе қанықтылық кестелері жоқ матрицалық профильдер: ол екі мақсат «Салыстырмалы колориметриялық» ретінде түрлендіріледі.
+Thin	Жіңішке
+Third-party notices	Үшінші тараптың ескертулері
+This Layer	Бұл қабат
+This adjustment has no panel controls	Бұл түзетудің панельдік басқару элементтері жоқ
+This adjustment has no settings.	Бұл түзетудің баптаулары жоқ.
+This build keeps channels on layers; it has no free-standing alpha channels yet	Бұл нұсқа арналарды қабаттарда сақтайды; әзірге онда дербес альфа арналары жоқ
+This effect is off. Tick it in the list to edit it.	Бұл әсер өшірулі. Өңдеу үшін оны тізімде белгілеңіз.
+This format cannot store CMYK, so the document is written as RGB. Choose JPEG or TIFF for CMYK.	Бұл пішім CMYK сақтай алмайды, сондықтан құжат RGB ретінде жазылады. CMYK үшін JPEG не TIFF таңдаңыз.
+This format could not be previewed.	Бұл пішімді алдын ала көрсету мүмкін болмады.
+This format has no metadata slot: nothing is embedded	Бұл пішімде метадеректер орны жоқ: ештеңе ендірілмейді
+This format has no palette, so the indexed colours are written as RGB. Choose PNG or GIF for the palette.	Бұл пішімде палитра жоқ, сондықтан индекстелген түстер RGB ретінде жазылады. Палитра үшін PNG не GIF таңдаңыз.
+This format stores 8 bits per channel	Бұл пішім арнаға 8 бит сақтайды
+This is a Lab document. No format here stores Lab, so it is converted to RGB on export.	Бұл — Lab құжаты. Мұндағы ешбір пішім Lab сақтамайды, сондықтан экспорттағанда ол RGB-ге түрлендіріледі.
+This layer has no mask	Бұл қабатта маска жоқ
+This panel is already at the bottom of its dock	Бұл панель қазірдің өзінде өз аймағының төменгі жағында
+This panel is already at the top of its dock	Бұл панель қазірдің өзінде өз аймағының жоғарғы жағында
+This tool has no options	Бұл құралдың параметрлері жоқ
+This tool is already at its defaults	Бұл құрал қазірдің өзінде әдепкі баптауларында
+This window cannot read screen pixels, so the eyedropper is unavailable	Бұл терезе экран пиксельдерін оқи алмайды, сондықтан тамызғыш қолжетімсіз
+This works on a pixel layer; the active layer is a {kind}	Бұл пиксель қабатында жұмыс істейді; белсенді қабат — {kind}
+This works on an 8-bit document	Бұл 8 биттік құжатта жұмыс істейді
+This works on an RGB document	Бұл RGB құжатында жұмыс істейді
+Threshold	Шек
+Threshold…	Шек…
+Thumbnail Size	Нобай өлшемі
+Thumbnail size	Нобай өлшемі
+Thumbnails by Document	Құжат бойынша нобайлар
+Thumbnails by Layer	Қабат бойынша нобайлар
+Tiles/List	Тақтайшалар / Тізім
+Tiles…	Тақтайшалар…
+Tilt-Shift…	Тилт-шифт…
+Timeline	Уақыт шкаласы
+Tint	Реңк беру
+Tint hue	Реңк түсі
+Tint saturation	Реңк қанықтылығы
+To canvas	Кенепке
+Toggle Link	Байланысты ауыстыру
+Tonal width	Тон ені
+Tone	Тон
+Tone and Detail	Тон және бөлшектер
+Tool Presets	Құрал алдын ала орнатулары
+Top	Жоғарғы
+Top Edges	Жоғарғы шеттер
+Top Left	Жоғарғы сол
+Top Left Pixel Color	Жоғарғы сол жақ пиксель түсі
+Top Right	Жоғарғы оң
+Top left	Жоғарғы сол
+Top right	Жоғарғы оң
+Trace Contour…	Контурды сызу…
+Traces the active layer's colours into shape layers, one per colour.	Белсенді қабаттың түстерін пішін қабаттарына айналдырады, әр түске біреуден.
+Transform	Түрлендіру
+Transform Layer	Қабатты түрлендіру
+Transform Selection	Белгілеуді Трансформациялау
+Transparency	Мөлдірлік
+Transparent Pixels	Мөлдір пиксельдер
+Trim	Қию
+Trim Away	Қиып тастау
+Trim…	Қию…
+Tritone	Тритон
+Turn on Resample to change the pixel count.	Пиксельдер санын өзгерту үшін «Қайта дискреттеуді» қосыңыз.
+Twirl…	Ширатпа…
+Twist	Бұрау
+Two variables share a name	Екі айнымалының атауы бірдей
+Type	Түрі
+Type a zoom level	Масштаб деңгейін теріңіз
+Type is edited in Character and Paragraph	Мәтін Символ және Параграф панельдерінде өңделеді
+Type tool defaults	Мәтін құралының әдепкі баптаулары
+UI scale	Интерфейс масштабы
+URL	URL
+US Letter	US Letter
+Ultra Condensed	Аса сығылған
+Ultra Expanded	Аса кеңейтілген
+Underlying Layer	Астыңғы қабат
+Undo	Болдырмау
+Ungroup Layers	Қабаттарды топтан шығару
+Uniform	Біркелкі
+Unite Shapes	Пішіндерді біріктіру
+Units	Бірліктер
+Unmake Frames	Кадрларды тарату
+Unsaved changes	Сақталмаған өзгерістер
+Unsharp Mask…	Анықтығы аз маска…
+Update the applied comp from the layers	Қолданылған композицияны қабаттардан жаңарту
+Use Black Point Compensation	Қара нүкте өтемін қолдану
+Use global light	Жалпы жарықты қолдану
+Using:	Қолданылуда:
+Vanishing Point…	Жоғалу нүктесі…
+Variables	Айнымалылар
+Variance	Дисперсия
+Vector Mask	Вектор Маскасы
+Vector density	Вектор тығыздығы
+Vector enabled	Вектор қосулы
+Vector feather	Вектор қауырсыны
+Vector invert	Векторды терістеу
+Vector mask	Вектор маскасы
+Vectorize	Векторлау
+Vectorize Bitmap	Битмапты векторлау
+Vectorize Bitmap…	Битмапты векторлау…
+Vertical Centers	Тік орталар
+Vertical Distortion	Тік бұрмалау
+Vertical center guide	Тік орталық бағыттауыш
+Vertical scale, in percent: stretches the glyphs about the baseline; leading is unchanged	Тік масштаб, пайызбен: глифтерді негізгі сызыққа қатысты созады; жоларалық өзгермейді
+Vertically	Тігінен
+Vibrance	Шырындылық
+Vibrance…	Шырындылық…
+View	Көру
+Violet	Күлгін
+Visibility	Көріну
+Visible adjustment layers	Көрінетін түзету қабаттары
+Vivid Light	Жарқын жарық
+W	Е
+WEBP…	WEBP…
+Waiting for the composite…	Біріктірілген сурет күтілуде…
+Warm	Жылы
+Warp	Деформация
+Warp Style	Деформация стилі
+Warp Text	Мәтінді деформациялау
+Warp Text…	Мәтінді деформациялау…
+Wave	Толқын
+Wavelet Decompose	Вейвлет жіктеу
+Wavelet Decompose splits into 2 to 7 scales	Вейвлет жіктеу 2-ден 7-ге дейінгі масштабқа бөледі
+Wavelet Decompose works on an sRGB document	Вейвлет жіктеу sRGB құжатында жұмыс істейді
+Wavelet Decompose: the layer has no pixels	Вейвлет жіктеу: қабатта пиксельдер жоқ
+Wavelet Decompose: {n} detail layers over a residual; the source layer is hidden	Вейвлет жіктеу: қалдықтың үстінде {n} бөлшек қабаты; дереккөз қабат жасырылған
+Wavelet Decompose…	Вейвлет жіктеу…
+Wave…	Толқын…
+Web (216)	Веб (216)
+WebP (lossless)	WebP (шығынсыз)
+WebP (lossy)	WebP (шығынды)
+Weight	Салмақ
+White	Ақ
+White to Black	Ақтан қараға
+Whites	Ақтар
+Width	Ені
+Width and height must be at least 1 pixel	Ені мен биіктігі кемінде 1 пиксель болуы керек
+Width must be between 1 and 250 pixels	Ені 1 мен 250 пиксель аралығында болуы керек
+Width to 110%	Енін 110%-ға
+Width to 125%	Енін 125%-ға
+Width to 80%	Енін 80%-ға
+Width to 90%	Енін 90%-ға
+Window	Терезе
+Wind…	Жел…
+With Handles	Тұтқалармен
+Work Path	Жұмыс контуры
+Workspace	Жұмыс кеңістігі
+Wrap to box	Шаршыға сыйғызу
+Writes the visible adjustment layers, applied to an identity lattice, as a 3D LUT (.cube).	Бірлік торға қолданылған көрінетін түзету қабаттарын 3D LUT (.cube) ретінде жазады.
+Written as CMYK: a naive ink model, not an ICC press profile.	CMYK ретінде жазылған: қарапайым бояу моделі, ICC баспа профилі емес.
+Written as XMP into PNG, JPEG and TIFF files by Export As.	«Басқаша экспорттау» PNG, JPEG және TIFF файлдарына XMP ретінде жазады.
+Written with the document's palette.	Құжаттың палитрасымен жазылған.
+Yellow	Сары
+Yellow / Blue	Сары / Көк
+Yellows	Сарылар
+ZigZag…	Иректер…
+Zoom In	Үлкейту
+Zoom Out	Кішірейту
+Zoom in	Үлкейту
+Zoom out	Кішірейту
+Zoom to Selection	Таңдауға дейін масштабтау
+a layer could not be rewritten	қабатты қайта жазу мүмкін болмады
+before / after	дейін / кейін
+changed	өзгерді
+content thumbnail — click to edit the layer's pixels	мазмұн нобайы — қабаттың пиксельдерін өңдеу үшін басыңыз
+dpi	dpi
+edits are aimed at this mask — right-click for view and mask options	өңдеулер осы маскаға бағытталған — көрініс пен маска параметрлері үшін оң жақпен басыңыз
+lines past the box	жол шаршыдан асады
+mask off	маска өшірулі
+mask thumbnail — click to edit the layer's mask	маска нобайы — қабат маскасын өңдеу үшін басыңыз
+minutes (0 is off)	минут (0 — өшірулі)
+no drop	тастауға болмайды
+px	пикс.
+records here	осында жазады
+skipped on play:	ойнатқанда өткізіледі:
+the layers could not be added	қабаттарды қосу мүмкін болмады
+the profile cannot be transformed ({error})	профильді түрлендіру мүмкін емес ({error})
+to	дейін
+vector mask thumbnail — click to edit the vector mask	вектор маскасының нобайы — вектор маскасын өңдеу үшін басыңыз
+{format}: the timeline, {frames} frames at {fps} fps over {length} ms; each frame shows the layers at its time	{format}: уақыт шкаласы, {length} мс ішінде {fps} кадр/с жиілікпен {frames} кадр; әр кадр қабаттарды өз уақытындағы күйінде көрсетеді
+{label} is not answered by this route	{label} бұл бағыт арқылы өңделмейді
+{label} was refused: {reason}	{label} қабылданбады: {reason}
+{name} Residual	{name} қалдығы
+{name} Scale {k}	{name} масштабы {k}
+{name}: {n} pages	{name}: {n} бет
+{n} slices from the guides ({cols} x {rows}); they replace the slices there were	Бағыттауыштардан {n} кесінді ({cols} x {rows}); олар бұрынғы кесінділерді алмастырады
+{path} is a {space} profile; an RGB document takes an RGB profile	{path} — {space} профилі; RGB құжатына RGB профилі керек
+{path} is {len} bytes, larger than any colour profile	{path} көлемі {len} байт, бұл кез келген түс профилінен үлкен
+{reason}; this one is {space}	{reason}; бұл — {space}
+16 Bits	16 бит
+8 Bits	8 бит
+AVIF…	AVIF…
+Blank preview image	Бос алдын ала көрініс суреті
+Byte Order	Байт реті
+Depth	Тереңдік
+Duplicate Into…	Мұнда көшіру…
+Guides from Layer	Қабаттан нұсқаулар
+Minify the file	Файлды кішірейту
+Nothing under the pointer for this row	Бұл жол үшін меңзердің астында ештеңе жоқ
+Make Work Path	Жұмыс контурын жасау
+RAW…	RAW…
+Remove Anchor Point	Тірек нүктені алып тастау
+Remove Path	Контурды алып тастау
+Make Selection	Таңдау жасау
+Divide…	Бөлу…
+Right-click on an anchor point of the path	Контурдың тірек нүктесін оң жақпен басыңыз
+Right-click inside a path	Контурдың ішін оң жақпен басыңыз
+Save PSD/PSB	PSD/PSB сақтау
+Save PSD/PSB…	PSD/PSB сақтау…
+Select or draw a path first	Алдымен контурды таңдаңыз не сызыңыз
+Right-click on a text layer	Мәтін қабатын оң жақпен басыңыз
+Right-click inside a slice	Кесіндінің ішін оң жақпен басыңыз
+Share…	Бөлісу…
+Remove BG	Фонды алып тастау
+Publishing online is not part of this build	Онлайн жариялау бұл нұсқаға кірмейді
+Background removal is not part of this build	Фонды алып тастау бұл нұсқаға кірмейді
+Divide Slices	Кесінділерді бөлу
+N equal parts	N тең бөлік
+N pixels per part	Әр бөлікке N пиксель
+N	N
+Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Оң жақпен басқан кесіндіні, ал ол болмаса кенепті кесінділер торына бөледі.
+Tick Horizontally or Vertically	«Көлденеңінен» не «Тігінен» белгілеңіз
+These settings make no cut: raise N or pick a smaller pixel count	Бұл баптаулар ештеңені кеспейді: N-ді үлкейтіңіз не кішірек пиксель санын таңдаңыз
+Cancel	Болдырмау
+All Documents	Барлық Құжаттар
+Select Source	Дереккөзді таңдау
+Alt	Alt
+Turn into JPG	JPG-ге айналдыру
+ZIP for pixel data	Пиксель деректері үшін ZIP
+a	a
+b	b
+Open a document to see its memory	Жадын көру үшін құжатты ашыңыз
+Image data	Сурет деректері
+{undo} undo / {redo} redo steps	{undo} болдырмау / {redo} қайталау қадамы
+Holds copied pixels	Көшірілген пиксельдерді сақтайды
+{size} ({tiles} tiles)	{size} ({tiles} тақтайша)
+Empty	Бос
+Purge Clipboard	Алмасу буферін тазарту
+Purge Histories	Тарихтарды тазарту
+Purge All	Барлығын тазарту
+Make	Жасау
+There is no path; draw one or select it in the Paths panel	Контур жоқ; оны сызыңыз не Контурлар панелінде таңдаңыз
+Artboards	Тақталар
+No Slices	Кесінділер жоқ
+All Slices	Барлық кесінділер
+User Slices	Пайдаланушы кесінділері
+Put the file into ZIP	Файлды ZIP-ке салу
+Reverse pages	Беттерді кері ретпен
+Convert to sRGB	sRGB-ге түрлендіру
+Use GPU	GPU қолдану
+Quick Export	Жылдам экспорт
+The active layer, alone	Белсенді қабат, жалғыз өзі
+{n} selected layers, each to its own file	{n} таңдалған қабат, әрқайсысы өз файлына
+An SVG is resolution-free: it is written at canvas size	SVG ажыратымдылыққа тәуелсіз: ол кенеп өлшемінде жазылады

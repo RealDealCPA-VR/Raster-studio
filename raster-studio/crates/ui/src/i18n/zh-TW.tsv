@@ -1087,7 +1087,7 @@ Purge	清除記憶體
 Purple	紫
 Quadtone	四色調
 Quality	品質
-Quick Export Layer as PNG…	快速將圖層轉存為 PNG…
+Quick Export Selected Layers…	快速匯出所選圖層…
 Quit	結束
 RGB Color	RGB 色彩
 Radial Blur…	圓形模糊…
@@ -1643,6 +1643,10 @@ Save PSD/PSB…	儲存 PSD/PSB…
 Select or draw a path first	請先選取或繪製路徑
 Right-click on a text layer	在文字圖層上按右鍵
 Right-click inside a slice	在切片內按右鍵
+Share…	發佈…
+Remove BG	移除背景
+Publishing online is not part of this build	此版本不包含線上發佈
+Background removal is not part of this build	此版本不包含背景移除
 Divide Slices	分割切片
 N equal parts	N 個等分
 N pixels per part	每份 N 像素
@@ -1650,7 +1654,7 @@ N	N
 Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	將您按右鍵的切片（若沒有則為畫布）切割成切片格點。
 Tick Horizontally or Vertically	請勾選「水平」或「垂直」
 These settings make no cut: raise N or pick a smaller pixel count	這些設定不會切割任何內容：請提高 N 或選擇較小的像素數
-Cancel (Esc)	取消（Esc）
+Cancel	取消
 All Documents	所有文件
 Select Source	選取來源
 Alt	Alt
@@ -1676,3 +1680,8 @@ User Slices	使用者切片
 Put the file into ZIP	將檔案放入 ZIP
 Reverse pages	反轉頁面順序
 Convert to sRGB	轉換為 sRGB
+Use GPU	使用 GPU
+Quick Export	快速轉存
+The active layer, alone	僅作用中圖層
+{n} selected layers, each to its own file	{n} 個選取的圖層，各存為單獨檔案
+An SVG is resolution-free: it is written at canvas size	SVG 與解析度無關：依畫布尺寸寫出

@@ -18,6 +18,10 @@ Right-click inside a path	Højreklik inden i en sti
 Select or draw a path first	Vælg eller tegn først en sti
 Right-click on a text layer	Højreklik på et tekstlag
 Right-click inside a slice	Højreklik inden i et udsnit
+Share…	Del…
+Remove BG	Fjern baggrund
+Publishing online is not part of this build	Onlinepublicering er ikke en del af denne version
+Background removal is not part of this build	Fjernelse af baggrund er ikke en del af denne version
 Divide Slices	Opdel udsnit
 N equal parts	N lige store dele
 N pixels per part	N pixel pr. del
@@ -323,7 +327,7 @@ Columns	Kolonner
 Columns and rows with gutters between them, inside optional margins, in pixels.	Kolonner og rækker med mellemrum imellem, inden for valgfrie margener, i pixels.
 Combine Shapes	Kombiner former
 Commit (Enter)	Bekræft (Enter)
-Cancel (Esc)	Annuller (Esc)
+Cancel	Annuller
 All Documents	Alle dokumenter
 RAW…	RAW…
 Save PSD/PSB	Gem PSD/PSB
@@ -1126,7 +1130,7 @@ Purge	Tøm
 Purple	Lilla
 Quadtone	Quadtone
 Quality	Kvalitet
-Quick Export Layer as PNG…	Hurtig eksport af lag som PNG…
+Quick Export Selected Layers…	Hurtig eksport af valgte lag…
 Quit	Afslut
 RGB Color	RGB-farve
 Radial Blur…	Radial sløring…
@@ -1676,3 +1680,8 @@ Purge All	Ryd alt
 Make	Opret
 Reverse pages	Omvendt siderækkefølge
 Convert to sRGB	Konvertér til sRGB
+Use GPU	Brug GPU
+Quick Export	Hurtig eksport
+The active layer, alone	Det aktive lag, alene
+{n} selected layers, each to its own file	{n} valgte lag, hvert til sin egen fil
+An SVG is resolution-free: it is written at canvas size	En SVG er opløsningsuafhængig: den skrives i lærredets størrelse

@@ -1087,7 +1087,7 @@ Purge	Освобождаване на памет
 Purple	Лилаво
 Quadtone	Четиритонално
 Quality	Качество
-Quick Export Layer as PNG…	Бърз експорт на слоя като PNG…
+Quick Export Selected Layers…	Бърз експорт на избраните слоеве…
 Quit	Изход
 RGB Color	RGB цвят
 Radial Blur…	Радиално размазване…
@@ -1643,6 +1643,10 @@ Save PSD/PSB…	Запазване на PSD/PSB…
 Select or draw a path first	Първо изберете или начертайте контур
 Right-click on a text layer	Щракнете с десния бутон върху текстов слой
 Right-click inside a slice	Щракнете с десния бутон вътре в срез
+Share…	Споделяне…
+Remove BG	Премахване на фона
+Publishing online is not part of this build	Публикуването онлайн не е част от тази версия
+Background removal is not part of this build	Премахването на фона не е част от тази версия
 Divide Slices	Разделяне на срезовете
 N equal parts	N равни части
 N pixels per part	N пиксела на част
@@ -1650,7 +1654,7 @@ N	N
 Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Нарязва среза, върху който щракнахте с десния бутон, или платното, ако нямаше такъв, в мрежа от срезове.
 Tick Horizontally or Vertically	Отметнете Хоризонтално или Вертикално
 These settings make no cut: raise N or pick a smaller pixel count	Тези настройки не правят разрез: увеличете N или изберете по-малък брой пиксели
-Cancel (Esc)	Отказ (Esc)
+Cancel	Отказ
 All Documents	Всички документи
 Select Source	Избор на източник
 Alt	Alt
@@ -1676,3 +1680,8 @@ User Slices	Потребителски срезове
 Put the file into ZIP	Поставяне на файла в ZIP
 Reverse pages	Обърнат ред на страниците
 Convert to sRGB	Преобразуване в sRGB
+Use GPU	Използване на GPU
+Quick Export	Бърз експорт
+The active layer, alone	Активният слой, самостоятелно
+{n} selected layers, each to its own file	{n} избрани слоя, всеки в собствен файл
+An SVG is resolution-free: it is written at canvas size	SVG не зависи от резолюцията: записва се в размера на платното

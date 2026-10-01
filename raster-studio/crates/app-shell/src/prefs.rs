@@ -410,6 +410,13 @@ pub struct Preferences {
     /// "copy" to copied layers". A file written before the field existed
     /// reads as the defaults.
     pub layers_panel: LayersPanelPrefs,
+    /// W18-I: Window > Use GPU (Photopea's More > Use WebGL): the window
+    /// draws on the graphics card. Off, it asks for the software adapter
+    /// (`render::GpuContext::for_surface_with`); the change applies at the
+    /// next start, when the window's device is made. On by default; a file
+    /// written before the field existed reads as on.
+    #[serde(default = "default_true")]
+    pub use_gpu: bool,
 }
 
 /// W16-D: the Layers panel's options as the preferences file keeps them.
@@ -519,6 +526,7 @@ impl Default for Preferences {
             tool_presets: None,
             glass_menus: false,
             layers_panel: LayersPanelPrefs::default(),
+            use_gpu: true,
         }
     }
 }
@@ -772,6 +780,8 @@ mod tests {
                 lock_row: false,
                 long_tap_right_click: true,
             },
+            // W18-I: Use GPU off.
+            use_gpu: false,
         };
 
         prefs.save(&paths.preferences_file()).unwrap();
@@ -1197,5 +1207,24 @@ mod tests {
         assert_eq!(prefs.scratch_dir(&paths), paths.default_scratch_dir());
         prefs.scratch_dir = Some(PathBuf::from("/elsewhere"));
         assert_eq!(prefs.scratch_dir(&paths), PathBuf::from("/elsewhere"));
+    }
+
+    /// W18-I: Use GPU is on by default, a file written before it existed
+    /// reads as on, and "off" survives a save and load.
+    #[test]
+    fn use_gpu_defaults_on_and_off_is_kept() {
+        assert!(Preferences::default().use_gpu);
+        let dir = tmp();
+        let path = dir.path().join("preferences.json");
+        std::fs::write(&path, r#"{"glass_menus": true}"#).unwrap();
+        let old = Preferences::load(&path);
+        assert!(old.glass_menus, "the file was read");
+        assert!(old.use_gpu, "an old file reads as on");
+        let off = Preferences {
+            use_gpu: false,
+            ..Preferences::default()
+        };
+        off.save(&path).unwrap();
+        assert!(!Preferences::load(&path).use_gpu);
     }
 }

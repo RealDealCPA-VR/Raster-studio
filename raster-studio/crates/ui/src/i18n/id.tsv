@@ -1087,7 +1087,7 @@ Purge	Bersihkan
 Purple	Ungu
 Quadtone	Quadtone
 Quality	Kualitas
-Quick Export Layer as PNG…	Ekspor Cepat Lapisan sebagai PNG…
+Quick Export Selected Layers…	Ekspor Cepat Lapisan Terpilih…
 Quit	Keluar
 RGB Color	Warna RGB
 Radial Blur…	Buram bentuk bundar…
@@ -1643,6 +1643,10 @@ Save PSD/PSB…	Simpan PSD/PSB…
 Select or draw a path first	Pilih atau gambar jalur terlebih dahulu
 Right-click on a text layer	Klik kanan pada lapisan teks
 Right-click inside a slice	Klik kanan di dalam irisan
+Share…	Bagikan…
+Remove BG	Hapus latar
+Publishing online is not part of this build	Penerbitan daring tidak termasuk dalam versi ini
+Background removal is not part of this build	Penghapusan latar tidak termasuk dalam versi ini
 Divide Slices	Bagi Irisan
 N equal parts	N bagian sama besar
 N pixels per part	N piksel per bagian
@@ -1650,7 +1654,7 @@ N	N
 Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Memotong irisan yang Anda klik kanan, atau kanvas jika tidak ada, menjadi kisi irisan.
 Tick Horizontally or Vertically	Centang Secara horizontal atau Secara vertikal
 These settings make no cut: raise N or pick a smaller pixel count	Pengaturan ini tidak membuat potongan: naikkan N atau pilih jumlah piksel yang lebih kecil
-Cancel (Esc)	Batal (Esc)
+Cancel	Batal
 All Documents	Semua Dokumen
 Select Source	Pilih Sumber
 Alt	Alt
@@ -1676,3 +1680,8 @@ User Slices	Irisan Pengguna
 Put the file into ZIP	Masukkan berkas ke ZIP
 Reverse pages	Balik urutan halaman
 Convert to sRGB	Konversi ke sRGB
+Use GPU	Gunakan GPU
+Quick Export	Ekspor Cepat
+The active layer, alone	Lapisan aktif, sendiri
+{n} selected layers, each to its own file	{n} lapisan terpilih, masing-masing ke berkasnya sendiri
+An SVG is resolution-free: it is written at canvas size	SVG tidak bergantung pada resolusi: ditulis pada ukuran kanvas

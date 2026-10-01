@@ -1087,7 +1087,7 @@ Purge	Linisin
 Purple	Morado
 Quadtone	Quadtone
 Quality	Kalidad
-Quick Export Layer as PNG…	Mabilisang I-export ang Layer bilang PNG…
+Quick Export Selected Layers…	Mabilisang I-export ang mga Napiling Layer…
 Quit	Lumabas
 RGB Color	Kulay RGB
 Radial Blur…	Labuhang Radial…
@@ -1643,6 +1643,10 @@ Save PSD/PSB…	I-save ang PSD/PSB…
 Select or draw a path first	Pumili o gumuhit muna ng daan
 Right-click on a text layer	I-right-click sa isang text layer
 Right-click inside a slice	I-right-click sa loob ng isang hiwa
+Share…	Ibahagi…
+Remove BG	Alisin ang background
+Publishing online is not part of this build	Hindi bahagi ng bersyong ito ang paglalathala online
+Background removal is not part of this build	Hindi bahagi ng bersyong ito ang pag-alis ng background
 Divide Slices	Hatiin ang mga Hiwa
 N equal parts	N pantay na bahagi
 N pixels per part	N pixel bawat bahagi
@@ -1650,7 +1654,7 @@ N	N
 Cuts the slice you right-clicked, or the canvas when there was none, into a grid of slices.	Hinahati ang hiwang in-right-click mo, o ang canvas kung wala, tungo sa isang parilya ng mga hiwa.
 Tick Horizontally or Vertically	Lagyan ng tsek ang Pahiga o Patayo
 These settings make no cut: raise N or pick a smaller pixel count	Walang gupit na ginagawa ang mga setting na ito: taasan ang N o pumili ng mas maliit na bilang ng pixel
-Cancel (Esc)	Kanselahin (Esc)
+Cancel	Kanselahin
 All Documents	Lahat ng mga Dokumento
 Select Source	Piliin ang Pinagmulan
 Alt	Alt
@@ -1676,3 +1680,8 @@ Put the file into ZIP	Ilagay ang file sa ZIP
 {size} ({tiles} tiles)	{size} ({tiles} tile)
 Reverse pages	Baligtarin ang mga pahina
 Convert to sRGB	I-convert sa sRGB
+Use GPU	Gamitin ang GPU
+Quick Export	Mabilis na Pag-export
+The active layer, alone	Ang aktibong layer, mag-isa
+{n} selected layers, each to its own file	{n} napiling layer, bawat isa sa sariling file
+An SVG is resolution-free: it is written at canvas size	Hindi nakadepende sa resolusyon ang SVG: isinusulat ito sa laki ng canvas

@@ -357,7 +357,7 @@ fn quick_export_writes_the_active_layer_alone_as_a_png() {
     let mut editor = editor_with_dialogs(
         dir.path(),
         |_, _| [255, 0, 0, 255],
-        ScriptedDialogs::new().saving_to(&target),
+        ScriptedDialogs::new().exporting_to(&target),
     );
     let top = layer_model::Layer::raster("Top");
     let top_id = top.id;
@@ -394,6 +394,13 @@ fn quick_export_writes_the_active_layer_alone_as_a_png() {
     for action in &out.menu {
         crate::menu_bridge::perform(*action, &mut editor).unwrap();
     }
+    // W18-I: the pick opens the Quick Export window; Export… (PNG, 1x)
+    // parks its choice and clicks the row again.
+    assert!(crate::tool_input::quick_export::window_is_open());
+    crate::tool_input::quick_export::confirm_for_test(None);
+    for action in &out.menu {
+        crate::menu_bridge::perform(*action, &mut editor).unwrap();
+    }
     assert_eq!(
         editor.active().unwrap().history_depth(),
         depth,
@@ -419,6 +426,7 @@ fn quick_export_writes_the_active_layer_alone_as_a_png() {
     // Declined: no file, a loud refusal.
     let dir = tempfile::tempdir().unwrap();
     let mut editor = editor_with(dir.path(), |_, _| [255, 0, 0, 255]);
+    crate::tool_input::quick_export::confirm_for_test(Some(Default::default()));
     let refused = crate::menu_bridge::perform(ui::menu::MenuAction::QuickExportLayer, &mut editor);
     assert!(refused.is_err(), "{refused:?}");
 }
